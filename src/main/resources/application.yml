@@ -1,0 +1,41 @@
+server:
+  port: ${SERVER_PORT:8092}
+
+spring:
+  application:
+    name: document-generation-gateway
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+jwt:
+  secret: ${JWT_SECRET}
+
+services:
+  user-profile-service:
+    base-url: ${USER_PROFILE_SERVICE_URL:http://user-profile-service:8085}
+  authentication-service:
+    base-url: ${AUTHENTICATION_SERVICE_URL:http://authentication-service:8084}
+  job-service:
+    base-url: ${JOB_SERVICE_URL:http://job-service:8086}
+  cv-cover-letter-service:
+    base-url: ${CV_COVER_LETTER_SERVICE_URL:http://cv-cover-letter-service:8091}
+  document-export-service:
+    base-url: ${DOCUMENT_EXPORT_SERVICE_URL:http://document-export-service:8094}
+  document-store-service:
+    base-url: ${DOCUMENT_STORE_SERVICE_URL:http://document-store-service:8089}
+  application-tracker-service:
+    base-url: ${APPLICATION_TRACKER_SERVICE_URL:http://application-tracker-service:8088}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{correlationId}] [%X{serviceName}] [%thread] %logger{36} - %msg%n"
+  level:
+    com.jobseekercopilot: ${APP_LOG_LEVEL:INFO}

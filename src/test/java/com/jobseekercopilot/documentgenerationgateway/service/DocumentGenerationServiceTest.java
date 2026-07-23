@@ -1,0 +1,172 @@
+package com.jobseekercopilot.documentgenerationgateway.service;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentKind;
+import com.jobseekercopilot.documentgenerationgateway.dto.ExportFileItem;
+import com.jobseekercopilot.documentgenerationgateway.dto.ExportLatestFiles;
+import com.jobseekercopilot.documentgenerationgateway.dto.ExportUploadResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
+import com.jobseekercopilot.generated.cvcoverletterservice.model.GenerateCvCoverLetterResponse;
+import com.jobseekercopilot.generated.cvcoverletterservice.model.Job;
+import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
+import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportItem;
+import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportRequest;
+import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportResponse;
+import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
+import com.jobseekercopilot.generated.userprofileservice.model.UserProfile;
+import java.util.Map;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.client.RestTemplate;
+
+class DocumentGenerationServiceTest {
+    private RestTemplate uploadRestTemplate;
+
+    @Test
+    void getsProfileGeneratesDocumentsExportsFilesAndReturnsGatewayDownloadUrls() {
+        var profiles = Mockito.mock(UserProfilesApi.class);
+        var exporter = Mockito.mock(DocumentExportsApi.class);
+        var restTemplate = Mockito.mock(RestTemplate.class);
+        var profile = new UserProfile().userId("user-123");
+        var job = new Job().id("job-123").title("Developer").company("Example").description("Build things");
+        UUID cvDocumentId = UUID.randomUUID();
+        UUID coverLetterDocumentId = UUID.randomUUID();
+        UUID cvDocxFileId = UUID.randomUUID();
+        UUID cvPdfFileId = UUID.randomUUID();
+        UUID letterDocxFileId = UUID.randomUUID();
+        UUID letterPdfFileId = UUID.randomUUID();
+        var generated = new GenerateCvCoverLetterResponse()
+                .applicationId("application-1")
+                .cvDocumentId(cvDocumentId.toString())
+                .coverLetterDocumentId(coverLetterDocumentId.toString());
+        when(profiles.getMyProfile("user-123")).thenReturn(profile);
+        when(restTemplate.exchange(Mockito.eq("http://auth/api/auth/me"), Mockito.eq(HttpMethod.GET),
+                Mockito.<HttpEntity<?>>any(), Mockito.eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(java.util.Map.of("name", "Alex Candidate", "email", "alex@example.com")));
+        when(restTemplate.postForObject(Mockito.eq("http://cv/api/v1/cv-cover-letter/generate"),
+                Mockito.any(), Mockito.eq(GenerateCvCoverLetterResponse.class))).thenReturn(generated);
+        when(exporter.exportDocument(Mockito.eq(cvDocumentId), Mockito.any()))
+                .thenReturn(exportResponse(cvDocxFileId, cvPdfFileId, "cv.docx", "cv.pdf"));
+        when(exporter.exportDocument(Mockito.eq(coverLetterDocumentId), Mockito.any()))
+                .thenReturn(exportResponse(letterDocxFileId, letterPdfFileId, "letter.docx", "letter.pdf"));
+
+        var service = new DocumentGenerationService(profiles, exporter, new ObjectMapper(), restTemplate,
+                "http://cv", "http://auth", "http://export", "http://tracker");
+        var actual = service.generate("user-123", "Bearer token", job);
+
+        assertEquals("application-1", actual.applicationId());
+        assertEquals(cvDocumentId.toString(), actual.cvDocumentId());
+        assertEquals(coverLetterDocumentId.toString(), actual.coverLetterDocumentId());
+        assertEquals(cvDocxFileId, actual.downloads().cv().docx().fileId());
+        assertEquals("/api/v1/document-generation/files/" + cvDocxFileId + "/download",
+                actual.downloads().cv().docx().downloadUrl());
+        assertEquals("cv.docx", actual.downloads().cv().docx().fileName());
+        assertEquals(cvPdfFileId, actual.downloads().cv().pdf().fileId());
+        assertEquals(letterDocxFileId, actual.downloads().coverLetter().docx().fileId());
+        assertEquals(letterPdfFileId, actual.downloads().coverLetter().pdf().fileId());
+
+        var generationRequest = ArgumentCaptor.forClass(Object.class);
+        verify(restTemplate).postForObject(Mockito.eq("http://cv/api/v1/cv-cover-letter/generate"),
+                generationRequest.capture(), Mockito.eq(GenerateCvCoverLetterResponse.class));
+        var entity = (HttpEntity<?>) generationRequest.getValue();
+        assertEquals("user-123", entity.getHeaders().getFirst("X-User-Id"));
+        var body = (java.util.Map<?, ?>) entity.getBody();
+        var profileBody = (java.util.Map<?, ?>) body.get("userProfile");
+        assertEquals("Alex Candidate", profileBody.get("fullName"));
+        assertEquals("alex@example.com", profileBody.get("email"));
+
+        var exportRequest = ArgumentCaptor.forClass(DocumentExportRequest.class);
+        verify(exporter).exportDocument(Mockito.eq(cvDocumentId), exportRequest.capture());
+        assertEquals(
+                java.util.List.of(DocumentExportRequest.FormatsEnum.DOCX, DocumentExportRequest.FormatsEnum.PDF),
+                exportRequest.getValue().getFormats());
+    }
+
+    @Test
+    void uploadReplacementAllowsDocumentsGeneratedApplications() {
+        var service = uploadServiceWithStatus("DOCUMENTS_GENERATED");
+        UUID generatedDocumentId = UUID.randomUUID();
+        UUID uploadedFileId = UUID.randomUUID();
+        var uploadResponse = new ExportUploadResponse(
+                generatedDocumentId,
+                new ExportFileItem(uploadedFileId, "DOCX", "cv.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", null),
+                java.util.List.of(),
+                new ExportLatestFiles(new ExportFileItem(uploadedFileId, "DOCX", "cv.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", null), null),
+                "Uploaded");
+        var file = new MockMultipartFile("file", "cv.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "content".getBytes());
+
+        when(uploadRestTemplate.postForObject(Mockito.eq("http://export/api/v1/document-exports/documents/{generatedDocumentId}/upload"),
+                Mockito.any(), Mockito.eq(ExportUploadResponse.class), Mockito.eq(generatedDocumentId)))
+                .thenReturn(uploadResponse);
+
+        var actual = service.uploadReplacement(generatedDocumentId, file, DocumentKind.CV, UploadFormat.DOCX);
+
+        assertEquals(uploadedFileId, actual.uploadedFile().fileId());
+    }
+
+    @Test
+    void uploadReplacementRejectsAppliedApplications() {
+        var service = uploadServiceWithStatus("APPLIED");
+        var file = new MockMultipartFile("file", "cv.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "content".getBytes());
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> service.uploadReplacement(UUID.randomUUID(), file, DocumentKind.CV, UploadFormat.DOCX));
+
+        assertEquals("Documents cannot be replaced after the application has been marked as applied.",
+                exception.getMessage());
+    }
+
+    @Test
+    void uploadReplacementRejectsInterviewApplications() {
+        var service = uploadServiceWithStatus("INTERVIEW");
+        var file = new MockMultipartFile("file", "cv.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "content".getBytes());
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> service.uploadReplacement(UUID.randomUUID(), file, DocumentKind.CV, UploadFormat.DOCX));
+
+        assertEquals("Documents cannot be replaced after the application has been marked as applied.",
+                exception.getMessage());
+    }
+
+    private DocumentExportResponse exportResponse(UUID docxFileId, UUID pdfFileId, String docxFileName, String pdfFileName) {
+        return new DocumentExportResponse()
+                .addExportsItem(new DocumentExportItem()
+                        .fileId(docxFileId)
+                        .format(DocumentExportItem.FormatEnum.DOCX)
+                        .fileName(docxFileName))
+                .addExportsItem(new DocumentExportItem()
+                        .fileId(pdfFileId)
+                        .format(DocumentExportItem.FormatEnum.PDF)
+                        .fileName(pdfFileName));
+    }
+
+    private DocumentGenerationService uploadServiceWithStatus(String status) {
+        var profiles = Mockito.mock(UserProfilesApi.class);
+        var exporter = Mockito.mock(DocumentExportsApi.class);
+        uploadRestTemplate = Mockito.mock(RestTemplate.class);
+        when(uploadRestTemplate.getForObject(Mockito.eq("http://tracker/api/v1/applications/document/{documentId}"),
+                Mockito.eq(Map.class), Mockito.anyString()))
+                .thenReturn(java.util.Map.of("status", status));
+        return new DocumentGenerationService(profiles, exporter, new ObjectMapper(), uploadRestTemplate,
+                "http://cv", "http://auth", "http://export", "http://tracker");
+    }
+}

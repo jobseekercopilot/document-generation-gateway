@@ -1,0 +1,61 @@
+package com.jobseekercopilot.documentgenerationgateway.config;
+
+import com.jobseekercopilot.generated.cvcoverletterservice.api.CvCoverLetterControllerApi;
+import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
+import com.jobseekercopilot.generated.documentstoreservice.api.DocumentFilesApi;
+import com.jobseekercopilot.generated.jobservice.api.JobSearchApi;
+import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
+import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
+import org.springframework.web.client.RestTemplate;
+
+@Configuration
+public class DownstreamApiConfig {
+    @Bean
+    UserProfilesApi userProfilesApi(@Value("${services.user-profile-service.base-url}") String baseUrl) {
+        var client = new com.jobseekercopilot.generated.userprofileservice.client.ApiClient();
+        client.setBasePath(baseUrl);
+        return new UserProfilesApi(client);
+    }
+
+    @Bean
+    JobSearchApi jobSearchApi(@Value("${services.job-service.base-url}") String baseUrl) {
+        var client = new com.jobseekercopilot.generated.jobservice.client.ApiClient();
+        client.setBasePath(baseUrl);
+        return new JobSearchApi(client);
+    }
+
+    @Bean
+    CvCoverLetterControllerApi cvCoverLetterApi(
+            @Value("${services.cv-cover-letter-service.base-url}") String baseUrl) {
+        var client = new com.jobseekercopilot.generated.cvcoverletterservice.client.ApiClient();
+        client.setBasePath(baseUrl);
+        return new CvCoverLetterControllerApi(client);
+    }
+
+    @Bean
+    DocumentExportsApi documentExportsApi(
+            @Value("${services.document-export-service.base-url}") String baseUrl) {
+        var client = new com.jobseekercopilot.generated.documentexportservice.client.ApiClient();
+        client.setBasePath(baseUrl);
+        return new DocumentExportsApi(client);
+    }
+
+    @Bean
+    DocumentFilesApi documentFilesApi(
+            @Value("${services.document-store-service.base-url}") String baseUrl) {
+        var client = new com.jobseekercopilot.generated.documentstoreservice.client.ApiClient();
+        client.setBasePath(baseUrl);
+        return new DocumentFilesApi(client);
+    }
+
+    @Bean
+    RestTemplate restTemplate(RestTemplateBuilder builder) {
+        return builder
+                .requestFactory(() -> new HttpComponentsClientHttpRequestFactory())
+                .build();
+    }
+}
