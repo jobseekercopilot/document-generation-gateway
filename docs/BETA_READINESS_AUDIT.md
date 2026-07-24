@@ -23,8 +23,10 @@ record.
 
 - Source was copied from the untracked service directory in the intact root
   workspace; no standalone source history was available.
-- The source-controlled JWT fallback was removed from this migration
-  candidate. `JWT_SECRET` is now required and no secret value was copied.
+- The source-controlled JWT fallback was removed from the migration candidate.
+  The later GW-01 slice replaces the legacy HMAC filter with the platform
+  RS256/JWKS contract and keeps signing and service-identity secrets out of
+  source.
 - `target/`, local client JARs, generated binaries, logs, databases, exported
   documents, recordings, and environment files are excluded.
 - The migration-time contract is `contracts/openapi.json`.
@@ -35,11 +37,12 @@ record.
   and two unused generated API beans. Contract policy tests, Maven
   verification and the source-only container build run in CI without sibling
   repositories, local `libs/` or preinstalled Job Seeker Copilot artifacts.
-- Producer contract compatibility does not resolve trusted downstream
-  identity. User Profile requires bearer authentication and Application
-  Tracker requires bearer or service-token authentication with owner context;
-  GW-01 remains the direct blocker. Authentication Service has no
-  producer-owned OpenAPI artifact for `/api/auth/me`; DOCGEN-03 owns that gap.
+- Producer contract compatibility does not resolve every trusted downstream
+  identity. The GW-01 gateway slice now forwards only the validated bearer to
+  User Profile, adds runtime service identity to Authentication and adds
+  runtime producer identity plus owner context to Application Tracker.
+  Document Store, Document Export and CV/Cover Letter producer enforcement
+  remain direct dependencies.
 - OWASP Dependency-Check 12.1.8 completed against the cached 2026-07-18
   advisory database: 62 dependencies, 14 vulnerable dependencies, 146
   vulnerability matches, including 17 Critical and 41 High matches. Results
@@ -47,8 +50,8 @@ record.
 
 ## Confirmed blockers
 
-1. `JwtTokenFilter` accepts a caller-controlled `X-User-Id` fallback, allowing
-   untrusted identity selection.
+1. Resolved in the GW-01 gateway slice: caller-controlled `X-User-Id` no
+   longer authenticates or overrides the validated JWT subject.
 2. The generation request trusts browser-supplied job title, employer, and
    description instead of resolving the selected canonical job.
 3. The generation, export, and application path is synchronous and non-atomic;
@@ -58,8 +61,9 @@ record.
 5. File download by UUID is proxied without an ownership check.
 6. Direct document replacement is not authorised against the authenticated
    owner.
-7. Application-based replacement accepts missing identity and relies on an
-   unauthenticated downstream lookup.
+7. Partially resolved in the GW-01 gateway slice: Application Tracker lookups
+   now require a validated owner plus producer identity; Store/Export
+   replacement ownership remains unresolved.
 8. Upload validation checks extension/MIME/basic ZIP members only; it lacks
    bounded decompression, macro/relationship/content checks, and filename
    hardening evidence.

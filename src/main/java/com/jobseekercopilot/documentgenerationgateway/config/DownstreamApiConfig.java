@@ -3,6 +3,7 @@ package com.jobseekercopilot.documentgenerationgateway.config;
 import com.jobseekercopilot.generated.cvcoverletterservice.api.CvCoverLetterControllerApi;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
+import com.jobseekercopilot.documentgenerationgateway.security.CurrentAccessTokenSupplier;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -13,9 +14,12 @@ import org.springframework.web.client.RestTemplate;
 @Configuration
 public class DownstreamApiConfig {
     @Bean
-    UserProfilesApi userProfilesApi(@Value("${services.user-profile-service.base-url}") String baseUrl) {
+    UserProfilesApi userProfilesApi(
+            @Value("${services.user-profile-service.base-url}") String baseUrl,
+            CurrentAccessTokenSupplier accessTokenSupplier) {
         var client = new com.jobseekercopilot.generated.userprofileservice.client.ApiClient();
         client.setBasePath(baseUrl);
+        client.setBearerToken(accessTokenSupplier);
         return new UserProfilesApi(client);
     }
 

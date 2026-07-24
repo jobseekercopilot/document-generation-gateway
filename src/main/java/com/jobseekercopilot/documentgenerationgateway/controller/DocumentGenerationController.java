@@ -9,15 +9,14 @@ import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownlo
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentGenerationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
-import jakarta.servlet.http.HttpServletRequest;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import java.util.UUID;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,9 +29,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1/document-generation")
+@SecurityRequirement(name = "bearerAuth")
 public class DocumentGenerationController {
-    private static final String USER_ID_ATTRIBUTE = "USER_ID";
-    private static final String USER_ID_HEADER = "X-User-Id";
     private final DocumentGenerationService service;
     private final DocumentFileDownloadService downloadService;
 
@@ -50,15 +48,11 @@ public class DocumentGenerationController {
             @ApiResponse(responseCode = "502", description = "A downstream service failed")
     })
     public ResponseEntity<DocumentGenerationResponse> generate(
-            HttpServletRequest servletRequest,
             @PathVariable String jobId,
-            @Parameter(in = ParameterIn.HEADER, name = USER_ID_HEADER, required = false)
-            @RequestHeader(name = USER_ID_HEADER, required = false) String headerUserId,
+            @Parameter(hidden = true) Authentication authentication,
+            @Parameter(hidden = true)
             @RequestHeader(name = "Authorization", required = false) String authorization,
             @Valid @RequestBody DocumentGenerationRequest request) {
-        String userId = (String) servletRequest.getAttribute(USER_ID_ATTRIBUTE);
-        if (userId == null || userId.isBlank()) userId = headerUserId;
-        if (userId == null || userId.isBlank()) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         if (isBlank(request.getJob().getId())
                 || isBlank(request.getJob().getTitle())
                 || isBlank(request.getJob().getCompany())
@@ -66,7 +60,8 @@ public class DocumentGenerationController {
                 || !jobId.equals(request.getJob().getId())) {
             return ResponseEntity.badRequest().build();
         }
-        return ResponseEntity.ok(service.generate(userId, authorization, request.getJob()));
+        return ResponseEntity.ok(
+                service.generate(authenticatedSubject(authentication), authorization, request.getJob()));
     }
 
     @GetMapping("/files/{fileId}/download")
@@ -77,7 +72,10 @@ public class DocumentGenerationController {
             @ApiResponse(responseCode = "404", description = "Exported file not found"),
             @ApiResponse(responseCode = "502", description = "Document store failed")
     })
-    public ResponseEntity<byte[]> download(@PathVariable UUID fileId) {
+    public ResponseEntity<byte[]> download(
+            @PathVariable UUID fileId,
+            @Parameter(hidden = true) Authentication authentication) {
+        authenticatedSubject(authentication);
         return downloadService.download(fileId);
     }
 
@@ -90,10 +88,16 @@ public class DocumentGenerationController {
     })
     public ResponseEntity<DocumentUploadResponse> uploadReplacement(
             @PathVariable UUID generatedDocumentId,
+            @Parameter(hidden = true) Authentication authentication,
             @RequestParam("file") MultipartFile file,
             @RequestParam("documentKind") DocumentKind documentKind,
             @RequestParam("uploadedFormat") UploadFormat uploadedFormat) {
-        return ResponseEntity.ok(service.uploadReplacement(generatedDocumentId, file, documentKind, uploadedFormat));
+        return ResponseEntity.ok(service.uploadReplacement(
+                generatedDocumentId,
+                authenticatedSubject(authentication),
+                file,
+                documentKind,
+                uploadedFormat));
     }
 
     @PostMapping(value = "/applications/{applicationId}/replace", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -105,15 +109,24 @@ public class DocumentGenerationController {
             @ApiResponse(responseCode = "502", description = "Downstream service failed")
     })
     public ResponseEntity<DocumentUploadResponse> replaceApplicationDocument(
-            HttpServletRequest servletRequest,
             @PathVariable UUID applicationId,
-            @Parameter(in = ParameterIn.HEADER, name = USER_ID_HEADER, required = false)
-            @RequestHeader(name = USER_ID_HEADER, required = false) String headerUserId,
+            @Parameter(hidden = true) Authentication authentication,
             @RequestParam("documentType") DocumentKind documentType,
             @RequestParam("file") MultipartFile file) {
-        String userId = (String) servletRequest.getAttribute(USER_ID_ATTRIBUTE);
-        if (userId == null || userId.isBlank()) userId = headerUserId;
-        return ResponseEntity.ok(service.replaceApplicationDocument(applicationId, userId, file, documentType));
+        return ResponseEntity.ok(service.replaceApplicationDocument(
+                applicationId,
+                authenticatedSubject(authentication),
+                file,
+                documentType));
+    }
+
+    private String authenticatedSubject(Authentication authentication) {
+        if (authentication == null
+                || !authentication.isAuthenticated()
+                || isBlank(authentication.getName())) {
+            throw new IllegalStateException("Validated access token is required.");
+        }
+        return authentication.getName();
     }
 
     private boolean isBlank(String value) {
