@@ -62,8 +62,14 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         pom = root / "pom.xml"
         pom.write_text(
             pom.read_text().replace(
-                "</executions>",
-                f"<execution><id>{generator_id}</id></execution></executions>",
+                "</plugins>",
+                (
+                    "<plugin><groupId>org.openapitools</groupId>"
+                    "<artifactId>openapi-generator-maven-plugin</artifactId>"
+                    "<executions><execution>"
+                    f"<id>{generator_id}</id>"
+                    "</execution></executions></plugin></plugins>"
+                ),
                 1,
             ),
             encoding="utf-8",
@@ -90,6 +96,26 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         pom.write_text(
             pom.read_text().replace(
                 "1.0.0-rev.68b4cf9d3f23", "1.0.0-rev.000000000000"
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "reviewed immutable pin"):
+            verify(root, check_git=False)
+
+    def test_document_export_in_consumer_generation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        self.inject_generator(root, "generate-document-export-client")
+        with self.assertRaisesRegex(ValueError, "still generated"):
+            verify(root, check_git=False)
+
+    def test_document_export_package_version_drift_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        pom = root / "pom.xml"
+        pom.write_text(
+            pom.read_text().replace(
+                "1.0.0-rev.aa7f34693d81", "1.0.0-rev.000000000000"
             ),
             encoding="utf-8",
         )

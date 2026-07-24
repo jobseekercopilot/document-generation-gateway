@@ -32,6 +32,15 @@ PACKAGES = (
         "registry": "https://maven.pkg.github.com/jobseekercopilot/cv-cover-letter-service",
         "generator_id": "generate-cv-cover-letter-client",
     },
+    {
+        "label": "Document Export",
+        "artifact_id": "document-export-service-client",
+        "version_property": "document-export-client.version",
+        "version": "1.0.0-rev.aa7f34693d81",
+        "server_id": "github-document-export",
+        "registry": "https://maven.pkg.github.com/jobseekercopilot/document-export-service",
+        "generator_id": "generate-document-export-client",
+    },
 )
 
 
