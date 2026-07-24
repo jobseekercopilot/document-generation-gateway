@@ -9,6 +9,13 @@ boundaries now bind reviewed credentials and owner context where required, but
 runtime fleet wiring and cross-user E2E evidence remain outstanding. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
+The cross-repository document ownership boundary is defined by the accepted
+[Document architecture ADR](https://github.com/jobseekercopilot/document-store-service/blob/fedcdbdec63795269c4e4c4f43fc32f38c6327b1/docs/adr/0001-document-architecture-and-ownership.md).
+Gateway's source/OpenAPI/Compose review, current and target sequence diagrams,
+state-owner map, repository decisions and deterministic synthetic trace are in
+[`docs/architecture/DOCGEN-01_VERIFICATION.md`](docs/architecture/DOCGEN-01_VERIFICATION.md).
+This is an implementation boundary, not a beta-readiness claim.
+
 ## Technology
 
 - Java 17
@@ -64,6 +71,8 @@ build through BuildKit secret mounts. Verify it with `docker buildx version`;
 the legacy Docker builder is intentionally unsupported.
 
 ```bash
+python3 scripts/verify_architecture.py
+python3 scripts/test_architecture_policy.py
 ./scripts/test-contract-policy.sh
 ./scripts/verify-contracts.sh
 python3 scripts/verify_package_consumer.py

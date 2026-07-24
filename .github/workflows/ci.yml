@@ -17,6 +17,10 @@ jobs:
       JSC_PACKAGE_READ_TOKEN: ${{ secrets.JSC_PACKAGE_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify document-generation architecture
+        run: |
+          python3 scripts/verify_architecture.py
+          python3 scripts/test_architecture_policy.py
       - name: Test pinned contract policy
         run: ./scripts/test-contract-policy.sh
       - name: Verify pinned producer contracts

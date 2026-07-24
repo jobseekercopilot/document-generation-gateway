@@ -4,6 +4,18 @@ Audit date: 2026-07-24
 
 Status: **Not ready for private beta**
 
+## Approved architecture boundary
+
+The accepted cross-repository
+[Document architecture ADR](https://github.com/jobseekercopilot/document-store-service/blob/fedcdbdec63795269c4e4c4f43fc32f38c6327b1/docs/adr/0001-document-architecture-and-ownership.md)
+is the single ownership decision for this journey. DOCGEN-01 verifies it from
+the Gateway boundary in
+[`architecture/DOCGEN-01_VERIFICATION.md`](architecture/DOCGEN-01_VERIFICATION.md),
+including current/target sequences, one owner for every lifecycle state,
+explicit Application Tracker/Build Tools repository decisions and a
+machine-checked synthetic trace. The decision assigns the remaining runtime
+work; it does not resolve the blockers below.
+
 ## Verified responsibility and request flow
 
 The Angular client posts the complete selected job to
