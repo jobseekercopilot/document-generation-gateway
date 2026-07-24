@@ -3,10 +3,11 @@
 Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
-This service is **not beta-ready**. The gateway currently accepts
-browser-supplied job data and a fallback user identity, does not enforce
-document ownership on all file operations, runs a long synchronous non-atomic
-workflow, and has unresolved downstream identity boundaries. See
+This service is **not beta-ready**. The gateway accepts browser-supplied job
+data, does not yet have producer-enforced ownership on all Document Store and
+Document Export file operations, runs a long synchronous non-atomic workflow,
+and has unresolved downstream identity boundaries. The former caller-controlled
+identity fallback has been removed. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
 ## Technology
@@ -37,8 +38,21 @@ requirements without manufacturing an unused client.
 
 ## Configuration
 
-`JWT_SECRET` is required. The service must fail closed if authentication
-configuration is absent; no secret has a source-controlled default.
+The gateway validates Authentication Service RS256 access tokens through its
+JWKS endpoint. It requires configured issuer, audience, Authentication Service
+identity and Application Tracker producer identity values:
+
+```text
+AUTH_JWKS_URI
+DOCUMENT_GENERATION_JWT_ISSUER
+DOCUMENT_GENERATION_JWT_AUDIENCE
+AUTH_SERVICE_TOKEN
+APPLICATION_TRACKER_PRODUCER_TOKEN
+```
+
+The two service tokens must be distinct and contain at least 32 bytes. They
+have no source-controlled runtime default. See
+[`docs/IDENTITY_BOUNDARY.md`](docs/IDENTITY_BOUNDARY.md).
 
 ## Build
 

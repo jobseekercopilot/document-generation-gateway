@@ -12,6 +12,6 @@
 
 The root repository and its branches were not modified. Build output, local
 client JARs, environment files, databases, logs, recordings, exported
-documents, and model output were not imported. The source-controlled
-development JWT fallback was removed in the migration candidate; `JWT_SECRET`
-is required.
+documents, and model output were not imported. The migration-time HMAC filter
+has since been replaced by the platform RS256/JWKS access-token boundary. No
+signing or service-identity secret is source controlled.

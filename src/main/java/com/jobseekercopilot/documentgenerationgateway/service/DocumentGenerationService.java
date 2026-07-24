@@ -11,6 +11,7 @@ import com.jobseekercopilot.documentgenerationgateway.dto.ExportLatestFiles;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationDownloadsResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
+import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
 import com.jobseekercopilot.generated.cvcoverletterservice.model.GenerateCvCoverLetterResponse;
 import com.jobseekercopilot.generated.cvcoverletterservice.model.Job;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
@@ -49,6 +50,8 @@ import org.springframework.web.multipart.MultipartFile;
 public class DocumentGenerationService {
     private static final Logger log = LoggerFactory.getLogger(DocumentGenerationService.class);
     private static final String DOWNLOAD_URL_TEMPLATE = "/api/v1/document-generation/files/%s/download";
+    private static final String SERVICE_TOKEN_HEADER = "X-Service-Token";
+    private static final String APPLICATION_OWNER_HEADER = "X-Application-Owner";
 
     private final UserProfilesApi userProfilesApi;
     private final DocumentExportsApi documentExportsApi;
@@ -59,6 +62,8 @@ public class DocumentGenerationService {
     private final String documentExportBaseUrl;
     private final String documentStoreBaseUrl;
     private final String applicationTrackerBaseUrl;
+    private final String authenticationServiceToken;
+    private final String applicationTrackerProducerToken;
 
     @Autowired
     public DocumentGenerationService(UserProfilesApi userProfilesApi,
@@ -69,7 +74,8 @@ public class DocumentGenerationService {
                                      @Value("${services.authentication-service.base-url}") String authenticationBaseUrl,
                                      @Value("${services.document-export-service.base-url}") String documentExportBaseUrl,
                                      @Value("${services.document-store-service.base-url}") String documentStoreBaseUrl,
-                                     @Value("${services.application-tracker-service.base-url}") String applicationTrackerBaseUrl) {
+                                     @Value("${services.application-tracker-service.base-url}") String applicationTrackerBaseUrl,
+                                     DownstreamServiceCredentials credentials) {
         this.userProfilesApi = userProfilesApi;
         this.documentExportsApi = documentExportsApi;
         this.objectMapper = objectMapper;
@@ -79,6 +85,8 @@ public class DocumentGenerationService {
         this.documentExportBaseUrl = documentExportBaseUrl;
         this.documentStoreBaseUrl = documentStoreBaseUrl;
         this.applicationTrackerBaseUrl = applicationTrackerBaseUrl;
+        this.authenticationServiceToken = credentials.authenticationServiceToken();
+        this.applicationTrackerProducerToken = credentials.applicationTrackerProducerToken();
     }
 
     DocumentGenerationService(UserProfilesApi userProfilesApi,
@@ -88,7 +96,9 @@ public class DocumentGenerationService {
                               String cvCoverLetterBaseUrl,
                               String authenticationBaseUrl,
                               String documentExportBaseUrl,
-                              String applicationTrackerBaseUrl) {
+                              String applicationTrackerBaseUrl,
+                              String authenticationServiceToken,
+                              String applicationTrackerProducerToken) {
         this(userProfilesApi,
                 documentExportsApi,
                 objectMapper,
@@ -97,7 +107,10 @@ public class DocumentGenerationService {
                 authenticationBaseUrl,
                 documentExportBaseUrl,
                 "http://localhost:8089",
-                applicationTrackerBaseUrl);
+                applicationTrackerBaseUrl,
+                new DownstreamServiceCredentials(
+                        authenticationServiceToken,
+                        applicationTrackerProducerToken));
     }
 
     public DocumentGenerationResponse generate(String userId, String authorization, Job job) {
@@ -141,12 +154,12 @@ public class DocumentGenerationService {
                 new GenerationDownloadsResponse(cvDownloads, coverLetterDownloads));
     }
 
-    public DocumentUploadResponse uploadReplacement(UUID generatedDocumentId, MultipartFile file,
+    public DocumentUploadResponse uploadReplacement(UUID generatedDocumentId, String userId, MultipartFile file,
                                                     DocumentKind documentKind, UploadFormat uploadedFormat) {
-        return uploadReplacementFile(generatedDocumentId, file, documentKind, uploadedFormat, true);
+        return uploadReplacementFile(generatedDocumentId, userId, file, documentKind, uploadedFormat, true);
     }
 
-    private DocumentUploadResponse uploadReplacementFile(UUID generatedDocumentId, MultipartFile file,
+    private DocumentUploadResponse uploadReplacementFile(UUID generatedDocumentId, String userId, MultipartFile file,
                                                          DocumentKind documentKind, UploadFormat uploadedFormat,
                                                          boolean validateApplicationLock) {
         long startedAt = System.nanoTime();
@@ -157,7 +170,7 @@ public class DocumentGenerationService {
                 file == null ? 0 : file.getSize());
         validateUpload(file, documentKind, uploadedFormat);
         if (validateApplicationLock) {
-            validateApplicationAllowsDocumentReplacement(generatedDocumentId);
+            validateApplicationAllowsDocumentReplacement(generatedDocumentId, userId);
         }
         try {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -198,7 +211,7 @@ public class DocumentGenerationService {
                                                              MultipartFile file, DocumentKind documentKind) {
         long startedAt = System.nanoTime();
         validateDocxUpload(file, documentKind);
-        Map<?, ?> application = fetchApplication(applicationId);
+        Map<?, ?> application = fetchApplication(applicationId, userId);
         validateApplicationOwner(application, userId);
         validateApplicationStatus(application);
 
@@ -238,7 +251,13 @@ public class DocumentGenerationService {
 
         DocumentUploadResponse uploadResponse;
         try {
-            uploadResponse = uploadReplacementFile(newDocumentId, file, documentKind, UploadFormat.DOCX, false);
+            uploadResponse = uploadReplacementFile(
+                    newDocumentId,
+                    userId,
+                    file,
+                    documentKind,
+                    UploadFormat.DOCX,
+                    false);
         } catch (RuntimeException exception) {
             throw new IllegalStateException("DOCUMENT_CONVERSION_FAILED", exception);
         }
@@ -258,7 +277,7 @@ public class DocumentGenerationService {
         ResponseEntity<Map> updatedApplicationResponse = restTemplate.exchange(
                 applicationTrackerBaseUrl + "/api/v1/applications/{applicationId}/document-reference",
                 HttpMethod.PATCH,
-                new HttpEntity<>(referenceUpdate),
+                applicationTrackerRequest(userId, referenceUpdate),
                 Map.class,
                 applicationId);
         Map<?, ?> updatedApplication = updatedApplicationResponse.getBody();
@@ -313,6 +332,7 @@ public class DocumentGenerationService {
             log.info("Calling authentication-service for contact enrichment");
             HttpHeaders headers = new HttpHeaders();
             headers.set(HttpHeaders.AUTHORIZATION, authorization);
+            headers.set(SERVICE_TOKEN_HEADER, authenticationServiceToken);
             Map<?, ?> account = restTemplate.exchange(
                     authenticationBaseUrl + "/api/auth/me",
                     org.springframework.http.HttpMethod.GET,
@@ -480,11 +500,13 @@ public class DocumentGenerationService {
         }
     }
 
-    private Map<?, ?> fetchApplication(UUID applicationId) {
-        Map<?, ?> application = restTemplate.getForObject(
+    private Map<?, ?> fetchApplication(UUID applicationId, String userId) {
+        Map<?, ?> application = restTemplate.exchange(
                 applicationTrackerBaseUrl + "/api/v1/applications/{applicationId}",
+                HttpMethod.GET,
+                applicationTrackerRequest(userId, null),
                 Map.class,
-                applicationId);
+                applicationId).getBody();
         if (application == null) {
             throw new IllegalArgumentException("Application not found");
         }
@@ -493,10 +515,10 @@ public class DocumentGenerationService {
 
     private void validateApplicationOwner(Map<?, ?> application, String userId) {
         if (userId == null || userId.isBlank()) {
-            return;
+            throw new IllegalArgumentException("Authenticated application owner is required.");
         }
         String owner = stringValue(application, "userId");
-        if (owner != null && !owner.equals(userId)) {
+        if (owner == null || !owner.equals(userId)) {
             throw new IllegalArgumentException("Application does not belong to the current user.");
         }
     }
@@ -532,13 +554,15 @@ public class DocumentGenerationService {
         return Integer.valueOf(value.toString());
     }
 
-    private void validateApplicationAllowsDocumentReplacement(UUID generatedDocumentId) {
+    private void validateApplicationAllowsDocumentReplacement(UUID generatedDocumentId, String userId) {
         long startedAt = System.nanoTime();
         log.info("Calling application-tracker-service before document replacement documentId={}", generatedDocumentId);
-        Map<?, ?> application = restTemplate.getForObject(
+        Map<?, ?> application = restTemplate.exchange(
                 applicationTrackerBaseUrl + "/api/v1/applications/document/{documentId}",
+                HttpMethod.GET,
+                applicationTrackerRequest(userId, null),
                 Map.class,
-                generatedDocumentId.toString());
+                generatedDocumentId.toString()).getBody();
         Object status = application == null ? null : application.get("status");
         if (!"DOCUMENTS_GENERATED".equals(status)) {
             log.warn("Locked document upload rejected documentId={} status={}", generatedDocumentId, status);
@@ -547,6 +571,19 @@ public class DocumentGenerationService {
         log.info("application-tracker-service replacement check passed documentId={} durationMs={}",
                 generatedDocumentId,
                 (System.nanoTime() - startedAt) / 1_000_000);
+    }
+
+    private HttpEntity<?> applicationTrackerRequest(String userId, Object body) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("Authenticated application owner is required.");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(SERVICE_TOKEN_HEADER, applicationTrackerProducerToken);
+        headers.set(APPLICATION_OWNER_HEADER, userId);
+        if (body != null) {
+            headers.setContentType(MediaType.APPLICATION_JSON);
+        }
+        return new HttpEntity<>(body, headers);
     }
 
     private String mimeType(UploadFormat uploadedFormat) {

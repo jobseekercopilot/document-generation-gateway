@@ -45,15 +45,17 @@ The policy checks the exact operations and fields currently consumed:
 - Application Tracker owner-scoped reads and document-reference update,
   including its service-token security scheme.
 
-Compatibility does not prove runtime authorisation. The User Profile contract
-now has a no-argument `getMyProfile()` operation protected by bearer security,
-while the gateway client configuration supplies no per-request token.
-Application Tracker likewise requires bearer or service-token identity and
-owner context that the raw gateway calls do not yet send. GW-01 owns both
-direct beta blockers. Authentication requires bearer and service identity
-together; the handwritten adapter currently forwards only the bearer token, so
-GW-01 also owns that runtime propagation blocker. Document Store producer
-authorisation remains STORE-01.
+Compatibility does not by itself prove runtime authorisation. The GW-01
+gateway slice now supplies the validated request bearer to User Profile,
+supplies bearer plus the runtime Authentication service identity to
+`/api/auth/me`, and supplies the runtime Application Tracker producer identity
+plus the validated owner subject to owner-scoped Tracker reads and document
+reference updates. Negative tests reject missing, malformed, expired, forged,
+wrong-issuer, wrong-audience, wrong-purpose and subjectless access tokens.
+Document Store producer authorisation remains STORE-01; CV/Cover Letter and
+Document Export service identity rollout remains in their focused dependency
+issues. GW-01 stays open until those producer boundaries and integrated
+cross-user paths pass.
 
 ## Updating a pin
 

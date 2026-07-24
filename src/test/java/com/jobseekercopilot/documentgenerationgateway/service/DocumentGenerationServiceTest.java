@@ -62,7 +62,9 @@ class DocumentGenerationServiceTest {
                 .thenReturn(exportResponse(letterDocxFileId, letterPdfFileId, "letter.docx", "letter.pdf"));
 
         var service = new DocumentGenerationService(profiles, exporter, new ObjectMapper(), restTemplate,
-                "http://cv", "http://auth", "http://export", "http://tracker");
+                "http://cv", "http://auth", "http://export", "http://tracker",
+                "test-only-authentication-service-token-32-bytes",
+                "test-only-application-producer-token-32-bytes");
         var actual = service.generate("user-123", "Bearer token", job);
 
         assertEquals("application-1", actual.applicationId());
@@ -95,6 +97,9 @@ class DocumentGenerationServiceTest {
         assertEquals(
                 "Bearer token",
                 authenticationRequest.getValue().getHeaders().getFirst("Authorization"));
+        assertEquals(
+                "test-only-authentication-service-token-32-bytes",
+                authenticationRequest.getValue().getHeaders().getFirst("X-Service-Token"));
 
         var exportRequest = ArgumentCaptor.forClass(DocumentExportRequest.class);
         verify(exporter).exportDocument(Mockito.eq(cvDocumentId), exportRequest.capture());
@@ -124,9 +129,27 @@ class DocumentGenerationServiceTest {
                 Mockito.any(), Mockito.eq(ExportUploadResponse.class), Mockito.eq(generatedDocumentId)))
                 .thenReturn(uploadResponse);
 
-        var actual = service.uploadReplacement(generatedDocumentId, file, DocumentKind.CV, UploadFormat.DOCX);
+        var actual = service.uploadReplacement(
+                generatedDocumentId,
+                "user-123",
+                file,
+                DocumentKind.CV,
+                UploadFormat.DOCX);
 
         assertEquals(uploadedFileId, actual.uploadedFile().fileId());
+        var trackerRequest = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(uploadRestTemplate).exchange(
+                Mockito.eq("http://tracker/api/v1/applications/document/{documentId}"),
+                Mockito.eq(HttpMethod.GET),
+                trackerRequest.capture(),
+                Mockito.eq(Map.class),
+                Mockito.eq(generatedDocumentId.toString()));
+        assertEquals(
+                "test-only-application-producer-token-32-bytes",
+                trackerRequest.getValue().getHeaders().getFirst("X-Service-Token"));
+        assertEquals(
+                "user-123",
+                trackerRequest.getValue().getHeaders().getFirst("X-Application-Owner"));
     }
 
     @Test
@@ -137,7 +160,12 @@ class DocumentGenerationServiceTest {
                 "content".getBytes());
 
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
-                () -> service.uploadReplacement(UUID.randomUUID(), file, DocumentKind.CV, UploadFormat.DOCX));
+                () -> service.uploadReplacement(
+                        UUID.randomUUID(),
+                        "user-123",
+                        file,
+                        DocumentKind.CV,
+                        UploadFormat.DOCX));
 
         assertEquals("Documents cannot be replaced after the application has been marked as applied.",
                 exception.getMessage());
@@ -151,10 +179,34 @@ class DocumentGenerationServiceTest {
                 "content".getBytes());
 
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
-                () -> service.uploadReplacement(UUID.randomUUID(), file, DocumentKind.CV, UploadFormat.DOCX));
+                () -> service.uploadReplacement(
+                        UUID.randomUUID(),
+                        "user-123",
+                        file,
+                        DocumentKind.CV,
+                        UploadFormat.DOCX));
 
         assertEquals("Documents cannot be replaced after the application has been marked as applied.",
                 exception.getMessage());
+    }
+
+    @Test
+    void uploadReplacementFailsBeforeTrackerAccessWithoutAnAuthenticatedOwner() {
+        var service = uploadServiceWithStatus("DOCUMENTS_GENERATED");
+        var file = new MockMultipartFile("file", "cv.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "content".getBytes());
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.uploadReplacement(
+                        UUID.randomUUID(),
+                        " ",
+                        file,
+                        DocumentKind.CV,
+                        UploadFormat.DOCX));
+
+        assertEquals("Authenticated application owner is required.", exception.getMessage());
     }
 
     private DocumentExportResponse exportResponse(UUID docxFileId, UUID pdfFileId, String docxFileName, String pdfFileName) {
@@ -173,10 +225,16 @@ class DocumentGenerationServiceTest {
         var profiles = Mockito.mock(UserProfilesApi.class);
         var exporter = Mockito.mock(DocumentExportsApi.class);
         uploadRestTemplate = Mockito.mock(RestTemplate.class);
-        when(uploadRestTemplate.getForObject(Mockito.eq("http://tracker/api/v1/applications/document/{documentId}"),
-                Mockito.eq(Map.class), Mockito.anyString()))
-                .thenReturn(java.util.Map.of("status", status));
+        when(uploadRestTemplate.exchange(
+                Mockito.eq("http://tracker/api/v1/applications/document/{documentId}"),
+                Mockito.eq(HttpMethod.GET),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.anyString()))
+                .thenReturn(ResponseEntity.ok(java.util.Map.of("status", status)));
         return new DocumentGenerationService(profiles, exporter, new ObjectMapper(), uploadRestTemplate,
-                "http://cv", "http://auth", "http://export", "http://tracker");
+                "http://cv", "http://auth", "http://export", "http://tracker",
+                "test-only-authentication-service-token-32-bytes",
+                "test-only-application-producer-token-32-bytes");
     }
 }

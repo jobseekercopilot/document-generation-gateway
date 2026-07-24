@@ -9,8 +9,13 @@ spring:
       max-file-size: 25MB
       max-request-size: 30MB
 
-jwt:
-  secret: ${JWT_SECRET}
+document-generation:
+  security:
+    jwk-set-uri: ${AUTH_JWKS_URI:http://authentication-service:8084/.well-known/jwks.json}
+    issuer: ${DOCUMENT_GENERATION_JWT_ISSUER:job-seeker-copilot-authentication}
+    audience: ${DOCUMENT_GENERATION_JWT_AUDIENCE:job-seeker-copilot-services}
+    authentication-service-token: ${AUTH_SERVICE_TOKEN:}
+    application-tracker-producer-token: ${APPLICATION_TRACKER_PRODUCER_TOKEN:}
 
 services:
   user-profile-service:
