@@ -21,11 +21,13 @@ workflow, and has unresolved downstream identity boundaries. See
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-The User Profile, CV/Cover Letter and Document Export clients are generated
-during Maven `generate-sources` from reviewed, checksum-protected producer
-contracts under `src/main/openapi`. The raw Document Store and Application
-Tracker adapters are checked against their pinned producer contracts.
-Generated sources and binaries are build output and are not committed. See
+The User Profile client resolves as the immutable producer-owned private Maven
+package `1.0.0-rev.86c8510ed319`. CV/Cover Letter and Document Export clients
+are still generated during Maven `generate-sources` from reviewed,
+checksum-protected producer contracts under `src/main/openapi`. The raw
+Document Store and Application Tracker adapters are checked against their
+pinned producer contracts. Generated sources and binaries are build output and
+are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 
 Authentication Service has no producer-owned OpenAPI artifact for the
@@ -39,17 +41,27 @@ configuration is absent; no secret has a source-controlled default.
 
 ## Build
 
+Docker Buildx is required because the private Maven credential must reach the
+build through BuildKit secret mounts. Verify it with `docker buildx version`;
+the legacy Docker builder is intentionally unsupported.
+
 ```bash
 ./scripts/test-contract-policy.sh
 ./scripts/verify-contracts.sh
-mvn -B --no-transfer-progress clean verify
-docker build --tag local/document-generation-gateway .
+python3 scripts/verify_package_consumer.py
+python3 scripts/test_package_consumer_policy.py
+JSC_PACKAGE_READ_TOKEN=... mvn -B --no-transfer-progress \
+  -s .mvn/github-packages-settings.xml clean verify
+JSC_PACKAGE_READ_TOKEN=... ./scripts/build-container.sh \
+  local/document-generation-gateway
 ```
 
 These commands are the clean-clone verification contract. They require no
 sibling repository, local `libs/` directory, generated JAR or preinstalled
-Job Seeker Copilot artifact. Tests use mocks and local application endpoints;
-they make no live or paid model request.
+Job Seeker Copilot artifact. The dedicated classic package-read token requires
+`read:packages` and private-repository access; it remains untracked and reaches
+the container build only through BuildKit secrets. Tests use mocks and local
+application endpoints; they make no live or paid model request.
 
 ## Safe local use
 

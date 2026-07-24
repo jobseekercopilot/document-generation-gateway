@@ -21,6 +21,7 @@
         <springdoc.version>2.3.0</springdoc.version>
         <apache.poi.version>5.2.5</apache.poi.version>
         <openapi-generator.version>7.5.0</openapi-generator.version>
+        <user-profile-client.version>1.0.0-rev.86c8510ed319</user-profile-client.version>
     </properties>
 
     <dependencies>
@@ -49,6 +50,11 @@
             <groupId>org.openapitools</groupId>
             <artifactId>jackson-databind-nullable</artifactId>
             <version>0.2.10</version>
+        </dependency>
+        <dependency>
+            <groupId>com.jobseekercopilot.clients</groupId>
+            <artifactId>user-profile-service-client</artifactId>
+            <version>${user-profile-client.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.poi</groupId>
@@ -95,19 +101,6 @@
                 <artifactId>openapi-generator-maven-plugin</artifactId>
                 <version>${openapi-generator.version}</version>
                 <executions>
-                    <execution>
-                        <id>generate-user-profile-client</id>
-                        <goals>
-                            <goal>generate</goal>
-                        </goals>
-                        <configuration>
-                            <inputSpec>${project.basedir}/src/main/openapi/user-profile-service.json</inputSpec>
-                            <output>${project.build.directory}/generated-sources/openapi/user-profile-service</output>
-                            <apiPackage>com.jobseekercopilot.generated.userprofileservice.api</apiPackage>
-                            <modelPackage>com.jobseekercopilot.generated.userprofileservice.model</modelPackage>
-                            <invokerPackage>com.jobseekercopilot.generated.userprofileservice.client</invokerPackage>
-                        </configuration>
-                    </execution>
                     <execution>
                         <id>generate-cv-cover-letter-client</id>
                         <goals>
@@ -159,4 +152,12 @@
             </plugin>
         </plugins>
     </build>
+
+    <repositories>
+        <repository>
+            <id>github-user-profile</id>
+            <name>Job Seeker Copilot User Profile packages</name>
+            <url>https://maven.pkg.github.com/jobseekercopilot/user-profile-service</url>
+        </repository>
+    </repositories>
 </project>

@@ -13,12 +13,18 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      JSC_PACKAGE_READ_TOKEN: ${{ secrets.JSC_PACKAGE_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Test pinned contract policy
         run: ./scripts/test-contract-policy.sh
       - name: Verify pinned producer contracts
         run: ./scripts/verify-contracts.sh
+      - name: Test private package consumer policy
+        run: |
+          python3 scripts/verify_package_consumer.py
+          python3 scripts/test_package_consumer_policy.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -28,6 +34,9 @@ jobs:
         run: |
           test -z "$(find . -path './.git' -prune -o \( -name target -o -name libs -o -name '*.jar' -o -name '*.class' \) -print)"
       - name: Build and test
-        run: mvn -B --no-transfer-progress clean verify
+        run: |
+          test -n "$JSC_PACKAGE_READ_TOKEN"
+          mvn -B --no-transfer-progress \
+            -s .mvn/github-packages-settings.xml clean verify
       - name: Build source-only container
-        run: docker build --tag local/document-generation-gateway:ci .
+        run: ./scripts/build-container.sh local/document-generation-gateway:ci
