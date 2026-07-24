@@ -20,6 +20,7 @@
         <jjwt.version>0.12.3</jjwt.version>
         <springdoc.version>2.3.0</springdoc.version>
         <apache.poi.version>5.2.5</apache.poi.version>
+        <openapi-generator.version>7.5.0</openapi-generator.version>
     </properties>
 
     <dependencies>
@@ -43,55 +44,6 @@
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>${springdoc.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>user-profile-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/user-profile-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>job-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/job-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>cv-cover-letter-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/cv-cover-letter-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>document-export-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/document-export-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>document-store-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/document-store-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>authentication-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/authentication-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>application-tracker-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/application-tracker-service-client-1.0.0.jar</systemPath>
         </dependency>
         <dependency>
             <groupId>org.openapitools</groupId>
@@ -139,9 +91,71 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.openapitools</groupId>
+                <artifactId>openapi-generator-maven-plugin</artifactId>
+                <version>${openapi-generator.version}</version>
+                <executions>
+                    <execution>
+                        <id>generate-user-profile-client</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/src/main/openapi/user-profile-service.json</inputSpec>
+                            <output>${project.build.directory}/generated-sources/openapi/user-profile-service</output>
+                            <apiPackage>com.jobseekercopilot.generated.userprofileservice.api</apiPackage>
+                            <modelPackage>com.jobseekercopilot.generated.userprofileservice.model</modelPackage>
+                            <invokerPackage>com.jobseekercopilot.generated.userprofileservice.client</invokerPackage>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>generate-cv-cover-letter-client</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/src/main/openapi/cv-cover-letter-service.json</inputSpec>
+                            <output>${project.build.directory}/generated-sources/openapi/cv-cover-letter-service</output>
+                            <apiPackage>com.jobseekercopilot.generated.cvcoverletterservice.api</apiPackage>
+                            <modelPackage>com.jobseekercopilot.generated.cvcoverletterservice.model</modelPackage>
+                            <invokerPackage>com.jobseekercopilot.generated.cvcoverletterservice.client</invokerPackage>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>generate-document-export-client</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/src/main/openapi/document-export-service.json</inputSpec>
+                            <output>${project.build.directory}/generated-sources/openapi/document-export-service</output>
+                            <apiPackage>com.jobseekercopilot.generated.documentexportservice.api</apiPackage>
+                            <modelPackage>com.jobseekercopilot.generated.documentexportservice.model</modelPackage>
+                            <invokerPackage>com.jobseekercopilot.generated.documentexportservice.client</invokerPackage>
+                        </configuration>
+                    </execution>
+                </executions>
+                <configuration>
+                    <generatorName>java</generatorName>
+                    <library>resttemplate</library>
+                    <generateApiTests>false</generateApiTests>
+                    <generateModelTests>false</generateModelTests>
+                    <generateApiDocumentation>false</generateApiDocumentation>
+                    <generateModelDocumentation>false</generateModelDocumentation>
+                    <skipValidateSpec>false</skipValidateSpec>
+                    <configOptions>
+                        <annotationLibrary>none</annotationLibrary>
+                        <dateLibrary>java8</dateLibrary>
+                        <hideGenerationTimestamp>true</hideGenerationTimestamp>
+                        <openApiNullable>false</openApiNullable>
+                        <useJakartaEe>true</useJakartaEe>
+                        <useRuntimeException>true</useRuntimeException>
+                    </configOptions>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration><includeSystemScope>true</includeSystemScope></configuration>
             </plugin>
         </plugins>
     </build>

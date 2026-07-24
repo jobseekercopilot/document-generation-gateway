@@ -1,0 +1,4 @@
+repository=jobseekercopilot/application-tracker-service
+revision=d9e6bc9fcbe4ef665334c58672c8062b1e4796aa
+path=contracts/openapi.json
+sha256=549cebba300c2caf3403b9de01d3c34de84464a280a02183751e8a9583ad982a

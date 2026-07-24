@@ -11,7 +11,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(properties = "jwt.secret=test-only-jwt-secret-with-at-least-32-bytes")
 @AutoConfigureMockMvc
 class OpenApiExportTest {
     @Autowired private MockMvc mockMvc;

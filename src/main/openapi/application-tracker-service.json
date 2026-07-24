@@ -1,0 +1,866 @@
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "Jobseeker Copilot - Application Tracker API",
+    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service stores document references only (cvDocumentId, coverLetterDocumentId).\nIt does NOT store document contents.\n\nApplicationStatus values:\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
+    "contact" : {
+      "name" : "Jobseeker Copilot"
+    },
+    "license" : {
+      "name" : "Proprietary and confidential"
+    },
+    "version" : "1.1.0"
+  },
+  "servers" : [ {
+    "url" : "http://localhost:8088",
+    "description" : "Local development"
+  } ],
+  "tags" : [ {
+    "name" : "Application Records",
+    "description" : "Endpoints for tracking job applications"
+  } ],
+  "paths" : {
+    "/internal/system-data/seed/applications" : {
+      "post" : {
+        "tags" : [ "application-tracker-system-data-controller" ],
+        "operationId" : "seedApplications",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "array",
+                "items" : {
+                  "$ref" : "#/components/schemas/ApplicationRecord"
+                }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications" : {
+      "post" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Create an application record",
+        "description" : "Creates a new application record with references to generated documents",
+        "operationId" : "createApplication",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateApplicationRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "description" : "Application record created successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation error - missing or invalid fields",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/withdraw-generated" : {
+      "post" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Withdraw generated application",
+        "description" : "Removes a generated-only application record and resets the job to NEW",
+        "operationId" : "withdrawGeneratedApplication",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the generated-only application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "400" : {
+            "description" : "Application cannot be withdrawn because it has already progressed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Generated application withdrawn",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/status" : {
+      "patch" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Update application status",
+        "operationId" : "updateStatus",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateStatusRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Status updated successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid status value",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-reference" : {
+      "patch" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Update the active document reference for an application",
+        "operationId" : "updateDocumentReference",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateDocumentReferenceRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/internal/system-data/verify/applications/{userId}" : {
+      "get" : {
+        "tags" : [ "application-tracker-system-data-controller" ],
+        "operationId" : "verifyApplications",
+        "parameters" : [ {
+          "name" : "userId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get application by ID",
+        "operationId" : "getApplicationById",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Application record found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      },
+      "delete" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Delete an application record",
+        "operationId" : "deleteApplication",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record to delete",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "204" : {
+            "description" : "Application record deleted successfully"
+          },
+          "404" : {
+            "description" : "Application record not found"
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/user/{userId}" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get applications by user ID",
+        "operationId" : "getApplicationsForUser",
+        "parameters" : [ {
+          "name" : "userId",
+          "in" : "path",
+          "description" : "User ID to retrieve applications for",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "403" : {
+            "description" : "Authenticated identity lacks reader permission",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing, invalid or ambiguous authentication",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Owner-scoped application records",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Bearer subject and requested owner do not match",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/document/{documentId}" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get application by generated document ID",
+        "operationId" : "getApplicationByDocumentId",
+        "parameters" : [ {
+          "name" : "documentId",
+          "in" : "path",
+          "description" : "Generated CV or cover letter document ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Application record found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/internal/system-data/scenario/{scenarioId}/applications/{userId}" : {
+      "delete" : {
+        "tags" : [ "application-tracker-system-data-controller" ],
+        "operationId" : "resetApplications",
+        "parameters" : [ {
+          "name" : "scenarioId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "userId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "ApplicationRecord" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "jobId" : {
+            "type" : "string"
+          },
+          "canonicalJobId" : {
+            "type" : "string"
+          },
+          "provider" : {
+            "type" : "string"
+          },
+          "externalJobId" : {
+            "type" : "string"
+          },
+          "jobTitle" : {
+            "type" : "string"
+          },
+          "companyName" : {
+            "type" : "string"
+          },
+          "location" : {
+            "type" : "string"
+          },
+          "cvDocumentId" : {
+            "type" : "string"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "appliedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "SystemDataResult" : {
+        "type" : "object",
+        "properties" : {
+          "service" : {
+            "type" : "string"
+          },
+          "operation" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "recordsAffected" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "activeEnvironment" : {
+            "type" : "string"
+          },
+          "details" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : "object"
+            }
+          },
+          "warnings" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "CreateApplicationRequest" : {
+        "required" : [ "companyName", "coverLetterDocumentId", "cvDocumentId", "jobId", "jobTitle", "userId" ],
+        "type" : "object",
+        "properties" : {
+          "userId" : {
+            "type" : "string",
+            "description" : "ID of the user creating the application",
+            "example" : "user-123"
+          },
+          "jobId" : {
+            "type" : "string",
+            "description" : "ID of the job being applied to",
+            "example" : "job-456"
+          },
+          "canonicalJobId" : {
+            "type" : "string",
+            "description" : "Stable cross-provider canonical job identifier",
+            "example" : "job_abc123"
+          },
+          "provider" : {
+            "type" : "string",
+            "description" : "Job provider name",
+            "example" : "REED"
+          },
+          "externalJobId" : {
+            "type" : "string",
+            "description" : "Provider-specific job identifier",
+            "example" : "123456"
+          },
+          "jobTitle" : {
+            "type" : "string",
+            "description" : "Title of the job",
+            "example" : "Java Developer"
+          },
+          "companyName" : {
+            "type" : "string",
+            "description" : "Name of the company offering the job",
+            "example" : "Example Ltd"
+          },
+          "location" : {
+            "type" : "string",
+            "description" : "Job location",
+            "example" : "Dorking"
+          },
+          "cvDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated CV document (reference only, content not stored here)",
+            "example" : "cv-123"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated cover letter document (reference only, content not stored here)",
+            "example" : "cl-456"
+          }
+        },
+        "description" : "Request to create a new application record"
+      },
+      "ApplicationRecordResponse" : {
+        "required" : [ "canonicalJobId", "companyName", "coverLetterDocumentId", "createdAt", "cvDocumentId", "externalJobId", "id", "jobId", "jobTitle", "provider", "status", "updatedAt", "userId" ],
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "description" : "Unique identifier of the application record",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "userId" : {
+            "type" : "string",
+            "description" : "ID of the user who owns this application",
+            "example" : "user-123"
+          },
+          "jobId" : {
+            "type" : "string",
+            "description" : "ID of the job being applied to",
+            "example" : "job-456"
+          },
+          "canonicalJobId" : {
+            "type" : "string",
+            "description" : "Stable cross-provider canonical job identifier",
+            "example" : "job_abc123"
+          },
+          "provider" : {
+            "type" : "string",
+            "description" : "Job provider name",
+            "example" : "REED"
+          },
+          "externalJobId" : {
+            "type" : "string",
+            "description" : "Provider-specific job identifier",
+            "example" : "123456"
+          },
+          "jobTitle" : {
+            "type" : "string",
+            "description" : "Title of the job",
+            "example" : "Java Developer"
+          },
+          "companyName" : {
+            "type" : "string",
+            "description" : "Name of the company",
+            "example" : "Example Ltd"
+          },
+          "location" : {
+            "type" : "string",
+            "description" : "Job location",
+            "example" : "Dorking"
+          },
+          "cvDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated CV document (reference only)",
+            "example" : "cv-123"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated cover letter document (reference only)",
+            "example" : "cl-456"
+          },
+          "status" : {
+            "type" : "string",
+            "description" : "Current application status",
+            "example" : "DOCUMENTS_GENERATED",
+            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "createdAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the record was created",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the record was last updated",
+            "format" : "date-time"
+          },
+          "appliedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the application was submitted (null if not yet applied)",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Response containing application record details"
+      },
+      "WithdrawGeneratedApplicationResponse" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "description" : "Application record ID that was withdrawn",
+            "format" : "uuid"
+          },
+          "status" : {
+            "type" : "string",
+            "description" : "Status the job should show after withdrawal",
+            "example" : "NEW"
+          },
+          "withdrawn" : {
+            "type" : "boolean",
+            "description" : "Whether the generated application was withdrawn",
+            "example" : true
+          },
+          "message" : {
+            "type" : "string",
+            "description" : "Human-readable withdrawal result"
+          }
+        },
+        "description" : "Response returned when generated documents are withdrawn before applying"
+      },
+      "UpdateStatusRequest" : {
+        "required" : [ "status" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string",
+            "description" : "New status value",
+            "example" : "APPLIED",
+            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          }
+        },
+        "description" : "Request to update the status of an application"
+      },
+      "UpdateDocumentReferenceRequest" : {
+        "required" : [ "documentId", "documentType" ],
+        "type" : "object",
+        "properties" : {
+          "documentType" : {
+            "type" : "string"
+          },
+          "documentId" : {
+            "type" : "string"
+          }
+        }
+      },
+      "SecurityErrorResponse" : {
+        "required" : [ "code", "message" ],
+        "type" : "object",
+        "properties" : {
+          "code" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Stable redacted authentication or authorization error"
+      },
+      "ErrorResponse" : {
+        "required" : [ "message", "status", "timestamp" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "errors" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes" : {
+      "bearerAuth" : {
+        "type" : "http",
+        "scheme" : "bearer",
+        "bearerFormat" : "JWT"
+      },
+      "serviceToken" : {
+        "type" : "apiKey",
+        "name" : "X-Service-Token",
+        "in" : "header"
+      },
+      "environmentDataToken" : {
+        "type" : "apiKey",
+        "name" : "X-Environment-Data-Token",
+        "in" : "header"
+      }
+    }
+  }
+}

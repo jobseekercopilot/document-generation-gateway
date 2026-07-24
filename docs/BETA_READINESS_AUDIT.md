@@ -29,11 +29,17 @@ record.
   documents, recordings, and environment files are excluded.
 - The migration-time contract is `contracts/openapi.json`.
 - Gitleaks and targeted personal-data checks passed on the sanitised source.
-- A clean `mvn -B clean verify` fails before compilation because seven
-  `systemPath` client JARs are absent. Six test methods exist in source, but
-  they were not executed in the clean candidate.
-- The candidate container build fails at `COPY libs ./libs`; no image was
-  produced.
+- The DOCGEN-02 gateway slice replaces the three source-used `systemPath`
+  clients with deterministic generation from exact revision/checksum-pinned
+  producer contracts. It removes four unused generated-client dependencies
+  and two unused generated API beans. Contract policy tests, Maven
+  verification and the source-only container build run in CI without sibling
+  repositories, local `libs/` or preinstalled Job Seeker Copilot artifacts.
+- Producer contract compatibility does not resolve trusted downstream
+  identity. User Profile requires bearer authentication and Application
+  Tracker requires bearer or service-token authentication with owner context;
+  GW-01 remains the direct blocker. Authentication Service has no
+  producer-owned OpenAPI artifact for `/api/auth/me`; DOCGEN-03 owns that gap.
 - OWASP Dependency-Check 12.1.8 completed against the cached 2026-07-18
   advisory database: 62 dependencies, 14 vulnerable dependencies, 146
   vulnerability matches, including 17 Critical and 41 High matches. Results
@@ -64,8 +70,8 @@ record.
 11. There is no complete correlation-safe state model or metrics for
     generation, invalid output, rejected claims, cost, storage, export, and
     download failures.
-12. The build depends on seven untracked generated client JARs and there is no
-    reproducible contract publication pipeline.
+12. There is no complete immutable contract publication pipeline, and
+    Authentication Service does not publish the `/api/auth/me` contract.
 13. The Dockerfile is not hardened with digest-pinned bases, a non-root
     runtime, explicit readiness, resource limits, or supply-chain evidence.
 14. Current Spring, Tomcat, Jackson, security, HTTP, compression, POI,
