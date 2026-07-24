@@ -52,6 +52,7 @@ public class DocumentGenerationService {
     private static final String DOWNLOAD_URL_TEMPLATE = "/api/v1/document-generation/files/%s/download";
     private static final String SERVICE_TOKEN_HEADER = "X-Service-Token";
     private static final String APPLICATION_OWNER_HEADER = "X-Application-Owner";
+    private static final String DOCUMENT_OWNER_HEADER = "X-Document-Owner";
 
     private final UserProfilesApi userProfilesApi;
     private final DocumentExportsApi documentExportsApi;
@@ -64,6 +65,8 @@ public class DocumentGenerationService {
     private final String applicationTrackerBaseUrl;
     private final String authenticationServiceToken;
     private final String applicationTrackerProducerToken;
+    private final String documentStoreProducerToken;
+    private final String documentStoreReaderToken;
 
     @Autowired
     public DocumentGenerationService(UserProfilesApi userProfilesApi,
@@ -87,6 +90,8 @@ public class DocumentGenerationService {
         this.applicationTrackerBaseUrl = applicationTrackerBaseUrl;
         this.authenticationServiceToken = credentials.authenticationServiceToken();
         this.applicationTrackerProducerToken = credentials.applicationTrackerProducerToken();
+        this.documentStoreProducerToken = credentials.documentStoreProducerToken();
+        this.documentStoreReaderToken = credentials.documentStoreReaderToken();
     }
 
     DocumentGenerationService(UserProfilesApi userProfilesApi,
@@ -96,9 +101,12 @@ public class DocumentGenerationService {
                               String cvCoverLetterBaseUrl,
                               String authenticationBaseUrl,
                               String documentExportBaseUrl,
+                              String documentStoreBaseUrl,
                               String applicationTrackerBaseUrl,
                               String authenticationServiceToken,
-                              String applicationTrackerProducerToken) {
+                              String applicationTrackerProducerToken,
+                              String documentStoreProducerToken,
+                              String documentStoreReaderToken) {
         this(userProfilesApi,
                 documentExportsApi,
                 objectMapper,
@@ -106,11 +114,13 @@ public class DocumentGenerationService {
                 cvCoverLetterBaseUrl,
                 authenticationBaseUrl,
                 documentExportBaseUrl,
-                "http://localhost:8089",
+                documentStoreBaseUrl,
                 applicationTrackerBaseUrl,
                 new DownstreamServiceCredentials(
                         authenticationServiceToken,
-                        applicationTrackerProducerToken));
+                        applicationTrackerProducerToken,
+                        documentStoreProducerToken,
+                        documentStoreReaderToken));
     }
 
     public DocumentGenerationResponse generate(String userId, String authorization, Job job) {
@@ -220,10 +230,15 @@ public class DocumentGenerationService {
             throw new IllegalArgumentException("Active document reference is missing for " + documentKind);
         }
 
-        Map<?, ?> currentDocument = restTemplate.getForObject(
+        Map<?, ?> currentDocument = restTemplate.exchange(
                 documentStoreBaseUrl + "/api/v1/documents/{documentId}",
+                HttpMethod.GET,
+                documentStoreRequest(userId, null, documentStoreReaderToken),
                 Map.class,
-                currentDocumentId);
+                currentDocumentId).getBody();
+        if (currentDocument == null) {
+            throw new IllegalArgumentException("Document not found");
+        }
         String content = extractDocxText(file);
         String title = firstText(
                 stringValue(currentDocument, "title"),
@@ -231,7 +246,7 @@ public class DocumentGenerationService {
                         stringValue(application, "jobTitle")));
 
         Map<String, Object> createDocument = new LinkedHashMap<>();
-        createDocument.put("userId", stringValue(application, "userId"));
+        createDocument.put("userId", userId);
         createDocument.put("jobId", stringValue(application, "jobId"));
         createDocument.put("applicationId", applicationId.toString());
         createDocument.put("documentType", documentKind.name());
@@ -240,12 +255,16 @@ public class DocumentGenerationService {
         createDocument.put("active", false);
         createDocument.put("originalFilename", file.getOriginalFilename());
         createDocument.put("sourceType", "UPLOADED");
-        createDocument.put("createdBy", firstText(userId, stringValue(application, "userId")));
+        createDocument.put("createdBy", userId);
 
-        Map<?, ?> created = restTemplate.postForObject(
+        Map<?, ?> created = restTemplate.exchange(
                 documentStoreBaseUrl + "/api/v1/documents",
-                createDocument,
-                Map.class);
+                HttpMethod.POST,
+                documentStoreRequest(userId, createDocument, documentStoreProducerToken),
+                Map.class).getBody();
+        if (created == null || created.get("id") == null) {
+            throw new IllegalStateException("Document Store returned no replacement document");
+        }
         UUID newDocumentId = UUID.fromString(Objects.toString(created.get("id")));
         Integer version = integerValue(created.get("version"));
 
@@ -265,7 +284,7 @@ public class DocumentGenerationService {
         restTemplate.exchange(
                 documentStoreBaseUrl + "/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}",
                 HttpMethod.PATCH,
-                HttpEntity.EMPTY,
+                documentStoreRequest(userId, null, documentStoreProducerToken),
                 Map.class,
                 applicationId.toString(),
                 documentKind.name(),
@@ -580,6 +599,22 @@ public class DocumentGenerationService {
         HttpHeaders headers = new HttpHeaders();
         headers.set(SERVICE_TOKEN_HEADER, applicationTrackerProducerToken);
         headers.set(APPLICATION_OWNER_HEADER, userId);
+        if (body != null) {
+            headers.setContentType(MediaType.APPLICATION_JSON);
+        }
+        return new HttpEntity<>(body, headers);
+    }
+
+    private HttpEntity<?> documentStoreRequest(
+            String userId,
+            Object body,
+            String serviceToken) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("Authenticated document owner is required.");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(SERVICE_TOKEN_HEADER, serviceToken);
+        headers.set(DOCUMENT_OWNER_HEADER, userId);
         if (body != null) {
             headers.setContentType(MediaType.APPLICATION_JSON);
         }

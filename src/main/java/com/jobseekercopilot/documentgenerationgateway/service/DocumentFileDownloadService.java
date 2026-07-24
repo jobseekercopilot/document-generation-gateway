@@ -1,8 +1,11 @@
 package com.jobseekercopilot.documentgenerationgateway.service;
 
+import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
@@ -12,21 +15,42 @@ import org.springframework.web.client.RestTemplate;
 
 @Service
 public class DocumentFileDownloadService {
+    private static final String SERVICE_TOKEN_HEADER = "X-Service-Token";
+    private static final String DOCUMENT_OWNER_HEADER = "X-Document-Owner";
+
     private final RestTemplate restTemplate;
     private final String documentStoreBaseUrl;
+    private final String documentStoreReaderToken;
 
-    public DocumentFileDownloadService(RestTemplate restTemplate,
-                                       @Value("${services.document-store-service.base-url}") String documentStoreBaseUrl) {
-        this.restTemplate = restTemplate;
-        this.documentStoreBaseUrl = documentStoreBaseUrl;
+    @Autowired
+    public DocumentFileDownloadService(
+            RestTemplate restTemplate,
+            @Value("${services.document-store-service.base-url}") String documentStoreBaseUrl,
+            DownstreamServiceCredentials credentials) {
+        this(restTemplate, documentStoreBaseUrl, credentials.documentStoreReaderToken());
     }
 
-    public ResponseEntity<byte[]> download(UUID fileId) {
+    DocumentFileDownloadService(
+            RestTemplate restTemplate,
+            String documentStoreBaseUrl,
+            String documentStoreReaderToken) {
+        this.restTemplate = restTemplate;
+        this.documentStoreBaseUrl = documentStoreBaseUrl;
+        this.documentStoreReaderToken = documentStoreReaderToken;
+    }
+
+    public ResponseEntity<byte[]> download(UUID fileId, String ownerId) {
+        if (ownerId == null || ownerId.isBlank()) {
+            throw new IllegalArgumentException("Authenticated document owner is required.");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(SERVICE_TOKEN_HEADER, documentStoreReaderToken);
+        headers.set(DOCUMENT_OWNER_HEADER, ownerId);
         try {
             ResponseEntity<byte[]> upstream = restTemplate.exchange(
                     documentStoreBaseUrl + "/api/v1/document-files/{fileId}/download",
                     HttpMethod.GET,
-                    null,
+                    new HttpEntity<>(headers),
                     byte[].class,
                     fileId);
 

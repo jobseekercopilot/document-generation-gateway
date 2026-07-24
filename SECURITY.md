@@ -20,6 +20,9 @@ comes only from a validated platform access token. Downstream service
 identities are injected from runtime configuration and must never be copied
 from incoming requests.
 
-Document Store and Document Export ownership enforcement remains incomplete,
-so this service is not approved for production or real-user data. See
+Direct Document Store calls use distinct reader/producer identities and
+`X-Document-Owner` derived only from the validated token subject. Document
+Export and CV/Cover Letter ownership enforcement, credential deployment and
+integrated cross-user evidence remain incomplete, so this service is not
+approved for production or real-user data. See
 [`docs/IDENTITY_BOUNDARY.md`](docs/IDENTITY_BOUNDARY.md).

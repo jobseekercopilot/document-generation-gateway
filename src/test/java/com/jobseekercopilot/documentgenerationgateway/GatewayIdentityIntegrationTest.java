@@ -29,7 +29,11 @@ import org.springframework.test.web.servlet.MvcResult;
         "document-generation.security.authentication-service-token="
                 + "test-only-authentication-service-token-32-bytes",
         "document-generation.security.application-tracker-producer-token="
-                + "test-only-application-producer-token-32-bytes"
+                + "test-only-application-producer-token-32-bytes",
+        "document-generation.security.document-store-producer-token="
+                + "test-only-document-store-producer-token-32-bytes",
+        "document-generation.security.document-store-reader-token="
+                + "test-only-document-store-reader-token-32-bytes"
 })
 @AutoConfigureMockMvc
 class GatewayIdentityIntegrationTest {
@@ -92,6 +96,25 @@ class GatewayIdentityIntegrationTest {
                 ArgumentMatchers.eq("alice"),
                 ArgumentMatchers.eq("Bearer " + token),
                 ArgumentMatchers.any());
+    }
+
+    @Test
+    void validatedSubjectIsBoundToDocumentDownload() throws Exception {
+        String token = JWKS.validToken("alice");
+        String fileId = "00000000-0000-0000-0000-000000000001";
+        org.mockito.Mockito.when(downloadService.download(
+                        ArgumentMatchers.any(),
+                        ArgumentMatchers.anyString()))
+                .thenReturn(ResponseEntity.ok(new byte[0]));
+
+        mockMvc.perform(get("/api/v1/document-generation/files/{fileId}/download", fileId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Document-Owner", "victim"))
+                .andExpect(status().isOk());
+
+        verify(downloadService).download(
+                ArgumentMatchers.eq(java.util.UUID.fromString(fileId)),
+                ArgumentMatchers.eq("alice"));
     }
 
     @Test

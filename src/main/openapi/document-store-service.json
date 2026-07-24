@@ -1,1 +1,1241 @@
-{"openapi":"3.0.1","info":{"title":"Jobseeker Copilot - Document Store API","description":"Service for storing and retrieving generated CVs and cover letters.\n\nThis service stores generated document content.\nIt does NOT generate documents.\nIt does NOT call an LLM.\nIt does NOT export PDF/DOCX.\n\nDocumentType values:\n- CV - Curriculum Vitae / Resume\n- COVER_LETTER - Cover letter for a job application\n","contact":{"name":"Jobseeker Copilot"},"license":{"name":"MIT"},"version":"1.0.0"},"servers":[{"url":"http://localhost","description":"Generated server url"}],"tags":[{"name":"Generated Documents","description":"Endpoints for storing and retrieving generated CVs and cover letters"},{"name":"Document Files","description":"Endpoints for storing and downloading exported DOCX and PDF files"}],"paths":{"/internal/system-data/seed/documents":{"post":{"tags":["document-store-system-data-controller"],"operationId":"seedDocuments","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SystemDataDocumentSeedRequest"}}},"required":true},"responses":{"200":{"description":"OK","content":{"*/*":{"schema":{"$ref":"#/components/schemas/SystemDataResult"}}}}}}},"/api/v1/documents":{"post":{"tags":["Generated Documents"],"summary":"Create a document","description":"Stores a generated document (CV or cover letter)","operationId":"createDocument","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateDocumentRequest"}}},"required":true},"responses":{"201":{"description":"Document created successfully","content":{"*/*":{"schema":{"$ref":"#/components/schemas/GeneratedDocumentResponse"}}}},"400":{"description":"Validation error - missing or invalid fields","content":{"*/*":{"schema":{"$ref":"#/components/schemas/GeneratedDocumentResponse"}}}}}}},"/api/v1/documents/{generatedDocumentId}/files/upload":{"post":{"tags":["Document Files"],"summary":"Upload replacement file","description":"Stores a user-uploaded DOCX or PDF replacement for a generated document","operationId":"uploadReplacementFile","parameters":[{"name":"generatedDocumentId","in":"path","description":"UUID of the generated document","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"fileType","in":"query","required":true,"schema":{"type":"string","enum":["DOCX","PDF"]}},{"name":"source","in":"query","required":false,"schema":{"type":"string","default":"USER_UPLOADED","enum":["GENERATED","USER_UPLOADED"]}}],"requestBody":{"content":{"multipart/form-data":{"schema":{"required":["file"],"type":"object","properties":{"file":{"type":"string","format":"binary"}}}}}},"responses":{"404":{"description":"Generated document not found","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}},"201":{"description":"Replacement file saved successfully","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}},"400":{"description":"Validation error - missing or invalid upload","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}}}}},"/api/v1/documents/applications/{applicationId}/deactivate":{"post":{"tags":["Generated Documents"],"summary":"Deactivate all documents for an application","operationId":"deactivateApplicationDocuments","parameters":[{"name":"applicationId","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"OK"}}}},"/api/v1/document-files":{"post":{"tags":["Document Files"],"summary":"Save exported file","description":"Stores exported DOCX or PDF bytes for a generated document","operationId":"createDocumentFile","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateDocumentFileRequest"}}},"required":true},"responses":{"404":{"description":"Generated document not found","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}},"201":{"description":"Exported file saved successfully","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}},"400":{"description":"Validation error - missing or invalid fields","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}}}}},"/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}":{"patch":{"tags":["Generated Documents"],"summary":"Activate a document version for an application","operationId":"activateDocumentVersion","parameters":[{"name":"applicationId","in":"path","required":true,"schema":{"type":"string"}},{"name":"documentType","in":"path","required":true,"schema":{"type":"string","enum":["CV","COVER_LETTER"]}},{"name":"documentId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"200":{"description":"OK","content":{"*/*":{"schema":{"$ref":"#/components/schemas/GeneratedDocumentResponse"}}}}}}},"/internal/system-data/verify/documents/{userId}":{"get":{"tags":["document-store-system-data-controller"],"operationId":"verifyDocuments","parameters":[{"name":"userId","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"OK","content":{"*/*":{"schema":{"$ref":"#/components/schemas/SystemDataResult"}}}}}}},"/api/v1/documents/{id}":{"get":{"tags":["Generated Documents"],"summary":"Get document by ID","operationId":"getDocumentById","parameters":[{"name":"id","in":"path","description":"UUID of the document","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"200":{"description":"Document found","content":{"*/*":{"schema":{"$ref":"#/components/schemas/GeneratedDocumentResponse"}}}},"404":{"description":"Document not found","content":{"*/*":{"schema":{"$ref":"#/components/schemas/GeneratedDocumentResponse"}}}}}},"delete":{"tags":["Generated Documents"],"summary":"Delete a document","operationId":"deleteDocument","parameters":[{"name":"id","in":"path","description":"UUID of the document to delete","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"404":{"description":"Document not found"},"204":{"description":"Document deleted successfully"}}}},"/api/v1/documents/{generatedDocumentId}/files":{"get":{"tags":["Document Files"],"summary":"List exported files for a generated document","operationId":"getFilesForDocument","parameters":[{"name":"generatedDocumentId","in":"path","description":"UUID of the generated document","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"200":{"description":"Exported file metadata list","content":{"*/*":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/DocumentFileResponse"}}}}},"404":{"description":"Generated document not found","content":{"*/*":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/DocumentFileResponse"}}}}}}}},"/api/v1/documents/{generatedDocumentId}/files/latest":{"get":{"tags":["Document Files"],"summary":"List latest active exported files for a generated document","operationId":"getLatestFilesForDocument","parameters":[{"name":"generatedDocumentId","in":"path","description":"UUID of the generated document","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"200":{"description":"Latest active exported file metadata list","content":{"*/*":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/DocumentFileResponse"}}}}},"404":{"description":"Generated document not found","content":{"*/*":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/DocumentFileResponse"}}}}}}}},"/api/v1/documents/user/{userId}":{"get":{"tags":["Generated Documents"],"summary":"Get documents by user ID","operationId":"getDocumentsByUserId","parameters":[{"name":"userId","in":"path","description":"User ID to retrieve documents for","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"List of documents for the user","content":{"*/*":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/GeneratedDocumentResponse"}}}}}}}},"/api/v1/documents/user/{userId}/job/{jobId}":{"get":{"tags":["Generated Documents"],"summary":"Get documents by user ID and job ID","operationId":"getDocumentsByUserIdAndJobId","parameters":[{"name":"userId","in":"path","description":"User ID","required":true,"schema":{"type":"string"}},{"name":"jobId","in":"path","description":"Job ID","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"List of documents for the user and job","content":{"*/*":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/GeneratedDocumentResponse"}}}}}}}},"/api/v1/document-files/{id}":{"get":{"tags":["Document Files"],"summary":"Get exported file metadata","operationId":"getDocumentFileMetadata","parameters":[{"name":"id","in":"path","description":"UUID of the exported file","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"404":{"description":"Exported file not found","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}},"200":{"description":"Exported file metadata found","content":{"*/*":{"schema":{"$ref":"#/components/schemas/DocumentFileResponse"}}}}}}},"/api/v1/document-files/{id}/download":{"get":{"tags":["Document Files"],"summary":"Download exported file","operationId":"downloadDocumentFile","parameters":[{"name":"id","in":"path","description":"UUID of the exported file","required":true,"schema":{"type":"string","format":"uuid"}}],"responses":{"404":{"description":"Exported file not found","content":{"*/*":{"schema":{"type":"array","items":{"type":"string","format":"byte"}}}}},"200":{"description":"Exported file bytes","content":{"*/*":{"schema":{"type":"array","items":{"type":"string","format":"byte"}}}}}}}},"/internal/system-data/scenario/{scenarioId}/documents/{userId}":{"delete":{"tags":["document-store-system-data-controller"],"operationId":"resetDocuments","parameters":[{"name":"scenarioId","in":"path","required":true,"schema":{"type":"string"}},{"name":"userId","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"OK","content":{"*/*":{"schema":{"$ref":"#/components/schemas/SystemDataResult"}}}}}}}},"components":{"schemas":{"ExportedDocumentFile":{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"generatedDocumentId":{"type":"string","format":"uuid"},"generatedDocument":{"$ref":"#/components/schemas/GeneratedDocument"},"fileType":{"type":"string","enum":["DOCX","PDF"]},"fileName":{"type":"string"},"mimeType":{"type":"string"},"source":{"type":"string","enum":["GENERATED","USER_UPLOADED"]},"active":{"type":"boolean"},"fileContent":{"type":"array","items":{"type":"string","format":"byte"}},"createdAt":{"type":"string","format":"date-time"},"updatedAt":{"type":"string","format":"date-time"}}},"GeneratedDocument":{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"userId":{"type":"string"},"jobId":{"type":"string"},"applicationId":{"type":"string"},"documentType":{"type":"string","enum":["CV","COVER_LETTER"]},"title":{"type":"string"},"content":{"type":"string"},"version":{"type":"integer","format":"int32"},"active":{"type":"boolean"},"originalFilename":{"type":"string"},"sourceType":{"type":"string","enum":["GENERATED","UPLOADED"]},"createdBy":{"type":"string"},"createdAt":{"type":"string","format":"date-time"},"updatedAt":{"type":"string","format":"date-time"}}},"SystemDataDocumentSeedRequest":{"type":"object","properties":{"scenarioId":{"type":"string"},"userId":{"type":"string"},"documents":{"type":"array","items":{"$ref":"#/components/schemas/GeneratedDocument"}},"files":{"type":"array","items":{"$ref":"#/components/schemas/ExportedDocumentFile"}}}},"SystemDataResult":{"type":"object","properties":{"service":{"type":"string"},"operation":{"type":"string"},"status":{"type":"string"},"recordsAffected":{"type":"integer","format":"int32"},"activeEnvironment":{"type":"string"},"details":{"type":"object","additionalProperties":{"type":"object"}},"warnings":{"type":"array","items":{"type":"string"}}}},"CreateDocumentRequest":{"required":["content","documentType","jobId","title","userId"],"type":"object","properties":{"userId":{"type":"string","description":"ID of the user who owns the document","example":"user-123"},"jobId":{"type":"string","description":"ID of the job this document relates to","example":"job-456"},"applicationId":{"type":"string","description":"ID of the application this document version belongs to","example":"550e8400-e29b-41d4-a716-446655440000"},"documentType":{"type":"string","description":"Type of document","example":"CV","enum":["CV","COVER_LETTER","CV","COVER_LETTER"]},"title":{"type":"string","description":"Title of the document","example":"Java Developer CV"},"content":{"type":"string","description":"Generated document content","example":"Generated CV content..."},"version":{"type":"integer","description":"Version number for this application/document type","format":"int32","example":2},"active":{"type":"boolean","description":"Whether this version is active","example":false},"originalFilename":{"type":"string","description":"Original filename for uploaded documents","example":"replacement-cv.docx"},"sourceType":{"type":"string","description":"Document source","example":"UPLOADED","enum":["GENERATED","UPLOADED","GENERATED","UPLOADED"]},"createdBy":{"type":"string","description":"User or service that created this document","example":"user-123"}},"description":"Request to create a new generated document"},"GeneratedDocumentResponse":{"type":"object","properties":{"id":{"type":"string","description":"Unique identifier of the document","format":"uuid","example":"550e8400-e29b-41d4-a716-446655440000"},"userId":{"type":"string","description":"ID of the user who owns the document","example":"user-123"},"jobId":{"type":"string","description":"ID of the job this document relates to","example":"job-456"},"applicationId":{"type":"string","description":"ID of the application this document version belongs to"},"documentType":{"type":"string","description":"Type of document","example":"CV","enum":["CV","COVER_LETTER","CV","COVER_LETTER"]},"title":{"type":"string","description":"Title of the document","example":"Java Developer CV"},"content":{"type":"string","description":"Generated document content","example":"Generated CV content..."},"version":{"type":"integer","description":"Version number for this application/document type","format":"int32"},"active":{"type":"boolean","description":"Whether this document version is active"},"originalFilename":{"type":"string","description":"Original filename for uploaded documents"},"sourceType":{"type":"string","description":"Document source","enum":["GENERATED","UPLOADED","GENERATED","UPLOADED"]},"createdBy":{"type":"string","description":"User or service that created this document"},"createdAt":{"type":"string","description":"Timestamp when the document was created","format":"date-time"},"updatedAt":{"type":"string","description":"Timestamp when the document was updated","format":"date-time"}},"description":"Response containing generated document details"},"DocumentFileResponse":{"type":"object","properties":{"id":{"type":"string","description":"Unique exported file ID","format":"uuid","example":"550e8400-e29b-41d4-a716-446655440000"},"generatedDocumentId":{"type":"string","description":"Generated document ID this file belongs to","format":"uuid","example":"550e8400-e29b-41d4-a716-446655440000"},"fileType":{"type":"string","description":"Exported file type","example":"DOCX","enum":["DOCX","PDF","DOCX","PDF"]},"fileName":{"type":"string","description":"Download filename","example":"cv.docx"},"mimeType":{"type":"string","description":"File MIME type","example":"application/pdf"},"source":{"type":"string","description":"Whether the file was generated by the system or uploaded by the user","example":"USER_UPLOADED","enum":["GENERATED","USER_UPLOADED"]},"active":{"type":"boolean","description":"Whether this is the active file for its document and type","example":true},"createdAt":{"type":"string","description":"Timestamp when the exported file was saved","format":"date-time"},"updatedAt":{"type":"string","description":"Timestamp when the exported file was last updated","format":"date-time"}},"description":"Metadata for an exported document file"},"CreateDocumentFileRequest":{"required":["fileContentBase64","fileName","fileType","generatedDocumentId","mimeType"],"type":"object","properties":{"generatedDocumentId":{"type":"string","description":"Generated document ID this file belongs to","format":"uuid","example":"550e8400-e29b-41d4-a716-446655440000"},"fileType":{"type":"string","description":"Exported file type","example":"DOCX","enum":["DOCX","PDF","DOCX","PDF"]},"fileName":{"type":"string","description":"Download filename","example":"cv.docx"},"mimeType":{"type":"string","description":"File MIME type","example":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"fileContentBase64":{"type":"string","description":"Base64-encoded file bytes"}},"description":"Request to store an exported document file"}}}}
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "Jobseeker Copilot - Document Store API",
+    "description" : "Service for storing and retrieving generated CVs and cover letters.\n\nThis service stores generated document content.\nIt does NOT generate documents.\nIt does NOT call an LLM.\nIt does NOT export PDF/DOCX.\n\nEvery document and file operation is authenticated and owner scoped.\nUser ownership comes from a validated access-token subject. Approved\nservice identities must bind the same owner in X-Document-Owner.\n\nDocumentType values:\n- CV - Curriculum Vitae / Resume\n- COVER_LETTER - Cover letter for a job application\n",
+    "contact" : {
+      "name" : "Jobseeker Copilot"
+    },
+    "license" : {
+      "name" : "Proprietary and confidential"
+    },
+    "version" : "1.1.0"
+  },
+  "servers" : [ {
+    "url" : "http://localhost:8089",
+    "description" : "Local development"
+  } ],
+  "tags" : [ {
+    "name" : "Generated Documents",
+    "description" : "Endpoints for storing and retrieving generated CVs and cover letters"
+  }, {
+    "name" : "Document Files",
+    "description" : "Endpoints for storing and downloading exported DOCX and PDF files"
+  } ],
+  "paths" : {
+    "/internal/system-data/seed/documents" : {
+      "post" : {
+        "tags" : [ "document-store-system-data-controller" ],
+        "operationId" : "seedDocuments",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SystemDataDocumentSeedRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents" : {
+      "post" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Create a document",
+        "description" : "Stores a generated document (CV or cover letter)",
+        "operationId" : "createDocument",
+        "parameters" : [ {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateDocumentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "description" : "Document created successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation error - missing or invalid fields",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/{generatedDocumentId}/files/upload" : {
+      "post" : {
+        "tags" : [ "Document Files" ],
+        "summary" : "Upload replacement file",
+        "description" : "Stores a user-uploaded DOCX or PDF replacement for a generated document",
+        "operationId" : "uploadReplacementFile",
+        "parameters" : [ {
+          "name" : "generatedDocumentId",
+          "in" : "path",
+          "description" : "UUID of the generated document",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "fileType",
+          "in" : "query",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "enum" : [ "DOCX", "PDF" ]
+          }
+        }, {
+          "name" : "source",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "string",
+            "default" : "USER_UPLOADED",
+            "enum" : [ "GENERATED", "USER_UPLOADED" ]
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "multipart/form-data" : {
+              "schema" : {
+                "required" : [ "file" ],
+                "type" : "object",
+                "properties" : {
+                  "file" : {
+                    "type" : "string",
+                    "format" : "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses" : {
+          "404" : {
+            "description" : "Generated document not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          },
+          "201" : {
+            "description" : "Replacement file saved successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation error - missing or invalid upload",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/applications/{applicationId}/deactivate" : {
+      "post" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Deactivate all documents for an application",
+        "operationId" : "deactivateApplicationDocuments",
+        "parameters" : [ {
+          "name" : "applicationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/document-files" : {
+      "post" : {
+        "tags" : [ "Document Files" ],
+        "summary" : "Save exported file",
+        "description" : "Stores exported DOCX or PDF bytes for a generated document",
+        "operationId" : "createDocumentFile",
+        "parameters" : [ {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved producer identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateDocumentFileRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "404" : {
+            "description" : "Generated document not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          },
+          "201" : {
+            "description" : "Exported file saved successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation error - missing or invalid fields",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}" : {
+      "patch" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Activate a document version for an application",
+        "operationId" : "activateDocumentVersion",
+        "parameters" : [ {
+          "name" : "applicationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "documentType",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          }
+        }, {
+          "name" : "documentId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/internal/system-data/verify/documents/{userId}" : {
+      "get" : {
+        "tags" : [ "document-store-system-data-controller" ],
+        "operationId" : "verifyDocuments",
+        "parameters" : [ {
+          "name" : "userId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/{id}" : {
+      "get" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Get document by ID",
+        "operationId" : "getDocumentById",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the document",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Document found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Document not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      },
+      "delete" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Delete a document",
+        "operationId" : "deleteDocument",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the document to delete",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Document not found"
+          },
+          "204" : {
+            "description" : "Document deleted successfully"
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/{generatedDocumentId}/files" : {
+      "get" : {
+        "tags" : [ "Document Files" ],
+        "summary" : "List exported files for a generated document",
+        "operationId" : "getFilesForDocument",
+        "parameters" : [ {
+          "name" : "generatedDocumentId",
+          "in" : "path",
+          "description" : "UUID of the generated document",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Exported file metadata list",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/DocumentFileResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Generated document not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/DocumentFileResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/{generatedDocumentId}/files/latest" : {
+      "get" : {
+        "tags" : [ "Document Files" ],
+        "summary" : "List latest active exported files for a generated document",
+        "operationId" : "getLatestFilesForDocument",
+        "parameters" : [ {
+          "name" : "generatedDocumentId",
+          "in" : "path",
+          "description" : "UUID of the generated document",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Latest active exported file metadata list",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/DocumentFileResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Generated document not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/DocumentFileResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/user/{userId}" : {
+      "get" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Get documents by user ID",
+        "operationId" : "getDocumentsByUserId",
+        "parameters" : [ {
+          "name" : "userId",
+          "in" : "path",
+          "description" : "User ID to retrieve documents for",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "List of documents for the user",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/user/{userId}/job/{jobId}" : {
+      "get" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Get documents by user ID and job ID",
+        "operationId" : "getDocumentsByUserIdAndJobId",
+        "parameters" : [ {
+          "name" : "userId",
+          "in" : "path",
+          "description" : "User ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "jobId",
+          "in" : "path",
+          "description" : "Job ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "List of documents for the user and job",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/document-files/{id}" : {
+      "get" : {
+        "tags" : [ "Document Files" ],
+        "summary" : "Get exported file metadata",
+        "operationId" : "getDocumentFileMetadata",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the exported file",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Exported file not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Exported file metadata found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/document-files/{id}/download" : {
+      "get" : {
+        "tags" : [ "Document Files" ],
+        "summary" : "Download exported file",
+        "operationId" : "downloadDocumentFile",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the exported file",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Exported file not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "string",
+                    "format" : "byte"
+                  }
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Exported file bytes",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "string",
+                    "format" : "byte"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/internal/system-data/scenario/{scenarioId}/documents/{userId}" : {
+      "delete" : {
+        "tags" : [ "document-store-system-data-controller" ],
+        "operationId" : "resetDocuments",
+        "parameters" : [ {
+          "name" : "scenarioId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "userId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "ExportedDocumentFile" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "generatedDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "generatedDocument" : {
+            "$ref" : "#/components/schemas/GeneratedDocument"
+          },
+          "fileType" : {
+            "type" : "string",
+            "enum" : [ "DOCX", "PDF" ]
+          },
+          "fileName" : {
+            "type" : "string"
+          },
+          "mimeType" : {
+            "type" : "string"
+          },
+          "source" : {
+            "type" : "string",
+            "enum" : [ "GENERATED", "USER_UPLOADED" ]
+          },
+          "active" : {
+            "type" : "boolean"
+          },
+          "fileContent" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string",
+              "format" : "byte"
+            }
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "GeneratedDocument" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "jobId" : {
+            "type" : "string"
+          },
+          "applicationId" : {
+            "type" : "string"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "content" : {
+            "type" : "string"
+          },
+          "version" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "active" : {
+            "type" : "boolean"
+          },
+          "originalFilename" : {
+            "type" : "string"
+          },
+          "sourceType" : {
+            "type" : "string",
+            "enum" : [ "GENERATED", "UPLOADED" ]
+          },
+          "createdBy" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "SystemDataDocumentSeedRequest" : {
+        "type" : "object",
+        "properties" : {
+          "scenarioId" : {
+            "type" : "string"
+          },
+          "userId" : {
+            "type" : "string"
+          },
+          "documents" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/GeneratedDocument"
+            }
+          },
+          "files" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ExportedDocumentFile"
+            }
+          }
+        }
+      },
+      "SystemDataResult" : {
+        "type" : "object",
+        "properties" : {
+          "service" : {
+            "type" : "string"
+          },
+          "operation" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "recordsAffected" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "activeEnvironment" : {
+            "type" : "string"
+          },
+          "details" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : "object"
+            }
+          },
+          "warnings" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "CreateDocumentRequest" : {
+        "required" : [ "content", "documentType", "jobId", "title", "userId" ],
+        "type" : "object",
+        "properties" : {
+          "userId" : {
+            "type" : "string",
+            "description" : "ID of the user who owns the document",
+            "example" : "user-123"
+          },
+          "jobId" : {
+            "type" : "string",
+            "description" : "ID of the job this document relates to",
+            "example" : "job-456"
+          },
+          "applicationId" : {
+            "type" : "string",
+            "description" : "ID of the application this document version belongs to",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "documentType" : {
+            "type" : "string",
+            "description" : "Type of document",
+            "example" : "CV",
+            "enum" : [ "CV", "COVER_LETTER", "CV", "COVER_LETTER" ]
+          },
+          "title" : {
+            "type" : "string",
+            "description" : "Title of the document",
+            "example" : "Java Developer CV"
+          },
+          "content" : {
+            "type" : "string",
+            "description" : "Generated document content",
+            "example" : "Generated CV content..."
+          },
+          "version" : {
+            "type" : "integer",
+            "description" : "Version number for this application/document type",
+            "format" : "int32",
+            "example" : 2
+          },
+          "active" : {
+            "type" : "boolean",
+            "description" : "Whether this version is active",
+            "example" : false
+          },
+          "originalFilename" : {
+            "type" : "string",
+            "description" : "Original filename for uploaded documents",
+            "example" : "replacement-cv.docx"
+          },
+          "sourceType" : {
+            "type" : "string",
+            "description" : "Document source",
+            "example" : "UPLOADED",
+            "enum" : [ "GENERATED", "UPLOADED", "GENERATED", "UPLOADED" ]
+          },
+          "createdBy" : {
+            "type" : "string",
+            "description" : "User or service that created this document",
+            "example" : "user-123"
+          }
+        },
+        "description" : "Request to create a new generated document"
+      },
+      "GeneratedDocumentResponse" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "description" : "Unique identifier of the document",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "userId" : {
+            "type" : "string",
+            "description" : "ID of the user who owns the document",
+            "example" : "user-123"
+          },
+          "jobId" : {
+            "type" : "string",
+            "description" : "ID of the job this document relates to",
+            "example" : "job-456"
+          },
+          "applicationId" : {
+            "type" : "string",
+            "description" : "ID of the application this document version belongs to"
+          },
+          "documentType" : {
+            "type" : "string",
+            "description" : "Type of document",
+            "example" : "CV",
+            "enum" : [ "CV", "COVER_LETTER", "CV", "COVER_LETTER" ]
+          },
+          "title" : {
+            "type" : "string",
+            "description" : "Title of the document",
+            "example" : "Java Developer CV"
+          },
+          "content" : {
+            "type" : "string",
+            "description" : "Generated document content",
+            "example" : "Generated CV content..."
+          },
+          "version" : {
+            "type" : "integer",
+            "description" : "Version number for this application/document type",
+            "format" : "int32"
+          },
+          "active" : {
+            "type" : "boolean",
+            "description" : "Whether this document version is active"
+          },
+          "originalFilename" : {
+            "type" : "string",
+            "description" : "Original filename for uploaded documents"
+          },
+          "sourceType" : {
+            "type" : "string",
+            "description" : "Document source",
+            "enum" : [ "GENERATED", "UPLOADED", "GENERATED", "UPLOADED" ]
+          },
+          "createdBy" : {
+            "type" : "string",
+            "description" : "User or service that created this document"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the document was created",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the document was updated",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Response containing generated document details"
+      },
+      "DocumentFileResponse" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "description" : "Unique exported file ID",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "generatedDocumentId" : {
+            "type" : "string",
+            "description" : "Generated document ID this file belongs to",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "fileType" : {
+            "type" : "string",
+            "description" : "Exported file type",
+            "example" : "DOCX",
+            "enum" : [ "DOCX", "PDF", "DOCX", "PDF" ]
+          },
+          "fileName" : {
+            "type" : "string",
+            "description" : "Download filename",
+            "example" : "cv.docx"
+          },
+          "mimeType" : {
+            "type" : "string",
+            "description" : "File MIME type",
+            "example" : "application/pdf"
+          },
+          "source" : {
+            "type" : "string",
+            "description" : "Whether the file was generated by the system or uploaded by the user",
+            "example" : "USER_UPLOADED",
+            "enum" : [ "GENERATED", "USER_UPLOADED" ]
+          },
+          "active" : {
+            "type" : "boolean",
+            "description" : "Whether this is the active file for its document and type",
+            "example" : true
+          },
+          "createdAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the exported file was saved",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the exported file was last updated",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Metadata for an exported document file"
+      },
+      "CreateDocumentFileRequest" : {
+        "required" : [ "fileContentBase64", "fileName", "fileType", "generatedDocumentId", "mimeType" ],
+        "type" : "object",
+        "properties" : {
+          "generatedDocumentId" : {
+            "type" : "string",
+            "description" : "Generated document ID this file belongs to",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "fileType" : {
+            "type" : "string",
+            "description" : "Exported file type",
+            "example" : "DOCX",
+            "enum" : [ "DOCX", "PDF", "DOCX", "PDF" ]
+          },
+          "fileName" : {
+            "type" : "string",
+            "description" : "Download filename",
+            "example" : "cv.docx"
+          },
+          "mimeType" : {
+            "type" : "string",
+            "description" : "File MIME type",
+            "example" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          },
+          "fileContentBase64" : {
+            "type" : "string",
+            "description" : "Base64-encoded file bytes"
+          }
+        },
+        "description" : "Request to store an exported document file"
+      }
+    },
+    "securitySchemes" : {
+      "bearerAuth" : {
+        "type" : "http",
+        "scheme" : "bearer",
+        "bearerFormat" : "JWT"
+      },
+      "serviceToken" : {
+        "type" : "apiKey",
+        "name" : "X-Service-Token",
+        "in" : "header"
+      },
+      "environmentDataToken" : {
+        "type" : "apiKey",
+        "name" : "X-Environment-Data-Token",
+        "in" : "header"
+      }
+    }
+  }
+}
