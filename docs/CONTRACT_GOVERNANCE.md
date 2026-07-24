@@ -3,20 +3,17 @@
 Document Generation Gateway consumes six live cross-service boundaries. It
 resolves the User Profile, CV/Cover Letter and Document Export Java clients
 from their producers' immutable private Maven packages. It no longer generates
-Java clients inside the consumer build. Document Store and Application Tracker
-use handwritten `RestTemplate` boundaries, so their consumed operations are
-pinned and checked without generating unused clients.
-
-Authentication Service is the one current exception. Its repository has no
-producer-owned OpenAPI artifact for `GET /api/auth/me`; DOCGEN-03 owns that
-publication gap. The unused Authentication and Application Tracker generated
-client JAR dependencies, plus unused Job Service and Document Store generated
-API beans, are removed rather than replaced with new dead output.
+Java clients inside the consumer build. Authentication, Document Store and
+Application Tracker use handwritten `RestTemplate` boundaries, so their
+consumed operations are pinned and checked without generating unused clients.
+The unused generated client dependencies and API beans are removed rather than
+replaced with new dead output.
 
 ## Current pins
 
 | Producer | Revision | Contract | Version | SHA-256 | Use |
 | --- | --- | --- | --- | --- | --- |
+| `jobseekercopilot/authentication-service` | `2964aeb07b9861cce555d28cc58c6b9fab1f6107` | `contracts/openapi.json` | `1.0.0` | `ce7f707b921a16fb8e53b580032bac4542334ed47f8f07c474e63ba2ecc4c812` | Handwritten `/api/auth/me` adapter compatibility |
 | `jobseekercopilot/user-profile-service` | `86c8510ed319a059b991e6f9f1e43b0e101c5d1f` | `api/openapi.json` | `1.0.0` | `ffaaa16a169ab11d864f82440be9fcc7d5df2d4f2d63a3525d40bda497ea6598` | Published Java client `com.jobseekercopilot.clients:user-profile-service-client:1.0.0-rev.86c8510ed319` |
 | `jobseekercopilot/cv-cover-letter-service` | `68b4cf9d3f2395abd642180a204db3a67d9ae80e` | `contracts/openapi.json` | `1.0.0` | `c493db389a3255c29cc250d14ede2e8a1a03c7efe22e340ccc009584ab4e225b` | Published Java client `com.jobseekercopilot.clients:cv-cover-letter-service-client:1.0.0-rev.68b4cf9d3f23` |
 | `jobseekercopilot/document-export-service` | `aa7f34693d81e55686c90441b105a195b614a545` | `contracts/openapi.json` | `1.0.0` | `f33fcb0994db6689b001219b651a55d4d499cb94af32d3defab87f3fc56c3012` | Published Java client `com.jobseekercopilot.clients:document-export-service-client:1.0.0-rev.aa7f34693d81` and raw upload compatibility |
@@ -39,6 +36,8 @@ prerequisite; the legacy Docker builder is intentionally unsupported.
 
 The policy checks the exact operations and fields currently consumed:
 
+- Authentication account lookup, contact fields and its combined bearer and
+  service-identity requirement;
 - authenticated User Profile retrieval and profile fields;
 - CV/Cover Letter generation request, job and generated document IDs;
 - Document Export DOCX/PDF export and replacement upload;
@@ -51,7 +50,10 @@ now has a no-argument `getMyProfile()` operation protected by bearer security,
 while the gateway client configuration supplies no per-request token.
 Application Tracker likewise requires bearer or service-token identity and
 owner context that the raw gateway calls do not yet send. GW-01 owns both
-direct beta blockers. Document Store producer authorisation remains STORE-01.
+direct beta blockers. Authentication requires bearer and service identity
+together; the handwritten adapter currently forwards only the bearer token, so
+GW-01 also owns that runtime propagation blocker. Document Store producer
+authorisation remains STORE-01.
 
 ## Updating a pin
 

@@ -86,6 +86,16 @@ class DocumentGenerationServiceTest {
         assertEquals("Alex Candidate", profileBody.get("fullName"));
         assertEquals("alex@example.com", profileBody.get("email"));
 
+        var authenticationRequest = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(
+                Mockito.eq("http://auth/api/auth/me"),
+                Mockito.eq(HttpMethod.GET),
+                authenticationRequest.capture(),
+                Mockito.eq(Map.class));
+        assertEquals(
+                "Bearer token",
+                authenticationRequest.getValue().getHeaders().getFirst("Authorization"));
+
         var exportRequest = ArgumentCaptor.forClass(DocumentExportRequest.class);
         verify(exporter).exportDocument(Mockito.eq(cvDocumentId), exportRequest.capture());
         assertEquals(

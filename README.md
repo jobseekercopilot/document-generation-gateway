@@ -25,14 +25,15 @@ The User Profile, CV/Cover Letter and Document Export clients resolve as
 immutable, producer-owned private Maven packages
 `1.0.0-rev.86c8510ed319`, `1.0.0-rev.68b4cf9d3f23` and
 `1.0.0-rev.aa7f34693d81`. The Gateway no longer generates Java clients inside
-the consumer build. The raw Document Store and Application Tracker adapters
-are checked against their pinned producer contracts. Generated sources and
-binaries are build output and are not committed. See
+the consumer build. The raw Authentication, Document Store and Application
+Tracker adapters are checked against their pinned producer contracts. Generated
+sources and binaries are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 
-Authentication Service has no producer-owned OpenAPI artifact for the
-handwritten `/api/auth/me` boundary. DOCGEN-03 tracks that gap; this repository
-does not manufacture a consumer-owned substitute.
+Authentication Service's producer-owned `/api/auth/me` contract is pinned to
+merged revision `2964aeb07b9861cce555d28cc58c6b9fab1f6107`. The handwritten
+adapter is verified against the exact operation, response and combined identity
+requirements without manufacturing an unused client.
 
 ## Configuration
 
