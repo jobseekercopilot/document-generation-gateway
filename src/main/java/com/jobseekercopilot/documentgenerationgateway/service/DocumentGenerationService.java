@@ -107,7 +107,7 @@ public class DocumentGenerationService {
                 job == null ? null : job.getId());
         long profileStartedAt = System.nanoTime();
         log.info("Calling user-profile-service for document generation userId={}", userId);
-        var downstreamProfile = userProfilesApi.getMyProfile(userId);
+        var downstreamProfile = userProfilesApi.getMyProfile();
         if (downstreamProfile == null) {
             throw new IllegalStateException("User profile service returned no profile");
         }

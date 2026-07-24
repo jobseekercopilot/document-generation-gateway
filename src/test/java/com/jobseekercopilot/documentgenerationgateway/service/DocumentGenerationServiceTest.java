@@ -38,7 +38,7 @@ class DocumentGenerationServiceTest {
         var profiles = Mockito.mock(UserProfilesApi.class);
         var exporter = Mockito.mock(DocumentExportsApi.class);
         var restTemplate = Mockito.mock(RestTemplate.class);
-        var profile = new UserProfile().userId("user-123");
+        var profile = new UserProfile();
         var job = new Job().id("job-123").title("Developer").company("Example").description("Build things");
         UUID cvDocumentId = UUID.randomUUID();
         UUID coverLetterDocumentId = UUID.randomUUID();
@@ -50,7 +50,7 @@ class DocumentGenerationServiceTest {
                 .applicationId("application-1")
                 .cvDocumentId(cvDocumentId.toString())
                 .coverLetterDocumentId(coverLetterDocumentId.toString());
-        when(profiles.getMyProfile("user-123")).thenReturn(profile);
+        when(profiles.getMyProfile()).thenReturn(profile);
         when(restTemplate.exchange(Mockito.eq("http://auth/api/auth/me"), Mockito.eq(HttpMethod.GET),
                 Mockito.<HttpEntity<?>>any(), Mockito.eq(Map.class)))
                 .thenReturn(ResponseEntity.ok(java.util.Map.of("name", "Alex Candidate", "email", "alex@example.com")));

@@ -2,8 +2,6 @@ package com.jobseekercopilot.documentgenerationgateway.config;
 
 import com.jobseekercopilot.generated.cvcoverletterservice.api.CvCoverLetterControllerApi;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
-import com.jobseekercopilot.generated.documentstoreservice.api.DocumentFilesApi;
-import com.jobseekercopilot.generated.jobservice.api.JobSearchApi;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,13 +20,6 @@ public class DownstreamApiConfig {
     }
 
     @Bean
-    JobSearchApi jobSearchApi(@Value("${services.job-service.base-url}") String baseUrl) {
-        var client = new com.jobseekercopilot.generated.jobservice.client.ApiClient();
-        client.setBasePath(baseUrl);
-        return new JobSearchApi(client);
-    }
-
-    @Bean
     CvCoverLetterControllerApi cvCoverLetterApi(
             @Value("${services.cv-cover-letter-service.base-url}") String baseUrl) {
         var client = new com.jobseekercopilot.generated.cvcoverletterservice.client.ApiClient();
@@ -42,14 +33,6 @@ public class DownstreamApiConfig {
         var client = new com.jobseekercopilot.generated.documentexportservice.client.ApiClient();
         client.setBasePath(baseUrl);
         return new DocumentExportsApi(client);
-    }
-
-    @Bean
-    DocumentFilesApi documentFilesApi(
-            @Value("${services.document-store-service.base-url}") String baseUrl) {
-        var client = new com.jobseekercopilot.generated.documentstoreservice.client.ApiClient();
-        client.setBasePath(baseUrl);
-        return new DocumentFilesApi(client);
     }
 
     @Bean
