@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Negative tests for package credential and provenance policy."""
+
+from __future__ import annotations
+
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+from verify_package_consumer import verify
+
+
+ROOT = Path(__file__).resolve().parent.parent
+POLICY_FILES = (
+    "pom.xml",
+    "Dockerfile",
+    ".mvn/github-packages-settings.xml",
+    ".github/workflows/ci.yml",
+    "scripts/build-container.sh",
+)
+
+
+class PackageConsumerPolicyTests(unittest.TestCase):
+    def fixture(self) -> tuple[tempfile.TemporaryDirectory, Path]:
+        temporary = tempfile.TemporaryDirectory()
+        root = Path(temporary.name)
+        for relative in POLICY_FILES:
+            source = ROOT / relative
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        return temporary, root
+
+    def test_repository_policy_passes(self) -> None:
+        verify(ROOT)
+
+    def test_hardcoded_maven_token_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        settings = root / ".mvn" / "github-packages-settings.xml"
+        settings.write_text(
+            settings.read_text().replace(
+                "${env.JSC_PACKAGE_READ_TOKEN}", "hardcoded-token"
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "only from the environment"):
+            verify(root, check_git=False)
+
+    def test_docker_build_argument_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        dockerfile = root / "Dockerfile"
+        dockerfile.write_text(
+            dockerfile.read_text() + "\nARG JSC_PACKAGE_READ_TOKEN\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "must not persist"):
+            verify(root, check_git=False)
+
+    def test_in_consumer_generation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        pom = root / "pom.xml"
+        pom.write_text(
+            pom.read_text().replace(
+                "generate-cv-cover-letter-client", "generate-user-profile-client", 1
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "still generated"):
+            verify(root, check_git=False)
+
+
+if __name__ == "__main__":
+    unittest.main()
