@@ -1,12 +1,11 @@
 # Producer contract governance
 
 Document Generation Gateway consumes six live cross-service boundaries. It
-resolves the User Profile and CV/Cover Letter Java clients from their
-producers' immutable private Maven packages. It generates only the Document
-Export Java client used by its source from the reviewed contract during Maven
-`generate-sources`. Document Store and Application Tracker use handwritten
-`RestTemplate` boundaries, so their consumed operations are pinned and
-checked without generating unused clients.
+resolves the User Profile, CV/Cover Letter and Document Export Java clients
+from their producers' immutable private Maven packages. It no longer generates
+Java clients inside the consumer build. Document Store and Application Tracker
+use handwritten `RestTemplate` boundaries, so their consumed operations are
+pinned and checked without generating unused clients.
 
 Authentication Service is the one current exception. Its repository has no
 producer-owned OpenAPI artifact for `GET /api/auth/me`; DOCGEN-03 owns that
@@ -20,14 +19,13 @@ API beans, are removed rather than replaced with new dead output.
 | --- | --- | --- | --- | --- | --- |
 | `jobseekercopilot/user-profile-service` | `86c8510ed319a059b991e6f9f1e43b0e101c5d1f` | `api/openapi.json` | `1.0.0` | `ffaaa16a169ab11d864f82440be9fcc7d5df2d4f2d63a3525d40bda497ea6598` | Published Java client `com.jobseekercopilot.clients:user-profile-service-client:1.0.0-rev.86c8510ed319` |
 | `jobseekercopilot/cv-cover-letter-service` | `68b4cf9d3f2395abd642180a204db3a67d9ae80e` | `contracts/openapi.json` | `1.0.0` | `c493db389a3255c29cc250d14ede2e8a1a03c7efe22e340ccc009584ab4e225b` | Published Java client `com.jobseekercopilot.clients:cv-cover-letter-service-client:1.0.0-rev.68b4cf9d3f23` |
-| `jobseekercopilot/document-export-service` | `aa7f34693d81e55686c90441b105a195b614a545` | `contracts/openapi.json` | `1.0.0` | `f33fcb0994db6689b001219b651a55d4d499cb94af32d3defab87f3fc56c3012` | Generated Java client and raw upload compatibility |
+| `jobseekercopilot/document-export-service` | `aa7f34693d81e55686c90441b105a195b614a545` | `contracts/openapi.json` | `1.0.0` | `f33fcb0994db6689b001219b651a55d4d499cb94af32d3defab87f3fc56c3012` | Published Java client `com.jobseekercopilot.clients:document-export-service-client:1.0.0-rev.aa7f34693d81` and raw upload compatibility |
 | `jobseekercopilot/document-store-service` | `fedcdbdec63795269c4e4c4f43fc32f38c6327b1` | `contracts/openapi.json` | `1.0.0` | `410ab1a7a2e8a5a5ad374443ec834f6aef7f778f6936b3ef90c33f8e580cdbd9` | Handwritten adapter compatibility |
 | `jobseekercopilot/application-tracker-service` | `d9e6bc9fcbe4ef665334c58672c8062b1e4796aa` | `contracts/openapi.json` | `1.1.0` | `549cebba300c2caf3403b9de01d3c34de84464a280a02183751e8a9583ad982a` | Handwritten adapter compatibility |
 
-OpenAPI Generator `7.5.0` with the Java `resttemplate` library generates the
-remaining Document Export client into `target/generated-sources`. The
-`.SOURCE` files record provenance and `SHA256SUMS` protects the reviewed bytes.
-Generated sources and binaries are disposable build output.
+The `.SOURCE` files record the reviewed producer revisions and `SHA256SUMS`
+protects the exact contract bytes used for compatibility policy. Generated
+sources and binaries remain producer-side disposable build output.
 
 GitHub Maven packages are repository-scoped. Cross-repository CI uses a
 dedicated classic `JSC_PACKAGE_READ_TOKEN` secret with `read:packages` and
