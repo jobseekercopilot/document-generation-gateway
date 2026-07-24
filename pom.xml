@@ -22,6 +22,7 @@
         <apache.poi.version>5.2.5</apache.poi.version>
         <openapi-generator.version>7.5.0</openapi-generator.version>
         <user-profile-client.version>1.0.0-rev.86c8510ed319</user-profile-client.version>
+        <cv-cover-letter-client.version>1.0.0-rev.68b4cf9d3f23</cv-cover-letter-client.version>
     </properties>
 
     <dependencies>
@@ -55,6 +56,11 @@
             <groupId>com.jobseekercopilot.clients</groupId>
             <artifactId>user-profile-service-client</artifactId>
             <version>${user-profile-client.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.jobseekercopilot.clients</groupId>
+            <artifactId>cv-cover-letter-service-client</artifactId>
+            <version>${cv-cover-letter-client.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.poi</groupId>
@@ -102,19 +108,6 @@
                 <version>${openapi-generator.version}</version>
                 <executions>
                     <execution>
-                        <id>generate-cv-cover-letter-client</id>
-                        <goals>
-                            <goal>generate</goal>
-                        </goals>
-                        <configuration>
-                            <inputSpec>${project.basedir}/src/main/openapi/cv-cover-letter-service.json</inputSpec>
-                            <output>${project.build.directory}/generated-sources/openapi/cv-cover-letter-service</output>
-                            <apiPackage>com.jobseekercopilot.generated.cvcoverletterservice.api</apiPackage>
-                            <modelPackage>com.jobseekercopilot.generated.cvcoverletterservice.model</modelPackage>
-                            <invokerPackage>com.jobseekercopilot.generated.cvcoverletterservice.client</invokerPackage>
-                        </configuration>
-                    </execution>
-                    <execution>
                         <id>generate-document-export-client</id>
                         <goals>
                             <goal>generate</goal>
@@ -158,6 +151,11 @@
             <id>github-user-profile</id>
             <name>Job Seeker Copilot User Profile packages</name>
             <url>https://maven.pkg.github.com/jobseekercopilot/user-profile-service</url>
+        </repository>
+        <repository>
+            <id>github-cv-cover-letter</id>
+            <name>Job Seeker Copilot CV and Cover Letter packages</name>
+            <url>https://maven.pkg.github.com/jobseekercopilot/cv-cover-letter-service</url>
         </repository>
     </repositories>
 </project>

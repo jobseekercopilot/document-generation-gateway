@@ -58,17 +58,42 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not persist"):
             verify(root, check_git=False)
 
-    def test_in_consumer_generation_is_rejected(self) -> None:
+    def inject_generator(self, root: Path, generator_id: str) -> None:
+        pom = root / "pom.xml"
+        pom.write_text(
+            pom.read_text().replace(
+                "</executions>",
+                f"<execution><id>{generator_id}</id></execution></executions>",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_user_profile_in_consumer_generation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        self.inject_generator(root, "generate-user-profile-client")
+        with self.assertRaisesRegex(ValueError, "still generated"):
+            verify(root, check_git=False)
+
+    def test_cv_in_consumer_generation_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        self.inject_generator(root, "generate-cv-cover-letter-client")
+        with self.assertRaisesRegex(ValueError, "still generated"):
+            verify(root, check_git=False)
+
+    def test_cv_package_version_drift_is_rejected(self) -> None:
         temporary, root = self.fixture()
         self.addCleanup(temporary.cleanup)
         pom = root / "pom.xml"
         pom.write_text(
             pom.read_text().replace(
-                "generate-cv-cover-letter-client", "generate-user-profile-client", 1
+                "1.0.0-rev.68b4cf9d3f23", "1.0.0-rev.000000000000"
             ),
             encoding="utf-8",
         )
-        with self.assertRaisesRegex(ValueError, "still generated"):
+        with self.assertRaisesRegex(ValueError, "reviewed immutable pin"):
             verify(root, check_git=False)
 
 

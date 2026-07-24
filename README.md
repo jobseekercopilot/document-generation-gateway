@@ -21,13 +21,13 @@ workflow, and has unresolved downstream identity boundaries. See
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-The User Profile client resolves as the immutable producer-owned private Maven
-package `1.0.0-rev.86c8510ed319`. CV/Cover Letter and Document Export clients
-are still generated during Maven `generate-sources` from reviewed,
-checksum-protected producer contracts under `src/main/openapi`. The raw
-Document Store and Application Tracker adapters are checked against their
-pinned producer contracts. Generated sources and binaries are build output and
-are not committed. See
+The User Profile and CV/Cover Letter clients resolve as immutable,
+producer-owned private Maven packages `1.0.0-rev.86c8510ed319` and
+`1.0.0-rev.68b4cf9d3f23`. Only the Document Export client is still generated
+during Maven `generate-sources` from its reviewed, checksum-protected producer
+contract under `src/main/openapi`. The raw Document Store and Application
+Tracker adapters are checked against their pinned producer contracts.
+Generated sources and binaries are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 
 Authentication Service has no producer-owned OpenAPI artifact for the
