@@ -20,6 +20,7 @@ refresh_manifest() {
         cd "$directory"
         sha256sum \
             application-tracker-service.json \
+            authentication-service.json \
             cv-cover-letter-service.json \
             document-export-service.json \
             document-store-service.json \
@@ -105,6 +106,45 @@ mv "$temporary_dir/tracker-security/changed.json" \
 refresh_manifest "$temporary_dir/tracker-security"
 if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/tracker-security" >/dev/null 2>&1; then
     echo "contract policy negative test accepted removal of tracker service identity" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/auth-operation"
+jq 'del(.paths["/api/auth/me"].get)' \
+    "$temporary_dir/auth-operation/authentication-service.json" \
+    > "$temporary_dir/auth-operation/changed.json"
+mv "$temporary_dir/auth-operation/changed.json" \
+   "$temporary_dir/auth-operation/authentication-service.json"
+refresh_manifest "$temporary_dir/auth-operation"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/auth-operation" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of authentication lookup" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/auth-response"
+jq 'del(.components.schemas.UserAccountResponse.properties.email)' \
+    "$temporary_dir/auth-response/authentication-service.json" \
+    > "$temporary_dir/auth-response/changed.json"
+mv "$temporary_dir/auth-response/changed.json" \
+   "$temporary_dir/auth-response/authentication-service.json"
+refresh_manifest "$temporary_dir/auth-response"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/auth-response" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of consumed authentication data" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/auth-security"
+jq '.paths["/api/auth/me"].get.security = [
+        {"bearerAuth": []},
+        {"serviceToken": []}
+    ]' \
+    "$temporary_dir/auth-security/authentication-service.json" \
+    > "$temporary_dir/auth-security/changed.json"
+mv "$temporary_dir/auth-security/changed.json" \
+   "$temporary_dir/auth-security/authentication-service.json"
+refresh_manifest "$temporary_dir/auth-security"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/auth-security" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted weakening authentication identity to OR" >&2
     exit 1
 fi
 

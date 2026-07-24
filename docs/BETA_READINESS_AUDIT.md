@@ -70,8 +70,9 @@ record.
 11. There is no complete correlation-safe state model or metrics for
     generation, invalid output, rejected claims, cost, storage, export, and
     download failures.
-12. There is no complete immutable contract publication pipeline, and
-    Authentication Service does not publish the `/api/auth/me` contract.
+12. The six Java service boundaries now have immutable producer contract pins,
+    but full-fleet publication and TypeScript generation evidence remain
+    incomplete.
 13. The Dockerfile is not hardened with digest-pinned bases, a non-root
     runtime, explicit readiness, resource limits, or supply-chain evidence.
 14. Current Spring, Tomcat, Jackson, security, HTTP, compression, POI,

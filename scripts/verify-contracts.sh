@@ -5,6 +5,7 @@ contract_dir="${1:-src/main/openapi}"
 manifest="$contract_dir/SHA256SUMS"
 contract_names=(
     application-tracker-service
+    authentication-service
     cv-cover-letter-service
     document-export-service
     document-store-service
@@ -54,6 +55,12 @@ verify_source \
     contracts/openapi.json \
     549cebba300c2caf3403b9de01d3c34de84464a280a02183751e8a9583ad982a
 verify_source \
+    authentication-service \
+    jobseekercopilot/authentication-service \
+    2964aeb07b9861cce555d28cc58c6b9fab1f6107 \
+    contracts/openapi.json \
+    ce7f707b921a16fb8e53b580032bac4542334ed47f8f07c474e63ba2ecc4c812
+verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
     68b4cf9d3f2395abd642180a204db3a67d9ae80e \
@@ -77,6 +84,24 @@ verify_source \
     86c8510ed319a059b991e6f9f1e43b0e101c5d1f \
     api/openapi.json \
     ffaaa16a169ab11d864f82440be9fcc7d5df2d4f2d63a3525d40bda497ea6598
+
+jq -e '
+    (.openapi | type == "string" and startswith("3.")) and
+    (.info.version == "1.0.0") and
+    (.paths["/api/auth/me"].get.operationId == "getCurrentUser") and
+    (.paths["/api/auth/me"].get.security as $security
+        | ($security | length == 1) and
+          ($security[0] | has("bearerAuth") and has("serviceToken"))) and
+    (.components.securitySchemes.bearerAuth.type == "http") and
+    (.components.securitySchemes.bearerAuth.scheme == "bearer") and
+    (.components.securitySchemes.serviceToken.type == "apiKey") and
+    (.components.securitySchemes.serviceToken.in == "header") and
+    (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
+    (.paths["/api/auth/me"].get.responses["200"].content["*/*"].schema["$ref"]
+        == "#/components/schemas/UserAccountResponse") and
+    (.components.schemas.UserAccountResponse.properties
+        | has("id") and has("name") and has("email"))
+' "$contract_dir/authentication-service.json" >/dev/null
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
