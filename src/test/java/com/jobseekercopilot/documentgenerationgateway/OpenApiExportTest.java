@@ -22,6 +22,8 @@ import org.springframework.test.web.servlet.MockMvc;
                 + "test-only-authentication-service-token-32-bytes",
         "document-generation.security.application-tracker-producer-token="
                 + "test-only-application-producer-token-32-bytes",
+        "document-generation.security.cv-cover-letter-service-token="
+                + "test-only-cv-cover-letter-service-token-32-bytes",
         "document-generation.security.document-export-service-token="
                 + "test-only-document-export-service-token-32-bytes",
         "document-generation.security.document-store-producer-token="

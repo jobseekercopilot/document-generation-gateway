@@ -73,6 +73,34 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/cv-response" >
     exit 1
 fi
 
+copy_contracts "$temporary_dir/cv-security"
+jq 'del(
+        .paths["/api/v1/cv-cover-letter/generate"].post.security,
+        .components.securitySchemes.serviceToken
+    )' \
+    "$temporary_dir/cv-security/cv-cover-letter-service.json" \
+    > "$temporary_dir/cv-security/changed.json"
+mv "$temporary_dir/cv-security/changed.json" \
+   "$temporary_dir/cv-security/cv-cover-letter-service.json"
+refresh_manifest "$temporary_dir/cv-security"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/cv-security" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of CV service identity" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/cv-owner"
+jq '.paths["/api/v1/cv-cover-letter/generate"].post.parameters |=
+        map(select(.name != "X-Document-Owner"))' \
+    "$temporary_dir/cv-owner/cv-cover-letter-service.json" \
+    > "$temporary_dir/cv-owner/changed.json"
+mv "$temporary_dir/cv-owner/changed.json" \
+   "$temporary_dir/cv-owner/cv-cover-letter-service.json"
+refresh_manifest "$temporary_dir/cv-owner"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/cv-owner" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of CV owner context" >&2
+    exit 1
+fi
+
 copy_contracts "$temporary_dir/export-operation"
 jq 'del(.paths["/api/v1/document-exports/documents/{documentId}"].post)' \
     "$temporary_dir/export-operation/document-export-service.json" \

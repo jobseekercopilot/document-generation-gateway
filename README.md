@@ -4,11 +4,9 @@ Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
 This service is **not beta-ready**. The gateway accepts browser-supplied job
-data, does not yet have producer-enforced ownership on CV and Cover Letter
-operations, runs a long synchronous non-atomic workflow, and has unresolved
-downstream identity boundaries. The former caller-controlled identity fallback
-has been removed; direct Document Store and Document Export operations now
-bind dedicated service roles to the validated owner. See
+data and runs a long synchronous non-atomic workflow. Its six direct service
+boundaries now bind reviewed credentials and owner context where required, but
+runtime fleet wiring and cross-user E2E evidence remain outstanding. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
 ## Technology
@@ -25,7 +23,7 @@ compatibility remain tracked beta-readiness work.
 
 The User Profile, CV/Cover Letter and Document Export clients resolve as
 immutable, producer-owned private Maven packages
-`1.0.0-rev.86c8510ed319`, `1.0.0-rev.68b4cf9d3f23` and
+`1.0.0-rev.86c8510ed319`, `2.0.0-rev.87fc2393309a` and
 `2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
 the consumer build. The raw Authentication, Document Store and Application
 Tracker adapters are checked against their pinned producer contracts. Generated
@@ -49,12 +47,13 @@ DOCUMENT_GENERATION_JWT_ISSUER
 DOCUMENT_GENERATION_JWT_AUDIENCE
 AUTH_SERVICE_TOKEN
 APPLICATION_TRACKER_PRODUCER_TOKEN
+CV_COVER_LETTER_GATEWAY_TOKEN
 DOCUMENT_EXPORT_GATEWAY_TOKEN
 DOCUMENT_STORE_PRODUCER_TOKEN
 DOCUMENT_STORE_READER_TOKEN
 ```
 
-The five service tokens must be pairwise distinct and contain at least 32 bytes. They
+The six service tokens must be pairwise distinct and contain at least 32 bytes. They
 have no source-controlled runtime default. See
 [`docs/IDENTITY_BOUNDARY.md`](docs/IDENTITY_BOUNDARY.md).
 

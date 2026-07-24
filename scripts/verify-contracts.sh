@@ -63,9 +63,9 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    68b4cf9d3f2395abd642180a204db3a67d9ae80e \
+    87fc2393309ad3007cba6ac27aa618fc3cc81aa9 \
     contracts/openapi.json \
-    c493db389a3255c29cc250d14ede2e8a1a03c7efe22e340ccc009584ab4e225b
+    8583f844b297bc32472e1fbf0b4bc273972477cc81cb0a25eba6e2ac5a048d95
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
@@ -117,8 +117,21 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "1.0.0") and
+    (.info.version == "2.0.0") and
     (.paths["/api/v1/cv-cover-letter/generate"].post.operationId == "generate") and
+    (.paths["/api/v1/cv-cover-letter/generate"].post.security
+        | any(has("serviceToken"))) and
+    (.paths["/api/v1/cv-cover-letter/generate"].post.parameters
+        | any(
+            .name == "X-Document-Owner" and
+            .in == "header" and
+            .required == true and
+            .schema.type == "string")) and
+    (.paths["/api/v1/cv-cover-letter/generate"].post.parameters
+        | all(.name != "X-User-Id")) and
+    (.components.securitySchemes.serviceToken.type == "apiKey") and
+    (.components.securitySchemes.serviceToken.in == "header") and
+    (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
     (.components.schemas.GenerateRequest.required
         | index("userProfile") != null and index("job") != null) and
     (.components.schemas.Job.required

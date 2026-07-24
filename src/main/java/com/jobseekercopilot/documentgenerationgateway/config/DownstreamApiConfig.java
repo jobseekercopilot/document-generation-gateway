@@ -26,9 +26,11 @@ public class DownstreamApiConfig {
 
     @Bean
     CvCoverLetterControllerApi cvCoverLetterApi(
-            @Value("${services.cv-cover-letter-service.base-url}") String baseUrl) {
+            @Value("${services.cv-cover-letter-service.base-url}") String baseUrl,
+            DownstreamServiceCredentials credentials) {
         var client = new com.jobseekercopilot.generated.cvcoverletterservice.client.ApiClient();
         client.setBasePath(baseUrl);
+        client.setApiKey(credentials.cvCoverLetterServiceToken());
         return new CvCoverLetterControllerApi(client);
     }
 

@@ -16,6 +16,7 @@ document-generation:
     audience: ${DOCUMENT_GENERATION_JWT_AUDIENCE:job-seeker-copilot-services}
     authentication-service-token: ${AUTH_SERVICE_TOKEN:}
     application-tracker-producer-token: ${APPLICATION_TRACKER_PRODUCER_TOKEN:}
+    cv-cover-letter-service-token: ${CV_COVER_LETTER_GATEWAY_TOKEN:}
     document-export-service-token: ${DOCUMENT_EXPORT_GATEWAY_TOKEN:}
     document-store-producer-token: ${DOCUMENT_STORE_PRODUCER_TOKEN:}
     document-store-reader-token: ${DOCUMENT_STORE_READER_TOKEN:}

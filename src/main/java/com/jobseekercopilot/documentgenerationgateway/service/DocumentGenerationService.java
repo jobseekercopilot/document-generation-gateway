@@ -65,6 +65,7 @@ public class DocumentGenerationService {
     private final String applicationTrackerBaseUrl;
     private final String authenticationServiceToken;
     private final String applicationTrackerProducerToken;
+    private final String cvCoverLetterServiceToken;
     private final String documentExportServiceToken;
     private final String documentStoreProducerToken;
     private final String documentStoreReaderToken;
@@ -91,6 +92,7 @@ public class DocumentGenerationService {
         this.applicationTrackerBaseUrl = applicationTrackerBaseUrl;
         this.authenticationServiceToken = credentials.authenticationServiceToken();
         this.applicationTrackerProducerToken = credentials.applicationTrackerProducerToken();
+        this.cvCoverLetterServiceToken = credentials.cvCoverLetterServiceToken();
         this.documentExportServiceToken = credentials.documentExportServiceToken();
         this.documentStoreProducerToken = credentials.documentStoreProducerToken();
         this.documentStoreReaderToken = credentials.documentStoreReaderToken();
@@ -107,6 +109,7 @@ public class DocumentGenerationService {
                               String applicationTrackerBaseUrl,
                               String authenticationServiceToken,
                               String applicationTrackerProducerToken,
+                              String cvCoverLetterServiceToken,
                               String documentExportServiceToken,
                               String documentStoreProducerToken,
                               String documentStoreReaderToken) {
@@ -122,6 +125,7 @@ public class DocumentGenerationService {
                 new DownstreamServiceCredentials(
                         authenticationServiceToken,
                         applicationTrackerProducerToken,
+                        cvCoverLetterServiceToken,
                         documentExportServiceToken,
                         documentStoreProducerToken,
                         documentStoreReaderToken));
@@ -335,7 +339,8 @@ public class DocumentGenerationService {
         request.put("userProfile", profile);
         request.put("job", job);
         HttpHeaders headers = new HttpHeaders();
-        headers.set("X-User-Id", userId);
+        headers.set(SERVICE_TOKEN_HEADER, cvCoverLetterServiceToken);
+        headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
         headers.setContentType(MediaType.APPLICATION_JSON);
         GenerateCvCoverLetterResponse response = restTemplate.postForObject(
                 cvCoverLetterBaseUrl + "/api/v1/cv-cover-letter/generate",
