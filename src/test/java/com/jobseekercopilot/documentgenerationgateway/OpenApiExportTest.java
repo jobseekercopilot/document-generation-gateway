@@ -21,7 +21,11 @@ import org.springframework.test.web.servlet.MockMvc;
         "document-generation.security.authentication-service-token="
                 + "test-only-authentication-service-token-32-bytes",
         "document-generation.security.application-tracker-producer-token="
-                + "test-only-application-producer-token-32-bytes"
+                + "test-only-application-producer-token-32-bytes",
+        "document-generation.security.document-store-producer-token="
+                + "test-only-document-store-producer-token-32-bytes",
+        "document-generation.security.document-store-reader-token="
+                + "test-only-document-store-reader-token-32-bytes"
 })
 @AutoConfigureMockMvc
 class OpenApiExportTest {

@@ -17,7 +17,7 @@ replaced with new dead output.
 | `jobseekercopilot/user-profile-service` | `86c8510ed319a059b991e6f9f1e43b0e101c5d1f` | `api/openapi.json` | `1.0.0` | `ffaaa16a169ab11d864f82440be9fcc7d5df2d4f2d63a3525d40bda497ea6598` | Published Java client `com.jobseekercopilot.clients:user-profile-service-client:1.0.0-rev.86c8510ed319` |
 | `jobseekercopilot/cv-cover-letter-service` | `68b4cf9d3f2395abd642180a204db3a67d9ae80e` | `contracts/openapi.json` | `1.0.0` | `c493db389a3255c29cc250d14ede2e8a1a03c7efe22e340ccc009584ab4e225b` | Published Java client `com.jobseekercopilot.clients:cv-cover-letter-service-client:1.0.0-rev.68b4cf9d3f23` |
 | `jobseekercopilot/document-export-service` | `aa7f34693d81e55686c90441b105a195b614a545` | `contracts/openapi.json` | `1.0.0` | `f33fcb0994db6689b001219b651a55d4d499cb94af32d3defab87f3fc56c3012` | Published Java client `com.jobseekercopilot.clients:document-export-service-client:1.0.0-rev.aa7f34693d81` and raw upload compatibility |
-| `jobseekercopilot/document-store-service` | `fedcdbdec63795269c4e4c4f43fc32f38c6327b1` | `contracts/openapi.json` | `1.0.0` | `410ab1a7a2e8a5a5ad374443ec834f6aef7f778f6936b3ef90c33f8e580cdbd9` | Handwritten adapter compatibility |
+| `jobseekercopilot/document-store-service` | `b696fe81e9b900e0749e185f595ff4c98c24119d` | `contracts/openapi.json` | `1.1.0` | `3d0595c83cc66d9037e08af6a4b087c115c9a5d99ec71491f1aa5fc3afffd6ba` | Owner-scoped handwritten read/create/activate/download adapter compatibility |
 | `jobseekercopilot/application-tracker-service` | `d9e6bc9fcbe4ef665334c58672c8062b1e4796aa` | `contracts/openapi.json` | `1.1.0` | `549cebba300c2caf3403b9de01d3c34de84464a280a02183751e8a9583ad982a` | Handwritten adapter compatibility |
 
 The `.SOURCE` files record the reviewed producer revisions and `SHA256SUMS`
@@ -41,7 +41,8 @@ The policy checks the exact operations and fields currently consumed:
 - authenticated User Profile retrieval and profile fields;
 - CV/Cover Letter generation request, job and generated document IDs;
 - Document Export DOCX/PDF export and replacement upload;
-- Document Store get/create/activate replacement operations;
+- Document Store get/create/activate/download operations, service identity and
+  owner-context parameters;
 - Application Tracker owner-scoped reads and document-reference update,
   including its service-token security scheme.
 
@@ -52,10 +53,11 @@ supplies bearer plus the runtime Authentication service identity to
 plus the validated owner subject to owner-scoped Tracker reads and document
 reference updates. Negative tests reject missing, malformed, expired, forged,
 wrong-issuer, wrong-audience, wrong-purpose and subjectless access tokens.
-Document Store producer authorisation remains STORE-01; CV/Cover Letter and
-Document Export service identity rollout remains in their focused dependency
-issues. GW-01 stays open until those producer boundaries and integrated
-cross-user paths pass.
+Direct Store reads/downloads use its runtime reader identity; creates and
+activation use its producer identity. Both bind exactly one owner header to the
+validated token subject. CV/Cover Letter and Document Export service identity
+rollout remains in their focused dependency issues. GW-01 stays open until
+those producer boundaries and integrated cross-user paths pass.
 
 ## Updating a pin
 

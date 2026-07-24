@@ -41,8 +41,9 @@ record.
   identity. The GW-01 gateway slice now forwards only the validated bearer to
   User Profile, adds runtime service identity to Authentication and adds
   runtime producer identity plus owner context to Application Tracker.
-  Document Store, Document Export and CV/Cover Letter producer enforcement
-  remain direct dependencies.
+  The Store consumer slice pins Store 1.1.0 and adds distinct reader/producer
+  identities plus owner context to each direct Store operation. Document
+  Export and CV/Cover Letter producer enforcement remain direct dependencies.
 - OWASP Dependency-Check 12.1.8 completed against the cached 2026-07-18
   advisory database: 62 dependencies, 14 vulnerable dependencies, 146
   vulnerability matches, including 17 Critical and 41 High matches. Results
@@ -58,12 +59,15 @@ record.
    it has no operation state, idempotency key, cancellation, or safe retry.
 4. Generated documents are already stored and linked as
    `DOCUMENTS_GENERATED` before user preview/edit/approval.
-5. File download by UUID is proxied without an ownership check.
-6. Direct document replacement is not authorised against the authenticated
-   owner.
+5. Resolved in the GW-01 Store consumer slice: file download UUIDs are sent
+   only with the Store reader identity and validated owner context.
+6. Partially resolved in the GW-01 Store consumer slice: direct Store
+   read/create/activate replacement operations are owner bound, while the
+   intervening Document Export upload/conversion boundary remains unresolved.
 7. Partially resolved in the GW-01 gateway slice: Application Tracker lookups
-   now require a validated owner plus producer identity; Store/Export
-   replacement ownership remains unresolved.
+   now require a validated owner plus producer identity; direct Store
+   replacement is now owner scoped, while Export replacement ownership remains
+   unresolved.
 8. Upload validation checks extension/MIME/basic ZIP members only; it lacks
    bounded decompression, macro/relationship/content checks, and filename
    hardening evidence.

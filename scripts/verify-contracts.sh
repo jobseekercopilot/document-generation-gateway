@@ -75,9 +75,9 @@ verify_source \
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    fedcdbdec63795269c4e4c4f43fc32f38c6327b1 \
+    b696fe81e9b900e0749e185f595ff4c98c24119d \
     contracts/openapi.json \
-    410ab1a7a2e8a5a5ad374443ec834f6aef7f778f6936b3ef90c33f8e580cdbd9
+    3d0595c83cc66d9037e08af6a4b087c115c9a5d99ec71491f1aa5fc3afffd6ba
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
@@ -146,11 +146,28 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "1.0.0") and
+    (.info.version == "1.1.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
     (.paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"]
         .patch.operationId == "activateDocumentVersion") and
+    (.paths["/api/v1/document-files/{id}/download"].get.operationId
+        == "downloadDocumentFile") and
+    ([.paths["/api/v1/documents/{id}"].get,
+      .paths["/api/v1/documents"].post,
+      .paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"].patch,
+      .paths["/api/v1/document-files/{id}/download"].get]
+        | all(.security | any(has("serviceToken")))) and
+    ([.paths["/api/v1/documents/{id}"].get,
+      .paths["/api/v1/documents"].post,
+      .paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"].patch,
+      .paths["/api/v1/document-files/{id}/download"].get]
+        | all(.parameters | any(
+            .name == "X-Document-Owner" and
+            .in == "header"))) and
+    (.components.securitySchemes.serviceToken.type == "apiKey") and
+    (.components.securitySchemes.serviceToken.in == "header") and
+    (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
     (.components.schemas.CreateDocumentRequest.required
         | index("userId") != null and index("jobId") != null and
           index("documentType") != null and index("title") != null and

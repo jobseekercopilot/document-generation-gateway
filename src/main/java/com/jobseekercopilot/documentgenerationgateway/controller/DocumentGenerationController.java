@@ -75,8 +75,7 @@ public class DocumentGenerationController {
     public ResponseEntity<byte[]> download(
             @PathVariable UUID fileId,
             @Parameter(hidden = true) Authentication authentication) {
-        authenticatedSubject(authentication);
-        return downloadService.download(fileId);
+        return downloadService.download(fileId, authenticatedSubject(authentication));
     }
 
     @PostMapping(value = "/documents/{generatedDocumentId}/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

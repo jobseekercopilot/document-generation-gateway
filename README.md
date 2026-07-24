@@ -4,10 +4,11 @@ Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
 This service is **not beta-ready**. The gateway accepts browser-supplied job
-data, does not yet have producer-enforced ownership on all Document Store and
-Document Export file operations, runs a long synchronous non-atomic workflow,
-and has unresolved downstream identity boundaries. The former caller-controlled
-identity fallback has been removed. See
+data, does not yet have producer-enforced ownership on Document Export and CV
+and Cover Letter operations, runs a long synchronous non-atomic workflow, and
+has unresolved downstream identity boundaries. The former caller-controlled
+identity fallback has been removed and direct Document Store operations now
+bind a least-privilege service role to the validated owner. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
 ## Technology
@@ -48,9 +49,11 @@ DOCUMENT_GENERATION_JWT_ISSUER
 DOCUMENT_GENERATION_JWT_AUDIENCE
 AUTH_SERVICE_TOKEN
 APPLICATION_TRACKER_PRODUCER_TOKEN
+DOCUMENT_STORE_PRODUCER_TOKEN
+DOCUMENT_STORE_READER_TOKEN
 ```
 
-The two service tokens must be distinct and contain at least 32 bytes. They
+The four service tokens must be pairwise distinct and contain at least 32 bytes. They
 have no source-controlled runtime default. See
 [`docs/IDENTITY_BOUNDARY.md`](docs/IDENTITY_BOUNDARY.md).
 
