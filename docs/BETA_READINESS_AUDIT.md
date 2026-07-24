@@ -44,8 +44,10 @@ record.
   The Store consumer slice pins Store 1.1.0 and adds distinct reader/producer
   identities plus owner context to each direct Store operation. The Export
   consumer slice pins Export 2.0.0 and adds its distinct service identity plus
-  owner context to generation and replacement calls. CV/Cover Letter producer
-  enforcement remains a direct dependency.
+  owner context to generation and replacement calls. The final CV/Cover Letter
+  consumer slice pins CV/Cover Letter 2.0.0, adds a sixth distinct service
+  identity, and binds generation to the validated owner without forwarding
+  legacy `X-User-Id`.
 - OWASP Dependency-Check 12.1.8 completed against the cached 2026-07-18
   advisory database: 62 dependencies, 14 vulnerable dependencies, 146
   vulnerability matches, including 17 Critical and 41 High matches. Results

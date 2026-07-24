@@ -1,6 +1,7 @@
 package com.jobseekercopilot.documentgenerationgateway.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -74,6 +75,7 @@ class DocumentGenerationServiceTest {
                 "http://cv", "http://auth", "http://export", "http://store", "http://tracker",
                 "test-only-authentication-service-token-32-bytes",
                 "test-only-application-producer-token-32-bytes",
+                "test-only-cv-cover-letter-service-token-32-bytes",
                 "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
                 "test-only-document-store-reader-token-32-bytes");
@@ -94,7 +96,13 @@ class DocumentGenerationServiceTest {
         verify(restTemplate).postForObject(Mockito.eq("http://cv/api/v1/cv-cover-letter/generate"),
                 generationRequest.capture(), Mockito.eq(GenerateCvCoverLetterResponse.class));
         var entity = (HttpEntity<?>) generationRequest.getValue();
-        assertEquals("user-123", entity.getHeaders().getFirst("X-User-Id"));
+        assertEquals(
+                "test-only-cv-cover-letter-service-token-32-bytes",
+                entity.getHeaders().getFirst("X-Service-Token"));
+        assertEquals(1, entity.getHeaders().get("X-Service-Token").size());
+        assertEquals("user-123", entity.getHeaders().getFirst("X-Document-Owner"));
+        assertEquals(1, entity.getHeaders().get("X-Document-Owner").size());
+        assertNull(entity.getHeaders().getFirst("X-User-Id"));
         var body = (java.util.Map<?, ?>) entity.getBody();
         var profileBody = (java.util.Map<?, ?>) body.get("userProfile");
         assertEquals("Alex Candidate", profileBody.get("fullName"));
@@ -328,6 +336,7 @@ class DocumentGenerationServiceTest {
                 "http://tracker",
                 "test-only-authentication-service-token-32-bytes",
                 "test-only-application-producer-token-32-bytes",
+                "test-only-cv-cover-letter-service-token-32-bytes",
                 "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
                 "test-only-document-store-reader-token-32-bytes");
@@ -408,6 +417,7 @@ class DocumentGenerationServiceTest {
                 "http://cv", "http://auth", "http://export", "http://store", "http://tracker",
                 "test-only-authentication-service-token-32-bytes",
                 "test-only-application-producer-token-32-bytes",
+                "test-only-cv-cover-letter-service-token-32-bytes",
                 "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
                 "test-only-document-store-reader-token-32-bytes");
