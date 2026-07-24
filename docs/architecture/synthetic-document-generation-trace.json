@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 1,
+  "traceId": "docgen-01-owner-a-happy-path",
+  "synthetic": true,
+  "containsPersonalData": false,
+  "description": "Deterministic target-flow ownership trace for one approved CV and cover-letter pair.",
+  "events": [
+    {
+      "sequence": 1,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": null,
+      "to": "REQUESTED"
+    },
+    {
+      "sequence": 2,
+      "actor": "jobseekercopilot/job-service",
+      "resource": "canonical-job-snapshot",
+      "instance": "job-snapshot-001",
+      "from": null,
+      "to": "RESOLVED"
+    },
+    {
+      "sequence": 3,
+      "actor": "jobseekercopilot/user-profile-service",
+      "resource": "profile-input-snapshot",
+      "instance": "profile-snapshot-001",
+      "from": null,
+      "to": "RESOLVED"
+    },
+    {
+      "sequence": 4,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "REQUESTED",
+      "to": "INPUTS_RESOLVED"
+    },
+    {
+      "sequence": 5,
+      "actor": "jobseekercopilot/payment-service",
+      "resource": "payment-reservation",
+      "instance": "reservation-001",
+      "from": null,
+      "to": "RESERVED"
+    },
+    {
+      "sequence": 6,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "INPUTS_RESOLVED",
+      "to": "CREDIT_RESERVED"
+    },
+    {
+      "sequence": 7,
+      "actor": "jobseekercopilot/cv-cover-letter-service",
+      "resource": "prompt-and-claim-provenance",
+      "instance": "provenance-001",
+      "from": null,
+      "to": "PRODUCED"
+    },
+    {
+      "sequence": 8,
+      "actor": "jobseekercopilot/payment-service",
+      "resource": "payment-reservation",
+      "instance": "reservation-001",
+      "from": "RESERVED",
+      "to": "COMMITTED"
+    },
+    {
+      "sequence": 9,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-version",
+      "instance": "cv-version-001",
+      "from": null,
+      "to": "DRAFT"
+    },
+    {
+      "sequence": 10,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-version",
+      "instance": "cover-letter-version-001",
+      "from": null,
+      "to": "DRAFT"
+    },
+    {
+      "sequence": 11,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "CREDIT_RESERVED",
+      "to": "DRAFT_READY"
+    },
+    {
+      "sequence": 12,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "DRAFT_READY",
+      "to": "AWAITING_APPROVAL"
+    },
+    {
+      "sequence": 13,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-version",
+      "instance": "cv-version-001",
+      "from": "DRAFT",
+      "to": "APPROVED"
+    },
+    {
+      "sequence": 14,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-version",
+      "instance": "cover-letter-version-001",
+      "from": "DRAFT",
+      "to": "APPROVED"
+    },
+    {
+      "sequence": 15,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-version",
+      "instance": "cv-version-001",
+      "from": "APPROVED",
+      "to": "FINAL"
+    },
+    {
+      "sequence": 16,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-version",
+      "instance": "cover-letter-version-001",
+      "from": "APPROVED",
+      "to": "FINAL"
+    },
+    {
+      "sequence": 17,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "AWAITING_APPROVAL",
+      "to": "APPROVED"
+    },
+    {
+      "sequence": 18,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-binary",
+      "instance": "cv-docx-001",
+      "from": null,
+      "to": "EXPORTED"
+    },
+    {
+      "sequence": 19,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-binary",
+      "instance": "cv-pdf-001",
+      "from": null,
+      "to": "EXPORTED"
+    },
+    {
+      "sequence": 20,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-binary",
+      "instance": "cover-letter-docx-001",
+      "from": null,
+      "to": "EXPORTED"
+    },
+    {
+      "sequence": 21,
+      "actor": "jobseekercopilot/document-store-service",
+      "resource": "document-binary",
+      "instance": "cover-letter-pdf-001",
+      "from": null,
+      "to": "EXPORTED"
+    },
+    {
+      "sequence": 22,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "APPROVED",
+      "to": "EXPORT_RECORDED"
+    },
+    {
+      "sequence": 23,
+      "actor": "jobseekercopilot/application-tracker-service",
+      "resource": "application-document-reference",
+      "instance": "application-001",
+      "from": null,
+      "to": "APPLICATION_LINKED"
+    },
+    {
+      "sequence": 24,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "EXPORT_RECORDED",
+      "to": "APPLICATION_LINKED"
+    },
+    {
+      "sequence": 25,
+      "actor": "jobseekercopilot/document-generation-gateway",
+      "resource": "generation-operation",
+      "instance": "operation-001",
+      "from": "APPLICATION_LINKED",
+      "to": "COMPLETED"
+    }
+  ]
+}

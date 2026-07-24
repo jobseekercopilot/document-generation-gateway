@@ -1,0 +1,324 @@
+{
+  "schemaVersion": 1,
+  "decision": {
+    "status": "accepted",
+    "repository": "jobseekercopilot/document-store-service",
+    "revision": "fedcdbdec63795269c4e4c4f43fc32f38c6327b1",
+    "path": "docs/adr/0001-document-architecture-and-ownership.md",
+    "url": "https://github.com/jobseekercopilot/document-store-service/blob/fedcdbdec63795269c4e4c4f43fc32f38c6327b1/docs/adr/0001-document-architecture-and-ownership.md"
+  },
+  "sourceIssue": "https://github.com/jobseekercopilot/document-generation-gateway/issues/4",
+  "evidenceKinds": [
+    "source",
+    "openapi",
+    "compose",
+    "synthetic-trace"
+  ],
+  "baseline": [
+    {
+      "repository": "jobseekercopilot/document-generation-gateway",
+      "revision": "5ed520e45b636a574904c5be15008c14b78762fd",
+      "evidence": [
+        "src/main/java/com/jobseekercopilot/documentgenerationgateway/controller/DocumentGenerationController.java",
+        "src/main/java/com/jobseekercopilot/documentgenerationgateway/service/DocumentGenerationService.java",
+        "contracts/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/cv-cover-letter-service",
+      "revision": "42f995b4616baf998432dc8c9bf4f958c0bc56ef",
+      "evidence": [
+        "src/main/java/com/jobseekercopilot/cvcoverletter/service/CvCoverLetterService.java",
+        "src/main/java/com/jobseekercopilot/cvcoverletter/service/PaymentBillingClient.java",
+        "contracts/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/document-store-service",
+      "revision": "b696fe81e9b900e0749e185f595ff4c98c24119d",
+      "evidence": [
+        "src/main/java/com/jobseekercopilot/documentstore/entity/GeneratedDocument.java",
+        "src/main/java/com/jobseekercopilot/documentstore/entity/ExportedDocumentFile.java",
+        "contracts/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/document-export-service",
+      "revision": "77d0dae0e7fd05a77c9068d3f0f317a16d05cbff",
+      "evidence": [
+        "src/main/java/com/jobseekercopilot/documentexport/service/DocumentExportService.java",
+        "contracts/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/application-tracker-service",
+      "revision": "d9e6bc9fcbe4ef665334c58672c8062b1e4796aa",
+      "evidence": [
+        "src/main/java/com/jobseekercopilot/applicationtracker/entity/ApplicationRecord.java",
+        "src/main/java/com/jobseekercopilot/applicationtracker/service/ApplicationRecordService.java",
+        "contracts/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/payment-service",
+      "revision": "3175e5730cd0743e15455a0acc8e2bc35b56a78f",
+      "evidence": [
+        "src/main/java/com/jobseekercopilot/paymentservice/service/PaymentService.java",
+        "contracts/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/llm-gateway",
+      "revision": "f91ab264723aa97809990aedfe29d9be77fa68d9",
+      "evidence": [
+        "contracts/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/user-profile-service",
+      "revision": "652639159dbef5349d48a95719a0e184ee31bbc9",
+      "evidence": [
+        "api/openapi.json"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/job-service",
+      "revision": "6835b63e539bfce7462d4df737b794935e8581e9",
+      "evidence": [
+        "api/openapi.yaml"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/job-seeker-copilot-client",
+      "revision": "deb64cb316c35e090b8cca039a367250b46b0b4b",
+      "evidence": [
+        "src/app/services/document-generation.service.ts",
+        "src/app/features/job-results/job-results.component.ts",
+        "src/app/features/job-card/job-card.component.html"
+      ]
+    },
+    {
+      "repository": "jobseekercopilot/infrastructure",
+      "revision": "3002c910ade8bcce86f805a64b8317b64750e817",
+      "evidence": [
+        "docker-compose.yml",
+        "docker-compose.e2e.yml",
+        "e2e/compose.beta.yml",
+        "build-tools/pom.xml"
+      ]
+    }
+  ],
+  "repositories": [
+    {
+      "component": "Application Tracker",
+      "repository": "jobseekercopilot/application-tracker-service",
+      "decision": "Remain a standalone private repository and the only system of record for applications and their exact document-version references.",
+      "runtime": true
+    },
+    {
+      "component": "Build Tools",
+      "repository": "jobseekercopilot/infrastructure",
+      "path": "build-tools",
+      "decision": "Remain shared build source in the private Infrastructure repository, be published as versioned build artifacts under INFRA-06, and own no runtime state or service API.",
+      "runtime": false
+    }
+  ],
+  "states": [
+    {
+      "resource": "generation-operation",
+      "state": "REQUESTED",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "INPUTS_RESOLVED",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "CREDIT_RESERVED",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "DRAFT_READY",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "AWAITING_APPROVAL",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "APPROVED",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "EXPORT_RECORDED",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "APPLICATION_LINKED",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "generation-operation",
+      "state": "COMPLETED",
+      "owner": "jobseekercopilot/document-generation-gateway"
+    },
+    {
+      "resource": "canonical-job-snapshot",
+      "state": "RESOLVED",
+      "owner": "jobseekercopilot/job-service"
+    },
+    {
+      "resource": "profile-input-snapshot",
+      "state": "RESOLVED",
+      "owner": "jobseekercopilot/user-profile-service"
+    },
+    {
+      "resource": "prompt-and-claim-provenance",
+      "state": "PRODUCED",
+      "owner": "jobseekercopilot/cv-cover-letter-service"
+    },
+    {
+      "resource": "payment-reservation",
+      "state": "RESERVED",
+      "owner": "jobseekercopilot/payment-service"
+    },
+    {
+      "resource": "payment-reservation",
+      "state": "COMMITTED",
+      "owner": "jobseekercopilot/payment-service"
+    },
+    {
+      "resource": "document-version",
+      "state": "DRAFT",
+      "owner": "jobseekercopilot/document-store-service"
+    },
+    {
+      "resource": "document-version",
+      "state": "APPROVED",
+      "owner": "jobseekercopilot/document-store-service"
+    },
+    {
+      "resource": "document-version",
+      "state": "FINAL",
+      "owner": "jobseekercopilot/document-store-service"
+    },
+    {
+      "resource": "document-binary",
+      "state": "EXPORTED",
+      "owner": "jobseekercopilot/document-store-service"
+    },
+    {
+      "resource": "application-document-reference",
+      "state": "APPLICATION_LINKED",
+      "owner": "jobseekercopilot/application-tracker-service"
+    }
+  ],
+  "requiredLifecycleOwners": {
+    "DRAFT": "jobseekercopilot/document-store-service",
+    "APPROVED": "jobseekercopilot/document-store-service",
+    "FINAL": "jobseekercopilot/document-store-service",
+    "EXPORTED": "jobseekercopilot/document-store-service",
+    "APPLICATION_LINKED": "jobseekercopilot/application-tracker-service"
+  },
+  "allowedTransitions": {
+    "generation-operation": [
+      [
+        null,
+        "REQUESTED"
+      ],
+      [
+        "REQUESTED",
+        "INPUTS_RESOLVED"
+      ],
+      [
+        "INPUTS_RESOLVED",
+        "CREDIT_RESERVED"
+      ],
+      [
+        "CREDIT_RESERVED",
+        "DRAFT_READY"
+      ],
+      [
+        "DRAFT_READY",
+        "AWAITING_APPROVAL"
+      ],
+      [
+        "AWAITING_APPROVAL",
+        "APPROVED"
+      ],
+      [
+        "APPROVED",
+        "EXPORT_RECORDED"
+      ],
+      [
+        "EXPORT_RECORDED",
+        "APPLICATION_LINKED"
+      ],
+      [
+        "APPLICATION_LINKED",
+        "COMPLETED"
+      ]
+    ],
+    "canonical-job-snapshot": [
+      [
+        null,
+        "RESOLVED"
+      ]
+    ],
+    "profile-input-snapshot": [
+      [
+        null,
+        "RESOLVED"
+      ]
+    ],
+    "prompt-and-claim-provenance": [
+      [
+        null,
+        "PRODUCED"
+      ]
+    ],
+    "payment-reservation": [
+      [
+        null,
+        "RESERVED"
+      ],
+      [
+        "RESERVED",
+        "COMMITTED"
+      ]
+    ],
+    "document-version": [
+      [
+        null,
+        "DRAFT"
+      ],
+      [
+        "DRAFT",
+        "APPROVED"
+      ],
+      [
+        "APPROVED",
+        "FINAL"
+      ]
+    ],
+    "document-binary": [
+      [
+        null,
+        "EXPORTED"
+      ]
+    ],
+    "application-document-reference": [
+      [
+        null,
+        "APPLICATION_LINKED"
+      ]
+    ]
+  }
+}
