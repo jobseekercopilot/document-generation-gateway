@@ -69,9 +69,9 @@ verify_source \
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
-    aa7f34693d81e55686c90441b105a195b614a545 \
+    a35fff34f86b77457df4b9e324000a32819d5aba \
     contracts/openapi.json \
-    f33fcb0994db6689b001219b651a55d4d499cb94af32d3defab87f3fc56c3012
+    e696b76efc05149778d1a31df684b6ba5687120396fb6e000ce4f888346f5072
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
@@ -131,11 +131,24 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "1.0.0") and
+    (.info.version == "2.0.0") and
     (.paths["/api/v1/document-exports/documents/{documentId}"].post.operationId
         == "exportDocument") and
     (.paths["/api/v1/document-exports/documents/{documentId}/upload"].post.operationId
         == "uploadReplacement") and
+    ([.paths["/api/v1/document-exports/documents/{documentId}"].post,
+      .paths["/api/v1/document-exports/documents/{documentId}/upload"].post]
+        | all(.security | any(has("serviceToken")))) and
+    ([.paths["/api/v1/document-exports/documents/{documentId}"].post,
+      .paths["/api/v1/document-exports/documents/{documentId}/upload"].post]
+        | all(.parameters | any(
+            .name == "X-Document-Owner" and
+            .in == "header" and
+            .required == true and
+            .schema.type == "string"))) and
+    (.components.securitySchemes.serviceToken.type == "apiKey") and
+    (.components.securitySchemes.serviceToken.in == "header") and
+    (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
     (.components.schemas.DocumentExportRequest.required | index("formats") != null) and
     (.components.schemas.DocumentExportRequest.properties.formats.items.enum
         | index("DOCX") != null and index("PDF") != null) and

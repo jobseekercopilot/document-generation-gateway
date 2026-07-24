@@ -85,6 +85,31 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/export-operati
     exit 1
 fi
 
+copy_contracts "$temporary_dir/export-security"
+jq 'del(.components.securitySchemes.serviceToken)' \
+    "$temporary_dir/export-security/document-export-service.json" \
+    > "$temporary_dir/export-security/changed.json"
+mv "$temporary_dir/export-security/changed.json" \
+   "$temporary_dir/export-security/document-export-service.json"
+refresh_manifest "$temporary_dir/export-security"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/export-security" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Export service identity" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/export-owner"
+jq '.paths["/api/v1/document-exports/documents/{documentId}"].post.parameters |=
+        map(select(.name != "X-Document-Owner"))' \
+    "$temporary_dir/export-owner/document-export-service.json" \
+    > "$temporary_dir/export-owner/changed.json"
+mv "$temporary_dir/export-owner/changed.json" \
+   "$temporary_dir/export-owner/document-export-service.json"
+refresh_manifest "$temporary_dir/export-owner"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/export-owner" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Export owner context" >&2
+    exit 1
+fi
+
 copy_contracts "$temporary_dir/store-operation"
 jq 'del(.paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"].patch)' \
     "$temporary_dir/store-operation/document-store-service.json" \

@@ -59,15 +59,22 @@ class DocumentGenerationServiceTest {
                 .thenReturn(ResponseEntity.ok(java.util.Map.of("name", "Alex Candidate", "email", "alex@example.com")));
         when(restTemplate.postForObject(Mockito.eq("http://cv/api/v1/cv-cover-letter/generate"),
                 Mockito.any(), Mockito.eq(GenerateCvCoverLetterResponse.class))).thenReturn(generated);
-        when(exporter.exportDocument(Mockito.eq(cvDocumentId), Mockito.any()))
+        when(exporter.exportDocument(
+                Mockito.eq("user-123"),
+                Mockito.eq(cvDocumentId),
+                Mockito.any()))
                 .thenReturn(exportResponse(cvDocxFileId, cvPdfFileId, "cv.docx", "cv.pdf"));
-        when(exporter.exportDocument(Mockito.eq(coverLetterDocumentId), Mockito.any()))
+        when(exporter.exportDocument(
+                Mockito.eq("user-123"),
+                Mockito.eq(coverLetterDocumentId),
+                Mockito.any()))
                 .thenReturn(exportResponse(letterDocxFileId, letterPdfFileId, "letter.docx", "letter.pdf"));
 
         var service = new DocumentGenerationService(profiles, exporter, new ObjectMapper(), restTemplate,
                 "http://cv", "http://auth", "http://export", "http://store", "http://tracker",
                 "test-only-authentication-service-token-32-bytes",
                 "test-only-application-producer-token-32-bytes",
+                "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
                 "test-only-document-store-reader-token-32-bytes");
         var actual = service.generate("user-123", "Bearer token", job);
@@ -107,7 +114,10 @@ class DocumentGenerationServiceTest {
                 authenticationRequest.getValue().getHeaders().getFirst("X-Service-Token"));
 
         var exportRequest = ArgumentCaptor.forClass(DocumentExportRequest.class);
-        verify(exporter).exportDocument(Mockito.eq(cvDocumentId), exportRequest.capture());
+        verify(exporter).exportDocument(
+                Mockito.eq("user-123"),
+                Mockito.eq(cvDocumentId),
+                exportRequest.capture());
         assertEquals(
                 java.util.List.of(DocumentExportRequest.FormatsEnum.DOCX, DocumentExportRequest.FormatsEnum.PDF),
                 exportRequest.getValue().getFormats());
@@ -155,6 +165,25 @@ class DocumentGenerationServiceTest {
         assertEquals(
                 "user-123",
                 trackerRequest.getValue().getHeaders().getFirst("X-Application-Owner"));
+
+        var exportRequest = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(uploadRestTemplate).postForObject(
+                Mockito.eq("http://export/api/v1/document-exports/documents/{generatedDocumentId}/upload"),
+                exportRequest.capture(),
+                Mockito.eq(ExportUploadResponse.class),
+                Mockito.eq(generatedDocumentId));
+        assertEquals(
+                "test-only-document-export-service-token-32-bytes",
+                exportRequest.getValue().getHeaders().getFirst("X-Service-Token"));
+        assertEquals(
+                1,
+                exportRequest.getValue().getHeaders().get("X-Service-Token").size());
+        assertEquals(
+                "user-123",
+                exportRequest.getValue().getHeaders().getFirst("X-Document-Owner"));
+        assertEquals(
+                1,
+                exportRequest.getValue().getHeaders().get("X-Document-Owner").size());
     }
 
     @Test
@@ -299,6 +328,7 @@ class DocumentGenerationServiceTest {
                 "http://tracker",
                 "test-only-authentication-service-token-32-bytes",
                 "test-only-application-producer-token-32-bytes",
+                "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
                 "test-only-document-store-reader-token-32-bytes");
         var file = new MockMultipartFile(
@@ -378,6 +408,7 @@ class DocumentGenerationServiceTest {
                 "http://cv", "http://auth", "http://export", "http://store", "http://tracker",
                 "test-only-authentication-service-token-32-bytes",
                 "test-only-application-producer-token-32-bytes",
+                "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
                 "test-only-document-store-reader-token-32-bytes");
     }

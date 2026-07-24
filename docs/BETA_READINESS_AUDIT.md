@@ -1,6 +1,6 @@
 # Beta-readiness audit
 
-Audit date: 2026-07-23
+Audit date: 2026-07-24
 
 Status: **Not ready for private beta**
 
@@ -42,8 +42,10 @@ record.
   User Profile, adds runtime service identity to Authentication and adds
   runtime producer identity plus owner context to Application Tracker.
   The Store consumer slice pins Store 1.1.0 and adds distinct reader/producer
-  identities plus owner context to each direct Store operation. Document
-  Export and CV/Cover Letter producer enforcement remain direct dependencies.
+  identities plus owner context to each direct Store operation. The Export
+  consumer slice pins Export 2.0.0 and adds its distinct service identity plus
+  owner context to generation and replacement calls. CV/Cover Letter producer
+  enforcement remains a direct dependency.
 - OWASP Dependency-Check 12.1.8 completed against the cached 2026-07-18
   advisory database: 62 dependencies, 14 vulnerable dependencies, 146
   vulnerability matches, including 17 Critical and 41 High matches. Results
@@ -61,13 +63,14 @@ record.
    `DOCUMENTS_GENERATED` before user preview/edit/approval.
 5. Resolved in the GW-01 Store consumer slice: file download UUIDs are sent
    only with the Store reader identity and validated owner context.
-6. Partially resolved in the GW-01 Store consumer slice: direct Store
-   read/create/activate replacement operations are owner bound, while the
-   intervening Document Export upload/conversion boundary remains unresolved.
-7. Partially resolved in the GW-01 gateway slice: Application Tracker lookups
-   now require a validated owner plus producer identity; direct Store
-   replacement is now owner scoped, while Export replacement ownership remains
-   unresolved.
+6. Resolved at the service-contract boundary in the GW-01 Store and Export
+   consumer slices: direct Store read/create/activate operations and the
+   intervening Export upload/conversion call are owner bound. Fleet E2E
+   evidence remains required.
+7. Resolved at the service-contract boundary in the GW-01 gateway and Export
+   consumer slices: Application Tracker lookups and Export replacement require
+   a validated owner plus dedicated service identity. Cross-user fleet evidence
+   remains required.
 8. Upload validation checks extension/MIME/basic ZIP members only; it lacks
    bounded decompression, macro/relationship/content checks, and filename
    hardening evidence.

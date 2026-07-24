@@ -4,11 +4,11 @@ Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
 This service is **not beta-ready**. The gateway accepts browser-supplied job
-data, does not yet have producer-enforced ownership on Document Export and CV
-and Cover Letter operations, runs a long synchronous non-atomic workflow, and
-has unresolved downstream identity boundaries. The former caller-controlled
-identity fallback has been removed and direct Document Store operations now
-bind a least-privilege service role to the validated owner. See
+data, does not yet have producer-enforced ownership on CV and Cover Letter
+operations, runs a long synchronous non-atomic workflow, and has unresolved
+downstream identity boundaries. The former caller-controlled identity fallback
+has been removed; direct Document Store and Document Export operations now
+bind dedicated service roles to the validated owner. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
 ## Technology
@@ -26,7 +26,7 @@ compatibility remain tracked beta-readiness work.
 The User Profile, CV/Cover Letter and Document Export clients resolve as
 immutable, producer-owned private Maven packages
 `1.0.0-rev.86c8510ed319`, `1.0.0-rev.68b4cf9d3f23` and
-`1.0.0-rev.aa7f34693d81`. The Gateway no longer generates Java clients inside
+`2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
 the consumer build. The raw Authentication, Document Store and Application
 Tracker adapters are checked against their pinned producer contracts. Generated
 sources and binaries are build output and are not committed. See
@@ -49,11 +49,12 @@ DOCUMENT_GENERATION_JWT_ISSUER
 DOCUMENT_GENERATION_JWT_AUDIENCE
 AUTH_SERVICE_TOKEN
 APPLICATION_TRACKER_PRODUCER_TOKEN
+DOCUMENT_EXPORT_GATEWAY_TOKEN
 DOCUMENT_STORE_PRODUCER_TOKEN
 DOCUMENT_STORE_READER_TOKEN
 ```
 
-The four service tokens must be pairwise distinct and contain at least 32 bytes. They
+The five service tokens must be pairwise distinct and contain at least 32 bytes. They
 have no source-controlled runtime default. See
 [`docs/IDENTITY_BOUNDARY.md`](docs/IDENTITY_BOUNDARY.md).
 
