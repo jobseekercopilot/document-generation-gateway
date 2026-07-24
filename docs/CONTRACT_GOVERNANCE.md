@@ -16,7 +16,7 @@ replaced with new dead output.
 | `jobseekercopilot/authentication-service` | `2964aeb07b9861cce555d28cc58c6b9fab1f6107` | `contracts/openapi.json` | `1.0.0` | `ce7f707b921a16fb8e53b580032bac4542334ed47f8f07c474e63ba2ecc4c812` | Handwritten `/api/auth/me` adapter compatibility |
 | `jobseekercopilot/user-profile-service` | `86c8510ed319a059b991e6f9f1e43b0e101c5d1f` | `api/openapi.json` | `1.0.0` | `ffaaa16a169ab11d864f82440be9fcc7d5df2d4f2d63a3525d40bda497ea6598` | Published Java client `com.jobseekercopilot.clients:user-profile-service-client:1.0.0-rev.86c8510ed319` |
 | `jobseekercopilot/cv-cover-letter-service` | `68b4cf9d3f2395abd642180a204db3a67d9ae80e` | `contracts/openapi.json` | `1.0.0` | `c493db389a3255c29cc250d14ede2e8a1a03c7efe22e340ccc009584ab4e225b` | Published Java client `com.jobseekercopilot.clients:cv-cover-letter-service-client:1.0.0-rev.68b4cf9d3f23` |
-| `jobseekercopilot/document-export-service` | `aa7f34693d81e55686c90441b105a195b614a545` | `contracts/openapi.json` | `1.0.0` | `f33fcb0994db6689b001219b651a55d4d499cb94af32d3defab87f3fc56c3012` | Published Java client `com.jobseekercopilot.clients:document-export-service-client:1.0.0-rev.aa7f34693d81` and raw upload compatibility |
+| `jobseekercopilot/document-export-service` | `a35fff34f86b77457df4b9e324000a32819d5aba` | `contracts/openapi.json` | `2.0.0` | `e696b76efc05149778d1a31df684b6ba5687120396fb6e000ce4f888346f5072` | Published Java client `com.jobseekercopilot.clients:document-export-service-client:2.0.0-rev.a35fff34f86b`; generated export and raw upload calls require service identity plus owner |
 | `jobseekercopilot/document-store-service` | `b696fe81e9b900e0749e185f595ff4c98c24119d` | `contracts/openapi.json` | `1.1.0` | `3d0595c83cc66d9037e08af6a4b087c115c9a5d99ec71491f1aa5fc3afffd6ba` | Owner-scoped handwritten read/create/activate/download adapter compatibility |
 | `jobseekercopilot/application-tracker-service` | `d9e6bc9fcbe4ef665334c58672c8062b1e4796aa` | `contracts/openapi.json` | `1.1.0` | `549cebba300c2caf3403b9de01d3c34de84464a280a02183751e8a9583ad982a` | Handwritten adapter compatibility |
 
@@ -55,9 +55,11 @@ reference updates. Negative tests reject missing, malformed, expired, forged,
 wrong-issuer, wrong-audience, wrong-purpose and subjectless access tokens.
 Direct Store reads/downloads use its runtime reader identity; creates and
 activation use its producer identity. Both bind exactly one owner header to the
-validated token subject. CV/Cover Letter and Document Export service identity
-rollout remains in their focused dependency issues. GW-01 stays open until
-those producer boundaries and integrated cross-user paths pass.
+validated token subject. Document Export generation and replacement use its
+dedicated runtime identity and bind exactly one owner header to the validated
+token subject. CV/Cover Letter service identity rollout remains in its focused
+dependency issue. GW-01 stays open until that producer boundary and integrated
+cross-user paths pass.
 
 ## Updating a pin
 

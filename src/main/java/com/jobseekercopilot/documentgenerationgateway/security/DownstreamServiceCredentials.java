@@ -12,6 +12,7 @@ public class DownstreamServiceCredentials {
 
     private final String authenticationServiceToken;
     private final String applicationTrackerProducerToken;
+    private final String documentExportServiceToken;
     private final String documentStoreProducerToken;
     private final String documentStoreReaderToken;
 
@@ -20,6 +21,8 @@ public class DownstreamServiceCredentials {
             String authenticationServiceToken,
             @Value("${document-generation.security.application-tracker-producer-token}")
             String applicationTrackerProducerToken,
+            @Value("${document-generation.security.document-export-service-token}")
+            String documentExportServiceToken,
             @Value("${document-generation.security.document-store-producer-token}")
             String documentStoreProducerToken,
             @Value("${document-generation.security.document-store-reader-token}")
@@ -30,6 +33,9 @@ public class DownstreamServiceCredentials {
         this.applicationTrackerProducerToken = validate(
                 applicationTrackerProducerToken,
                 "Application Tracker producer token");
+        this.documentExportServiceToken = validate(
+                documentExportServiceToken,
+                "Document Export service token");
         this.documentStoreProducerToken = validate(
                 documentStoreProducerToken,
                 "Document Store producer token");
@@ -39,6 +45,7 @@ public class DownstreamServiceCredentials {
         requireDistinct(
                 authenticationServiceToken,
                 applicationTrackerProducerToken,
+                documentExportServiceToken,
                 documentStoreProducerToken,
                 documentStoreReaderToken);
     }
@@ -49,6 +56,10 @@ public class DownstreamServiceCredentials {
 
     public String applicationTrackerProducerToken() {
         return applicationTrackerProducerToken;
+    }
+
+    public String documentExportServiceToken() {
+        return documentExportServiceToken;
     }
 
     public String documentStoreProducerToken() {

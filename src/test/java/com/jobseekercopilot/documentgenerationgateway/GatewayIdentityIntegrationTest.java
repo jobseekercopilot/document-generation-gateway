@@ -30,6 +30,8 @@ import org.springframework.test.web.servlet.MvcResult;
                 + "test-only-authentication-service-token-32-bytes",
         "document-generation.security.application-tracker-producer-token="
                 + "test-only-application-producer-token-32-bytes",
+        "document-generation.security.document-export-service-token="
+                + "test-only-document-export-service-token-32-bytes",
         "document-generation.security.document-store-producer-token="
                 + "test-only-document-store-producer-token-32-bytes",
         "document-generation.security.document-store-reader-token="

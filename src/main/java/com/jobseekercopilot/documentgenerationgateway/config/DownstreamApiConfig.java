@@ -4,6 +4,7 @@ import com.jobseekercopilot.generated.cvcoverletterservice.api.CvCoverLetterCont
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
 import com.jobseekercopilot.documentgenerationgateway.security.CurrentAccessTokenSupplier;
+import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -33,9 +34,11 @@ public class DownstreamApiConfig {
 
     @Bean
     DocumentExportsApi documentExportsApi(
-            @Value("${services.document-export-service.base-url}") String baseUrl) {
+            @Value("${services.document-export-service.base-url}") String baseUrl,
+            DownstreamServiceCredentials credentials) {
         var client = new com.jobseekercopilot.generated.documentexportservice.client.ApiClient();
         client.setBasePath(baseUrl);
+        client.setApiKey(credentials.documentExportServiceToken());
         return new DocumentExportsApi(client);
     }
 

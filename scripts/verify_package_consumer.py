@@ -36,7 +36,7 @@ PACKAGES = (
         "label": "Document Export",
         "artifact_id": "document-export-service-client",
         "version_property": "document-export-client.version",
-        "version": "1.0.0-rev.aa7f34693d81",
+        "version": "2.0.0-rev.a35fff34f86b",
         "server_id": "github-document-export",
         "registry": "https://maven.pkg.github.com/jobseekercopilot/document-export-service",
         "generator_id": "generate-document-export-client",

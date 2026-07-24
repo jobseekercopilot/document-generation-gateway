@@ -11,6 +11,8 @@ class DownstreamServiceCredentialsTest {
             "test-only-authentication-service-token-32-bytes";
     private static final String APPLICATION_TRACKER =
             "test-only-application-producer-token-32-bytes";
+    private static final String DOCUMENT_EXPORT =
+            "test-only-document-export-service-token-32-bytes";
     private static final String DOCUMENT_STORE_PRODUCER =
             "test-only-document-store-producer-token-32-bytes";
     private static final String DOCUMENT_STORE_READER =
@@ -22,11 +24,13 @@ class DownstreamServiceCredentialsTest {
                 new DownstreamServiceCredentials(
                         AUTHENTICATION,
                         APPLICATION_TRACKER,
+                        DOCUMENT_EXPORT,
                         DOCUMENT_STORE_PRODUCER,
                         DOCUMENT_STORE_READER);
 
         assertEquals(AUTHENTICATION, credentials.authenticationServiceToken());
         assertEquals(APPLICATION_TRACKER, credentials.applicationTrackerProducerToken());
+        assertEquals(DOCUMENT_EXPORT, credentials.documentExportServiceToken());
         assertEquals(DOCUMENT_STORE_PRODUCER, credentials.documentStoreProducerToken());
         assertEquals(DOCUMENT_STORE_READER, credentials.documentStoreReaderToken());
     }
@@ -38,6 +42,7 @@ class DownstreamServiceCredentialsTest {
                 () -> new DownstreamServiceCredentials(
                         "",
                         APPLICATION_TRACKER,
+                        DOCUMENT_EXPORT,
                         DOCUMENT_STORE_PRODUCER,
                         DOCUMENT_STORE_READER));
         IllegalStateException shortToken = assertThrows(
@@ -45,6 +50,15 @@ class DownstreamServiceCredentialsTest {
                 () -> new DownstreamServiceCredentials(
                         "short",
                         APPLICATION_TRACKER,
+                        DOCUMENT_EXPORT,
+                        DOCUMENT_STORE_PRODUCER,
+                        DOCUMENT_STORE_READER));
+        IllegalStateException missingExport = assertThrows(
+                IllegalStateException.class,
+                () -> new DownstreamServiceCredentials(
+                        AUTHENTICATION,
+                        APPLICATION_TRACKER,
+                        "",
                         DOCUMENT_STORE_PRODUCER,
                         DOCUMENT_STORE_READER));
         IllegalStateException shared = assertThrows(
@@ -53,12 +67,16 @@ class DownstreamServiceCredentialsTest {
                         AUTHENTICATION,
                         APPLICATION_TRACKER,
                         DOCUMENT_STORE_PRODUCER,
-                        DOCUMENT_STORE_PRODUCER));
+                        DOCUMENT_STORE_PRODUCER,
+                        DOCUMENT_STORE_READER));
 
         assertEquals(
                 "Authentication service token must contain at least 32 bytes.",
                 blank.getMessage());
         assertEquals(blank.getMessage(), shortToken.getMessage());
+        assertEquals(
+                "Document Export service token must contain at least 32 bytes.",
+                missingExport.getMessage());
         assertEquals("Downstream service identity tokens must be distinct.", shared.getMessage());
     }
 }

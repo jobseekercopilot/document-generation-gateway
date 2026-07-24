@@ -21,7 +21,7 @@
         <apache.poi.version>5.2.5</apache.poi.version>
         <user-profile-client.version>1.0.0-rev.86c8510ed319</user-profile-client.version>
         <cv-cover-letter-client.version>1.0.0-rev.68b4cf9d3f23</cv-cover-letter-client.version>
-        <document-export-client.version>1.0.0-rev.aa7f34693d81</document-export-client.version>
+        <document-export-client.version>2.0.0-rev.a35fff34f86b</document-export-client.version>
     </properties>
 
     <dependencies>

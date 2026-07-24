@@ -65,6 +65,7 @@ public class DocumentGenerationService {
     private final String applicationTrackerBaseUrl;
     private final String authenticationServiceToken;
     private final String applicationTrackerProducerToken;
+    private final String documentExportServiceToken;
     private final String documentStoreProducerToken;
     private final String documentStoreReaderToken;
 
@@ -90,6 +91,7 @@ public class DocumentGenerationService {
         this.applicationTrackerBaseUrl = applicationTrackerBaseUrl;
         this.authenticationServiceToken = credentials.authenticationServiceToken();
         this.applicationTrackerProducerToken = credentials.applicationTrackerProducerToken();
+        this.documentExportServiceToken = credentials.documentExportServiceToken();
         this.documentStoreProducerToken = credentials.documentStoreProducerToken();
         this.documentStoreReaderToken = credentials.documentStoreReaderToken();
     }
@@ -105,6 +107,7 @@ public class DocumentGenerationService {
                               String applicationTrackerBaseUrl,
                               String authenticationServiceToken,
                               String applicationTrackerProducerToken,
+                              String documentExportServiceToken,
                               String documentStoreProducerToken,
                               String documentStoreReaderToken) {
         this(userProfilesApi,
@@ -119,6 +122,7 @@ public class DocumentGenerationService {
                 new DownstreamServiceCredentials(
                         authenticationServiceToken,
                         applicationTrackerProducerToken,
+                        documentExportServiceToken,
                         documentStoreProducerToken,
                         documentStoreReaderToken));
     }
@@ -148,8 +152,9 @@ public class DocumentGenerationService {
         UUID cvDocumentId = parseDocumentId(generated.getCvDocumentId(), "CV");
         UUID coverLetterDocumentId = parseDocumentId(generated.getCoverLetterDocumentId(), "cover letter");
 
-        DocumentDownloadsResponse cvDownloads = exportDocument(cvDocumentId);
-        DocumentDownloadsResponse coverLetterDownloads = exportDocument(coverLetterDocumentId);
+        DocumentDownloadsResponse cvDownloads = exportDocument(cvDocumentId, userId);
+        DocumentDownloadsResponse coverLetterDownloads =
+                exportDocument(coverLetterDocumentId, userId);
         log.info("Document generation gateway completed userId={} applicationId={} cvDocumentId={} coverLetterDocumentId={} durationMs={}",
                 userId,
                 generated.getApplicationId(),
@@ -198,6 +203,8 @@ public class DocumentGenerationService {
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+            headers.set(SERVICE_TOKEN_HEADER, documentExportServiceToken);
+            headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
 
             ExportUploadResponse response = restTemplate.postForObject(
                     documentExportBaseUrl + "/api/v1/document-exports/documents/{generatedDocumentId}/upload",
@@ -376,10 +383,12 @@ public class DocumentGenerationService {
         }
     }
 
-    private DocumentDownloadsResponse exportDocument(UUID documentId) {
+    private DocumentDownloadsResponse exportDocument(UUID documentId, String userId) {
         long startedAt = System.nanoTime();
         log.info("Calling document-export-service documentId={}", documentId);
-        DocumentExportResponse response = documentExportsApi.exportDocument(documentId,
+        DocumentExportResponse response = documentExportsApi.exportDocument(
+                requireDocumentOwner(userId),
+                documentId,
                 new DocumentExportRequest()
                         .formats(List.of(
                                 DocumentExportRequest.FormatsEnum.DOCX,
@@ -609,16 +618,20 @@ public class DocumentGenerationService {
             String userId,
             Object body,
             String serviceToken) {
-        if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("Authenticated document owner is required.");
-        }
         HttpHeaders headers = new HttpHeaders();
         headers.set(SERVICE_TOKEN_HEADER, serviceToken);
-        headers.set(DOCUMENT_OWNER_HEADER, userId);
+        headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
         if (body != null) {
             headers.setContentType(MediaType.APPLICATION_JSON);
         }
         return new HttpEntity<>(body, headers);
+    }
+
+    private String requireDocumentOwner(String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("Authenticated document owner is required.");
+        }
+        return userId;
     }
 
     private String mimeType(UploadFormat uploadedFormat) {
