@@ -150,6 +150,31 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void normalizesARealProviderUkPostedDateForTheCvContract() {
+        when(downstream.savedJob(
+                SAVED_JOB_ID, AUTHORIZATION))
+                .thenReturn(savedJobResponse(
+                        "SNAPSHOT", "30/06/2026"));
+
+        var operation = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "provider-date-1");
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                operation.state());
+        ArgumentCaptor<Map> request =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).estimate(
+                org.mockito.ArgumentMatchers.eq(OWNER),
+                request.capture());
+        Map<?, ?> job = (Map<?, ?>) request.getValue().get("job");
+        assertEquals("2026-06-30", job.get("postedDate"));
+    }
+
+    @Test
     void concurrentSameJobRequestsPerformOnlyOneModelInvocation() throws Exception {
         CountDownLatch generationEntered = new CountDownLatch(1);
         CountDownLatch releaseGeneration = new CountDownLatch(1);
@@ -591,6 +616,12 @@ class DurableGenerationServiceTest {
 
     private Map<String, Object> savedJobResponse(
             String sourceState) {
+        return savedJobResponse(sourceState, "2026-07-01");
+    }
+
+    private Map<String, Object> savedJobResponse(
+            String sourceState,
+            String postedDate) {
         return Map.of(
                 "savedJobId", SAVED_JOB_ID.toString(),
                 "canonicalJobId", "canonical-job-1",
@@ -609,7 +640,7 @@ class DurableGenerationServiceTest {
                         "company", "Example Ltd",
                         "location", "London",
                         "employmentType", "FULL_TIME",
-                        "postedDate", "2026-07-01",
+                        "postedDate", postedDate,
                         "description", "Build reliable services."));
     }
 

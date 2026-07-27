@@ -12,6 +12,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -750,14 +753,34 @@ public class DurableGenerationService {
                         job.get("employmentTypeCode"),
                         job.get("contractType")),
                 80);
-        String postedDate = text(job.get("postedDate"));
-        if (postedDate == null) {
-            postedDate = text(job.get("postedAt"));
-        }
-        if (postedDate != null && postedDate.length() >= 10) {
-            result.put("postedDate", postedDate.substring(0, 10));
+        String postedDate = isoDate(firstText(
+                job.get("postedDate"), job.get("postedAt")));
+        if (postedDate != null) {
+            result.put("postedDate", postedDate);
         }
         return result;
+    }
+
+    private String isoDate(String value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.length() >= 10) {
+            try {
+                return LocalDate.parse(
+                        value.substring(0, 10),
+                        DateTimeFormatter.ISO_LOCAL_DATE).toString();
+            } catch (DateTimeParseException ignored) {
+                // Try the provider's UK display-date format below.
+            }
+        }
+        try {
+            return LocalDate.parse(
+                    value,
+                    DateTimeFormatter.ofPattern("d/M/uuuu")).toString();
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     private Map<String, Object> profileSnapshot(
