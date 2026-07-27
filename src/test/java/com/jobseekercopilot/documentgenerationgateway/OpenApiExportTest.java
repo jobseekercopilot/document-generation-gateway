@@ -29,7 +29,9 @@ import org.springframework.test.web.servlet.MockMvc;
         "document-generation.security.document-store-producer-token="
                 + "test-only-document-store-producer-token-32-bytes",
         "document-generation.security.document-store-reader-token="
-                + "test-only-document-store-reader-token-32-bytes"
+                + "test-only-document-store-reader-token-32-bytes",
+        "document-generation.security.payment-service-token="
+                + "test-only-payment-service-token-0000000000001"
 })
 @AutoConfigureMockMvc
 class OpenApiExportTest {
@@ -41,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("1.2.0", contract.path("info").path("version").asText());
+        assertEquals("1.3.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")

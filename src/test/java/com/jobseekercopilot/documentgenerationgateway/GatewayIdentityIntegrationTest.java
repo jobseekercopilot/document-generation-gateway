@@ -9,6 +9,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.generation.DurableGenerationService;
+import com.jobseekercopilot.documentgenerationgateway.generation.GenerationOperationState;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownloadService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentGenerationService;
 import java.util.List;
@@ -40,7 +43,9 @@ import org.springframework.test.web.servlet.MvcResult;
         "document-generation.security.document-store-producer-token="
                 + "test-only-document-store-producer-token-32-bytes",
         "document-generation.security.document-store-reader-token="
-                + "test-only-document-store-reader-token-32-bytes"
+                + "test-only-document-store-reader-token-32-bytes",
+        "document-generation.security.payment-service-token="
+                + "test-only-payment-service-token-0000000000001"
 })
 @AutoConfigureMockMvc
 class GatewayIdentityIntegrationTest {
@@ -67,6 +72,9 @@ class GatewayIdentityIntegrationTest {
 
     @MockBean
     private DocumentFileDownloadService downloadService;
+
+    @MockBean
+    private DurableGenerationService durableGenerationService;
 
     @Test
     void browserIdentityHeaderCannotAuthenticateOrOverrideJwtSubject() throws Exception {
@@ -122,6 +130,54 @@ class GatewayIdentityIntegrationTest {
         verify(downloadService).download(
                 ArgumentMatchers.eq(java.util.UUID.fromString(fileId)),
                 ArgumentMatchers.eq("alice"));
+    }
+
+    @Test
+    void validatedSubjectAndBearerAreBoundToDurableGeneration()
+            throws Exception {
+        UUID savedJobId = UUID.randomUUID();
+        UUID operationId = UUID.randomUUID();
+        String operationKey = "browser-generation-operation";
+        String token = JWKS.validToken("alice");
+        org.mockito.Mockito.when(durableGenerationService.start(
+                        ArgumentMatchers.anyString(),
+                        ArgumentMatchers.anyString(),
+                        ArgumentMatchers.any(),
+                        ArgumentMatchers.anyString()))
+                .thenReturn(new GenerationOperationResponse(
+                        operationId,
+                        savedJobId,
+                        GenerationOperationState.CREATED,
+                        true,
+                        false,
+                        null,
+                        null,
+                        null,
+                        java.util.Map.of(),
+                        null,
+                        null,
+                        java.time.Instant.now().plusSeconds(600),
+                        java.time.Instant.now(),
+                        java.time.Instant.now()));
+
+        mockMvc.perform(post(
+                        "/api/v1/document-generation/saved-jobs/"
+                                + "{savedJobId}/operations",
+                        savedJobId)
+                        .header(
+                                HttpHeaders.AUTHORIZATION,
+                                "Bearer " + token)
+                        .header("Idempotency-Key", operationKey)
+                        .header("X-Document-Owner", "victim"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.operationId")
+                        .value(operationId.toString()));
+
+        verify(durableGenerationService).start(
+                ArgumentMatchers.eq("alice"),
+                ArgumentMatchers.eq("Bearer " + token),
+                ArgumentMatchers.eq(savedJobId),
+                ArgumentMatchers.eq(operationKey));
     }
 
     @Test

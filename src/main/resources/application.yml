@@ -4,6 +4,14 @@ server:
 spring:
   application:
     name: document-generation-gateway
+  datasource:
+    url: ${DOCUMENT_GENERATION_DATABASE_URL:jdbc:postgresql://document-generation-postgres:5432/document_generation}
+    username: ${DOCUMENT_GENERATION_DATABASE_USERNAME:document_generation}
+    password: ${DOCUMENT_GENERATION_DATABASE_PASSWORD:}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    validate-migration-naming: true
   servlet:
     multipart:
       max-file-size: 25MB
@@ -20,6 +28,10 @@ document-generation:
     document-export-service-token: ${DOCUMENT_EXPORT_GATEWAY_TOKEN:}
     document-store-producer-token: ${DOCUMENT_STORE_PRODUCER_TOKEN:}
     document-store-reader-token: ${DOCUMENT_STORE_READER_TOKEN:}
+    payment-service-token: ${DOCUMENT_GENERATION_GATEWAY_TO_PAYMENT_SERVICE_TOKEN:}
+  operation:
+    deadline: ${DOCUMENT_GENERATION_OPERATION_DEADLINE:PT10M}
+    lease: ${DOCUMENT_GENERATION_OPERATION_LEASE:PT30S}
 
 services:
   user-profile-service:
@@ -36,6 +48,8 @@ services:
     base-url: ${DOCUMENT_STORE_SERVICE_URL:http://document-store-service:8089}
   application-tracker-service:
     base-url: ${APPLICATION_TRACKER_SERVICE_URL:http://application-tracker-service:8088}
+  payment-service:
+    base-url: ${PAYMENT_SERVICE_URL:http://payment-service:8099}
 
 management:
   endpoints:

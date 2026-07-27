@@ -1,10 +1,13 @@
 package com.jobseekercopilot.documentgenerationgateway.controller;
 
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentKind;
+import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.generation.DurableGenerationService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownloadService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentGenerationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,6 +23,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -33,10 +37,80 @@ import org.springframework.web.multipart.MultipartFile;
 public class DocumentGenerationController {
     private final DocumentGenerationService service;
     private final DocumentFileDownloadService downloadService;
+    private final DurableGenerationService durableGenerationService;
 
-    public DocumentGenerationController(DocumentGenerationService service, DocumentFileDownloadService downloadService) {
+    public DocumentGenerationController(
+            DocumentGenerationService service,
+            DocumentFileDownloadService downloadService,
+            DurableGenerationService durableGenerationService) {
         this.service = service;
         this.downloadService = downloadService;
+        this.durableGenerationService = durableGenerationService;
+    }
+
+    @PostMapping("/saved-jobs/{savedJobId}/operations")
+    @Operation(
+            summary = "Start or replay durable draft generation from an owner-scoped saved job",
+            description = "The same owner and Idempotency-Key return the same operation. "
+                    + "The request resolves canonical Job/Profile snapshots, reserves AI Credit, "
+                    + "performs at most one automatic model invocation and stores DRAFT documents.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "202", description = "Operation accepted or replayed"),
+            @ApiResponse(responseCode = "400", description = "Invalid idempotency key"),
+            @ApiResponse(responseCode = "401", description = "No authenticated user"),
+            @ApiResponse(responseCode = "409", description = "Idempotency or saved-job conflict")
+    })
+    public ResponseEntity<GenerationOperationResponse> startOperation(
+            @PathVariable UUID savedJobId,
+            @Parameter(hidden = true) Authentication authentication,
+            @Parameter(hidden = true)
+            @RequestHeader(name = "Authorization", required = false)
+            String authorization,
+            @RequestHeader(name = "Idempotency-Key")
+            String idempotencyKey) {
+        return ResponseEntity.accepted().body(
+                durableGenerationService.start(
+                        authenticatedSubject(authentication),
+                        authorization,
+                        savedJobId,
+                        idempotencyKey));
+    }
+
+    @GetMapping("/operations/{operationId}")
+    @Operation(summary = "Get an owner-scoped durable generation operation")
+    public ResponseEntity<GenerationOperationResponse> getOperation(
+            @PathVariable UUID operationId,
+            @Parameter(hidden = true) Authentication authentication) {
+        return ResponseEntity.ok(durableGenerationService.get(
+                authenticatedSubject(authentication), operationId));
+    }
+
+    @PostMapping("/operations/{operationId}/approve")
+    @Operation(
+            summary = "Approve exact drafts and complete export and Tracker creation",
+            description = "Approval must name the exact DRAFT document IDs returned by this operation.")
+    public ResponseEntity<GenerationOperationResponse> approveOperation(
+            @PathVariable UUID operationId,
+            @Parameter(hidden = true) Authentication authentication,
+            @Valid @RequestBody ApproveGenerationRequest request) {
+        GenerationOperationResponse response =
+                durableGenerationService.approve(
+                        authenticatedSubject(authentication),
+                        operationId,
+                        request);
+        return response.manualActionRequired()
+                ? ResponseEntity.accepted().body(response)
+                : ResponseEntity.ok(response);
+    }
+
+    @DeleteMapping("/operations/{operationId}")
+    @Operation(
+            summary = "Cancel a generation operation while cancellation remains deterministic")
+    public ResponseEntity<GenerationOperationResponse> cancelOperation(
+            @PathVariable UUID operationId,
+            @Parameter(hidden = true) Authentication authentication) {
+        return ResponseEntity.ok(durableGenerationService.cancel(
+                authenticatedSubject(authentication), operationId));
     }
 
     @PostMapping("/jobs/{jobId}/generate")

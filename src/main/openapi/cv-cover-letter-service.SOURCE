@@ -1,4 +1,4 @@
 repository=jobseekercopilot/cv-cover-letter-service
-revision=87fc2393309ad3007cba6ac27aa618fc3cc81aa9
+revision=8efee874ef50f8967326346023181de19c03b5e2
 path=contracts/openapi.json
-sha256=8583f844b297bc32472e1fbf0b4bc273972477cc81cb0a25eba6e2ac5a048d95
+sha256=cb8e6f194fac88c45a875c47d1e0616f9df157c2d9df8c815ccfe3ec931e1654
