@@ -29,7 +29,10 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-Version `1.3.0` adds the durable initial-generation operation described in
+Version `1.4.0` validates active canonical Job 2.0 snapshot evidence and
+applies the operation's remaining absolute deadline to every durable-flow
+downstream HTTP connect/read. Version `1.3.0` added the durable
+initial-generation operation described in
 [`docs/DOCGEN-09_DURABLE_COORDINATOR.md`](docs/DOCGEN-09_DURABLE_COORDINATOR.md).
 It retains the version `1.2.0` recoverable application-document replacement
 response. The Gateway reserves a Tracker operation before Store writes, creates
@@ -75,6 +78,9 @@ DOCUMENT_GENERATION_GATEWAY_TO_PAYMENT_SERVICE_TOKEN
 DOCUMENT_GENERATION_DATABASE_URL
 DOCUMENT_GENERATION_DATABASE_USERNAME
 DOCUMENT_GENERATION_DATABASE_PASSWORD
+DOCUMENT_GENERATION_OPERATION_DEADLINE
+DOCUMENT_GENERATION_CONNECT_TIMEOUT
+DOCUMENT_GENERATION_READ_TIMEOUT
 ```
 
 The seven service tokens must be pairwise distinct and contain at least 32 bytes. They

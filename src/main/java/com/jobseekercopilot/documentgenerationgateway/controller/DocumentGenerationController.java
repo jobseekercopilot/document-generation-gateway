@@ -52,8 +52,10 @@ public class DocumentGenerationController {
     @Operation(
             summary = "Start or replay durable draft generation from an owner-scoped saved job",
             description = "The same owner and Idempotency-Key return the same operation. "
-                    + "The request resolves canonical Job/Profile snapshots, reserves AI Credit, "
-                    + "performs at most one automatic model invocation and stores DRAFT documents.")
+                    + "The request accepts only an active canonical Job 2.0 snapshot, freezes "
+                    + "Job/Profile evidence, applies one deadline across downstream calls, "
+                    + "reserves AI Credit, performs at most one automatic model invocation "
+                    + "and stores DRAFT documents.")
     @ApiResponses({
             @ApiResponse(responseCode = "202", description = "Operation accepted or replayed"),
             @ApiResponse(responseCode = "400", description = "Invalid idempotency key"),

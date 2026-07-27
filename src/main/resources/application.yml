@@ -32,6 +32,9 @@ document-generation:
   operation:
     deadline: ${DOCUMENT_GENERATION_OPERATION_DEADLINE:PT10M}
     lease: ${DOCUMENT_GENERATION_OPERATION_LEASE:PT30S}
+  downstream:
+    connect-timeout: ${DOCUMENT_GENERATION_CONNECT_TIMEOUT:PT3S}
+    read-timeout: ${DOCUMENT_GENERATION_READ_TIMEOUT:PT30S}
 
 services:
   user-profile-service:

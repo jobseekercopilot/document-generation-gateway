@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -20,6 +21,12 @@ import static org.mockito.Mockito.when;
 import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +42,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 
 @SpringBootTest
@@ -53,6 +62,9 @@ class DurableGenerationServiceTest {
             UUID.fromString("40000000-0000-0000-0000-000000000001");
 
     @Autowired private DurableGenerationService service;
+    @Autowired private GenerationOperationRepository repository;
+    @Autowired private ObjectMapper objectMapper;
+    @Autowired private OperationDeadlineGuard deadlineGuard;
     @Autowired private JdbcTemplate jdbc;
     @MockBean private GenerationDownstreamClient downstream;
 
@@ -83,6 +95,9 @@ class DurableGenerationServiceTest {
         assertEquals(first.operationId(), replay.operationId());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1))
+                .savedJob(SAVED_JOB_ID, AUTHORIZATION);
+        verify(downstream, times(1)).profile();
 
         assertThrows(
                 GenerationConflictException.class,
@@ -312,25 +327,216 @@ class DurableGenerationServiceTest {
                 awaiting.operationId() + ":cv-export");
     }
 
+    @Test
+    void rejectsExpiredSavedJobBeforeEstimateOrCreditReservation() {
+        when(downstream.savedJob(
+                SAVED_JOB_ID, AUTHORIZATION))
+                .thenReturn(savedJobResponse("EXPIRED_SNAPSHOT"));
+
+        var failed = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1");
+
+        assertEquals(GenerationOperationState.CREATED, failed.state());
+        assertEquals(
+                "SAVED_JOB_SNAPSHOT_EXPIRED",
+                failed.failureCode());
+        verify(downstream, never()).profile();
+        verify(downstream, never()).estimate(anyString(), anyMap());
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+
+        doReturn(savedJobResponse("SNAPSHOT"))
+                .when(downstream)
+                .savedJob(SAVED_JOB_ID, AUTHORIZATION);
+        var refreshed = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1");
+        assertEquals(failed.operationId(), refreshed.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                refreshed.state());
+        verify(downstream, times(1)).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, times(1)).generate(
+                anyString(), any(), anyMap());
+    }
+
+    @Test
+    void missingSavedJobProducesStableFailureBeforeAnyCharge() {
+        doThrow(HttpClientErrorException.create(
+                        HttpStatus.NOT_FOUND,
+                        "saved job not found",
+                        null,
+                        null,
+                        null))
+                .when(downstream)
+                .savedJob(SAVED_JOB_ID, AUTHORIZATION);
+
+        var failed = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1");
+
+        assertEquals(GenerationOperationState.CREATED, failed.state());
+        assertEquals(
+                "SAVED_JOB_NOT_AVAILABLE",
+                failed.failureCode());
+        verify(downstream, never()).profile();
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+
+        doReturn(savedJobResponse("SNAPSHOT"))
+                .when(downstream)
+                .savedJob(SAVED_JOB_ID, AUTHORIZATION);
+        var nowAvailable = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1");
+        assertEquals(failed.operationId(), nowAvailable.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                nowAvailable.state());
+    }
+
+    @Test
+    void totalDeadlineStopsSlowSnapshotResolutionBeforeAnyCharge() {
+        MutableClock clock = new MutableClock(Instant.now());
+        var shortDeadlineService = new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                new OperationDeadlineGuard(clock),
+                Duration.ofMinutes(1),
+                Duration.ofSeconds(1));
+        when(downstream.savedJob(
+                SAVED_JOB_ID, AUTHORIZATION))
+                .thenAnswer(invocation -> {
+                    clock.advance(Duration.ofMinutes(2));
+                    return savedJobResponse("SNAPSHOT");
+                });
+
+        var failed = shortDeadlineService.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-snapshot-1");
+
+        assertEquals(GenerationOperationState.FAILED, failed.state());
+        assertEquals(
+                "OPERATION_DEADLINE_EXCEEDED",
+                failed.failureCode());
+        verify(downstream, never()).profile();
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+    }
+
+    @Test
+    void providerDeadlineIsAmbiguousAndNeverAutomaticallyRetried() {
+        MutableClock clock = new MutableClock(Instant.now());
+        var shortDeadlineService = new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                new OperationDeadlineGuard(clock),
+                Duration.ofMinutes(1),
+                Duration.ofSeconds(1));
+        doAnswer(invocation -> {
+                    clock.advance(Duration.ofMinutes(2));
+                    return generated(invocation.getArgument(1));
+                })
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var unknown = shortDeadlineService.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1");
+
+        assertEquals(
+                GenerationOperationState.GENERATION_OUTCOME_UNKNOWN,
+                unknown.state());
+        assertEquals(
+                "GENERATION_OUTCOME_UNKNOWN",
+                unknown.failureCode());
+        shortDeadlineService.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1");
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+    }
+
+    @Test
+    void ambiguousCreditReservationAtDeadlineRequiresRecovery() {
+        MutableClock clock = new MutableClock(Instant.now());
+        var shortDeadlineService = new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                new OperationDeadlineGuard(clock),
+                Duration.ofMinutes(1),
+                Duration.ofSeconds(1));
+        doAnswer(invocation -> {
+                    clock.advance(Duration.ofMinutes(2));
+                    return Map.of(
+                            "reservationId",
+                            RESERVATION_ID.toString(),
+                            "status",
+                            "RESERVED");
+                })
+                .when(downstream)
+                .reserve(anyString(), any(), anyLong());
+
+        var recovery = shortDeadlineService.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-reserve-1");
+
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                recovery.state());
+        assertEquals(
+                "CREDIT_RESERVATION_RECOVERY_REQUIRED",
+                recovery.failureCode());
+        assertTrue(recovery.manualActionRequired());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+    }
+
+    @Test
+    void cancellationAfterReplaySafeFailureIsPersistedAndDeterministic() {
+        doThrow(new ResourceAccessException(
+                        "estimate temporarily unavailable"))
+                .when(downstream)
+                .estimate(anyString(), anyMap());
+
+        var retryable = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "cancel-1");
+        assertEquals(
+                GenerationOperationState.SNAPSHOTS_RESOLVED,
+                retryable.state());
+        assertEquals(
+                "DOWNSTREAM_RETRYABLE",
+                retryable.failureCode());
+
+        var cancelled =
+                service.cancel(OWNER, retryable.operationId());
+        assertEquals(
+                GenerationOperationState.CANCELLED,
+                cancelled.state());
+        assertEquals(
+                GenerationOperationState.CANCELLED,
+                service.start(
+                        OWNER,
+                        AUTHORIZATION,
+                        SAVED_JOB_ID,
+                        "cancel-1").state());
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+    }
+
     private void successfulDownstream() {
         when(downstream.savedJob(
-                any(), anyString())).thenReturn(Map.of(
-                "savedJobId", SAVED_JOB_ID.toString(),
-                "canonicalJobId", "canonical-job-1",
-                "snapshotVersion", 3,
-                "contentVersion", "sha256:"
-                        + "a".repeat(64),
-                "job", Map.of(
-                        "id", "provider-job-1",
-                        "canonicalJobId", "canonical-job-1",
-                        "provider", "REED",
-                        "externalJobId", "reed-1",
-                        "title", "Java Developer",
-                        "company", "Example Ltd",
-                        "location", "London",
-                        "employmentType", "FULL_TIME",
-                        "postedDate", "2026-07-01",
-                        "description", "Build reliable services.")));
+                any(), anyString())).thenReturn(
+                        savedJobResponse("SNAPSHOT"));
         when(downstream.profile()).thenReturn(Map.of(
                 "id", 42,
                 "userId", OWNER,
@@ -383,6 +589,30 @@ class DurableGenerationServiceTest {
                         "status", "DOCUMENTS_GENERATED"));
     }
 
+    private Map<String, Object> savedJobResponse(
+            String sourceState) {
+        return Map.of(
+                "savedJobId", SAVED_JOB_ID.toString(),
+                "canonicalJobId", "canonical-job-1",
+                "canonicalSchemaVersion", "2.0",
+                "snapshotVersion", 3,
+                "contentVersion", "sha256:"
+                        + "a".repeat(64),
+                "contentSha256", "a".repeat(64),
+                "sourceState", sourceState,
+                "job", Map.of(
+                        "id", "provider-job-1",
+                        "canonicalJobId", "canonical-job-1",
+                        "provider", "REED",
+                        "externalJobId", "reed-1",
+                        "title", "Java Developer",
+                        "company", "Example Ltd",
+                        "location", "London",
+                        "employmentType", "FULL_TIME",
+                        "postedDate", "2026-07-01",
+                        "description", "Build reliable services."));
+    }
+
     private Map<String, Object> generated(UUID operationId) {
         return Map.of(
                 "operationId", operationId.toString(),
@@ -410,5 +640,32 @@ class DurableGenerationServiceTest {
                 "documentType", request.get("documentType"),
                 "lifecycleState", "DRAFT",
                 "contentSha256", "b".repeat(64));
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant current;
+
+        private MutableClock(Instant current) {
+            this.current = current;
+        }
+
+        private void advance(Duration duration) {
+            current = current.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return current;
+        }
     }
 }

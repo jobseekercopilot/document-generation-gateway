@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationDeadlineExceededException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -19,8 +20,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClientException;
@@ -29,10 +32,15 @@ import org.springframework.web.client.RestClientException;
 public class DurableGenerationService {
     private static final Pattern IDEMPOTENCY_KEY =
             Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}");
+    private static final Pattern CONTENT_VERSION =
+            Pattern.compile("sha256:[a-f0-9]{64}");
+    private static final Pattern CONTENT_SHA256 =
+            Pattern.compile("[a-f0-9]{64}");
 
     private final GenerationOperationRepository repository;
     private final GenerationDownstreamClient downstream;
     private final ObjectMapper objectMapper;
+    private final OperationDeadlineGuard deadlineGuard;
     private final Duration deadline;
     private final Duration leaseDuration;
 
@@ -40,11 +48,13 @@ public class DurableGenerationService {
             GenerationOperationRepository repository,
             GenerationDownstreamClient downstream,
             ObjectMapper objectMapper,
+            OperationDeadlineGuard deadlineGuard,
             @Value("${document-generation.operation.deadline}") Duration deadline,
             @Value("${document-generation.operation.lease}") Duration leaseDuration) {
         this.repository = repository;
         this.downstream = downstream;
         this.objectMapper = objectMapper;
+        this.deadlineGuard = deadlineGuard;
         this.deadline = requirePositive(deadline, "operation deadline");
         this.leaseDuration = requirePositive(leaseDuration, "operation lease");
     }
@@ -221,7 +231,34 @@ public class DurableGenerationService {
                     }
                 }
             }
+        } catch (GenerationDeadlineExceededException exception) {
+            return deadlineFailure(operation, leaseToken, exception);
+        } catch (GenerationSourceException exception) {
+            if (exception.retryable()) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        operation.state(),
+                        operation.data(),
+                        exception.code(),
+                        exception.getMessage());
+            }
+            return releaseAndFail(
+                    operation,
+                    leaseToken,
+                    exception.code(),
+                    exception.getMessage());
         } catch (HttpStatusCodeException exception) {
+            if (operation.state() == GenerationOperationState.CREATED
+                    && exception.getStatusCode() == HttpStatus.NOT_FOUND) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.CREATED,
+                        operation.data(),
+                        "SAVED_JOB_NOT_AVAILABLE",
+                        "The saved job is not available; save or refresh it and replay this operation.");
+            }
             if (exception.getStatusCode().is4xxClientError()
                     && beforeGeneration(operation.state())) {
                 return releaseAndFail(
@@ -251,12 +288,17 @@ public class DurableGenerationService {
             UUID leaseToken,
             String authorization) {
         Map<String, Object> savedJob =
-                downstream.savedJob(operation.savedJobId(), authorization);
+                bounded(operation, () -> downstream.savedJob(
+                        operation.savedJobId(), authorization));
+        validateSavedJob(operation, savedJob);
         Map<String, Object> rawJob = map(savedJob.get("job"), "saved job");
-        Map<String, Object> rawProfile = downstream.profile();
+        Map<String, Object> rawProfile =
+                bounded(operation, downstream::profile);
         Map<String, Object> account;
         try {
-            account = downstream.account(authorization);
+            account = bounded(
+                    operation,
+                    () -> downstream.account(authorization));
         } catch (RestClientException unavailable) {
             account = Map.of();
         }
@@ -288,13 +330,65 @@ public class DurableGenerationService {
                 null);
     }
 
+    private void validateSavedJob(
+            GenerationOperation operation,
+            Map<String, Object> savedJob) {
+        UUID returnedSavedJobId =
+                requiredUuid(savedJob, "savedJobId");
+        if (!operation.savedJobId().equals(returnedSavedJobId)) {
+            throw new GenerationSourceException(
+                    "SAVED_JOB_ID_MISMATCH",
+                    "Job Service returned a different saved job.",
+                    false);
+        }
+        String sourceState =
+                requiredText(savedJob, "sourceState");
+        if ("EXPIRED_SNAPSHOT".equals(sourceState)) {
+            throw new GenerationSourceException(
+                    "SAVED_JOB_SNAPSHOT_EXPIRED",
+                    "The saved job snapshot has expired; refresh it and replay this operation.",
+                    true);
+        }
+        if (!"SNAPSHOT".equals(sourceState)) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned an unsupported saved-job source state.",
+                    false);
+        }
+        if (!"2.0".equals(
+                requiredText(savedJob, "canonicalSchemaVersion"))) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned an unsupported canonical job schema.",
+                    false);
+        }
+        if (number(savedJob, "snapshotVersion").longValue() < 1) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned an invalid snapshot version.",
+                    false);
+        }
+        String contentVersion =
+                requiredText(savedJob, "contentVersion");
+        String contentSha256 =
+                requiredText(savedJob, "contentSha256");
+        if (!CONTENT_VERSION.matcher(contentVersion).matches()
+                || !CONTENT_SHA256.matcher(contentSha256).matches()
+                || !contentVersion.equals("sha256:" + contentSha256)) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned inconsistent snapshot content evidence.",
+                    false);
+        }
+    }
+
     private GenerationOperation estimate(
             GenerationOperation operation,
             UUID leaseToken) {
-        long estimatedTokens = downstream.estimate(
+        long estimatedTokens = bounded(operation, () -> downstream.estimate(
                 operation.ownerId(),
                 map(operation.data().get("generationRequest"),
-                        "generation request"));
+                        "generation request")));
         Map<String, Object> data = data(operation);
         data.put("estimatedTokens", estimatedTokens);
         return checkpoint(
@@ -309,10 +403,13 @@ public class DurableGenerationService {
     private GenerationOperation reserve(
             GenerationOperation operation,
             UUID leaseToken) {
-        Map<String, Object> reservation = downstream.reserve(
-                operation.ownerId(),
-                operation.id(),
-                number(operation.data(), "estimatedTokens").longValue());
+        Map<String, Object> reservation = bounded(
+                operation,
+                () -> downstream.reserve(
+                        operation.ownerId(),
+                        operation.id(),
+                        number(operation.data(), "estimatedTokens")
+                                .longValue()));
         UUID reservationId = requiredUuid(reservation, "reservationId");
         Map<String, Object> data = data(operation);
         data.put("reservationId", reservationId.toString());
@@ -330,11 +427,13 @@ public class DurableGenerationService {
             GenerationOperation operation,
             UUID leaseToken) {
         try {
-            Map<String, Object> generated = downstream.generate(
-                    operation.ownerId(),
-                    operation.id(),
-                    map(operation.data().get("generationRequest"),
-                            "generation request"));
+            Map<String, Object> generated = bounded(
+                    operation,
+                    () -> downstream.generate(
+                            operation.ownerId(),
+                            operation.id(),
+                            map(operation.data().get("generationRequest"),
+                                    "generation request")));
             UUID returnedOperation = requiredUuid(generated, "operationId");
             if (!returnedOperation.equals(operation.id())) {
                 throw new IllegalStateException(
@@ -357,6 +456,9 @@ public class DurableGenerationService {
                     data,
                     null,
                     null);
+        } catch (GenerationDeadlineExceededException exception) {
+            return generationOutcomeUnknown(
+                    operation, leaseToken, exception);
         } catch (HttpStatusCodeException exception) {
             if (exception.getStatusCode().is4xxClientError()) {
                 return releaseAndFail(
@@ -379,10 +481,10 @@ public class DurableGenerationService {
     private GenerationOperation commitCredit(
             GenerationOperation operation,
             UUID leaseToken) {
-        downstream.commit(
+        bounded(operation, () -> downstream.commit(
                 operation.ownerId(),
                 requiredUuid(operation.data(), "reservationId"),
-                number(operation.data(), "actualTokens").longValue());
+                number(operation.data(), "actualTokens").longValue()));
         return checkpoint(
                 operation,
                 leaseToken,
@@ -409,26 +511,30 @@ public class DurableGenerationService {
                 map(generated.get("generationMetadata"),
                         "generation metadata");
 
-        Map<String, Object> cv = downstream.createDocument(
-                operation.ownerId(),
-                operation.id() + ":cv-document",
-                documentRequest(
+        Map<String, Object> cv = bounded(
+                operation,
+                () -> downstream.createDocument(
                         operation.ownerId(),
-                        jobId,
-                        "CV",
-                        requiredText(generated, "cvTitle"),
-                        requiredText(generated, "cvContent"),
-                        generationMetadata));
-        Map<String, Object> coverLetter = downstream.createDocument(
-                operation.ownerId(),
-                operation.id() + ":cover-letter-document",
-                documentRequest(
+                        operation.id() + ":cv-document",
+                        documentRequest(
+                                operation.ownerId(),
+                                jobId,
+                                "CV",
+                                requiredText(generated, "cvTitle"),
+                                requiredText(generated, "cvContent"),
+                                generationMetadata)));
+        Map<String, Object> coverLetter = bounded(
+                operation,
+                () -> downstream.createDocument(
                         operation.ownerId(),
-                        jobId,
-                        "COVER_LETTER",
-                        requiredText(generated, "coverLetterTitle"),
-                        requiredText(generated, "coverLetterContent"),
-                        generationMetadata));
+                        operation.id() + ":cover-letter-document",
+                        documentRequest(
+                                operation.ownerId(),
+                                jobId,
+                                "COVER_LETTER",
+                                requiredText(generated, "coverLetterTitle"),
+                                requiredText(generated, "coverLetterContent"),
+                                generationMetadata)));
         Map<String, Object> data = data(operation);
         data.put("cvDocumentId",
                 requiredUuid(cv, "id").toString());
@@ -452,16 +558,17 @@ public class DurableGenerationService {
             while (true) {
                 switch (operation.state()) {
                     case AWAITING_APPROVAL -> {
-                        downstream.approveDocument(
-                                operation.ownerId(),
+                        GenerationOperation boundedOperation = operation;
+                        bounded(operation, () -> downstream.approveDocument(
+                                boundedOperation.ownerId(),
                                 requiredUuid(
-                                        operation.data(),
-                                        "cvDocumentId"));
-                        downstream.approveDocument(
-                                operation.ownerId(),
+                                        boundedOperation.data(),
+                                        "cvDocumentId")));
+                        bounded(operation, () -> downstream.approveDocument(
+                                boundedOperation.ownerId(),
                                 requiredUuid(
-                                        operation.data(),
-                                        "coverLetterDocumentId"));
+                                        boundedOperation.data(),
+                                        "coverLetterDocumentId")));
                         operation = checkpoint(
                                 operation,
                                 leaseToken,
@@ -499,6 +606,8 @@ public class DurableGenerationService {
                     }
                 }
             }
+        } catch (GenerationDeadlineExceededException exception) {
+            return deadlineFailure(operation, leaseToken, exception);
         } catch (HttpStatusCodeException exception) {
             if (exception.getStatusCode().is4xxClientError()) {
                 return checkpoint(
@@ -528,10 +637,12 @@ public class DurableGenerationService {
     private GenerationOperation exportCv(
             GenerationOperation operation,
             UUID leaseToken) {
-        Map<String, Object> exported = downstream.exportDocument(
-                operation.ownerId(),
-                requiredUuid(operation.data(), "cvDocumentId"),
-                operation.id() + ":cv-export");
+        Map<String, Object> exported = bounded(
+                operation,
+                () -> downstream.exportDocument(
+                        operation.ownerId(),
+                        requiredUuid(operation.data(), "cvDocumentId"),
+                        operation.id() + ":cv-export"));
         Map<String, Object> data = data(operation);
         data.put("cvDownloads", exported);
         return checkpoint(
@@ -546,12 +657,14 @@ public class DurableGenerationService {
     private GenerationOperation exportCoverLetter(
             GenerationOperation operation,
             UUID leaseToken) {
-        Map<String, Object> exported = downstream.exportDocument(
-                operation.ownerId(),
-                requiredUuid(
-                        operation.data(),
-                        "coverLetterDocumentId"),
-                operation.id() + ":cover-letter-export");
+        Map<String, Object> exported = bounded(
+                operation,
+                () -> downstream.exportDocument(
+                        operation.ownerId(),
+                        requiredUuid(
+                                operation.data(),
+                                "coverLetterDocumentId"),
+                        operation.id() + ":cover-letter-export"));
         Map<String, Object> data = data(operation);
         data.put("coverLetterDownloads", exported);
         return checkpoint(
@@ -592,10 +705,12 @@ public class DurableGenerationService {
                         "coverLetterDocumentId"));
         request.put("provenance", "GENERATED");
         request.put("initialStatus", "DOCUMENTS_GENERATED");
-        Map<String, Object> application = downstream.createApplication(
-                operation.ownerId(),
-                operation.id() + ":application",
-                request);
+        Map<String, Object> application = bounded(
+                operation,
+                () -> downstream.createApplication(
+                        operation.ownerId(),
+                        operation.id() + ":application",
+                        request));
         Map<String, Object> data = data(operation);
         data.put("applicationId",
                 requiredUuid(application, "id").toString());
@@ -853,6 +968,41 @@ public class DurableGenerationService {
                 message);
     }
 
+    private GenerationOperation deadlineFailure(
+            GenerationOperation operation,
+            UUID leaseToken,
+            GenerationDeadlineExceededException exception) {
+        if (operation.state()
+                == GenerationOperationState.GENERATION_IN_PROGRESS) {
+            return generationOutcomeUnknown(
+                    operation, leaseToken, exception);
+        }
+        if (operation.state() == GenerationOperationState.ESTIMATED
+                && exception.downstreamCallStarted()) {
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.RECOVERY_REQUIRED,
+                    operation.data(),
+                    "CREDIT_RESERVATION_RECOVERY_REQUIRED",
+                    "The deadline expired while reserving AI Credit; recover the stable operation reservation before continuing.");
+        }
+        if (beforeGeneration(operation.state())) {
+            return releaseAndFail(
+                    operation,
+                    leaseToken,
+                    "OPERATION_DEADLINE_EXCEEDED",
+                    exception.getMessage());
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                operation.data(),
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                "The operation deadline expired during a replay-safe side effect; recover using the persisted operation and stable downstream key.");
+    }
+
     private GenerationOperation retryableFailure(
             GenerationOperation operation,
             UUID leaseToken,
@@ -896,6 +1046,20 @@ public class DurableGenerationService {
                 data,
                 failureCode,
                 failureMessage);
+    }
+
+    private <T> T bounded(
+            GenerationOperation operation,
+            Supplier<T> downstreamCall) {
+        return deadlineGuard.call(
+                operation.deadlineAt(), downstreamCall);
+    }
+
+    private void bounded(
+            GenerationOperation operation,
+            Runnable downstreamCall) {
+        deadlineGuard.run(
+                operation.deadlineAt(), downstreamCall);
     }
 
     private GenerationOperation required(UUID id, String ownerId) {
@@ -1177,5 +1341,28 @@ public class DurableGenerationService {
                             + " must be positive.");
         }
         return value;
+    }
+
+    private static final class GenerationSourceException
+            extends RuntimeException {
+        private final String code;
+        private final boolean retryable;
+
+        private GenerationSourceException(
+                String code,
+                String message,
+                boolean retryable) {
+            super(message);
+            this.code = code;
+            this.retryable = retryable;
+        }
+
+        private String code() {
+            return code;
+        }
+
+        private boolean retryable() {
+            return retryable;
+        }
     }
 }
