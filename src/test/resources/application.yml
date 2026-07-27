@@ -23,6 +23,9 @@ document-generation:
   operation:
     deadline: PT10M
     lease: PT30S
+  downstream:
+    connect-timeout: PT1S
+    read-timeout: PT1S
 
 services:
   user-profile-service:

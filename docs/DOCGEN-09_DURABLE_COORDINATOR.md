@@ -18,7 +18,12 @@ to the saved-job operation API.
 
 The browser supplies no Job content and cannot choose owner or workload
 identity headers. Gateway resolves the immutable Saved Job and bounded Profile
-snapshot itself and persists their versions and SHA-256 evidence.
+snapshot itself and persists their versions and SHA-256 evidence. Only a Job
+Service `canonicalSchemaVersion=2.0` response with matching content digest and
+`sourceState=SNAPSHOT` is accepted. Missing jobs fail before credit reservation;
+`EXPIRED_SNAPSHOT` requires the user to refresh and save the job again. Both
+conditions retain the same pre-charge operation so it can be replayed after
+the canonical source becomes available.
 
 ## Durable step policy
 
@@ -42,9 +47,16 @@ to resume replay-safe steps.
 
 - Deterministic rejection before provider invocation releases an existing
   reservation and records `FAILED`.
+- One persisted absolute deadline covers snapshot, estimate, credit, provider,
+  Store, approval, Export and Tracker calls. Each HTTP connect/read receives
+  no more than the remaining operation budget; fixed connect/read ceilings
+  still apply when they are smaller.
 - A timeout, disconnect or invalid response after model invocation records
   `GENERATION_OUTCOME_UNKNOWN`. The reservation is retained for explicit
   reconciliation and the model call is not retried.
+- A deadline that expires during an ambiguous credit reservation or a
+  replay-safe post-provider side effect records `RECOVERY_REQUIRED`; recovery
+  uses the persisted operation and stable downstream identity.
 - Store, Payment, Export and Tracker failures retain their last safe state and
   can be retried with the same downstream keys.
 - An interrupted export remains at its `*_EXPORT_IN_PROGRESS` checkpoint and
@@ -69,6 +81,9 @@ DOCUMENT_GENERATION_DATABASE_USERNAME
 DOCUMENT_GENERATION_DATABASE_PASSWORD
 DOCUMENT_GENERATION_GATEWAY_TO_PAYMENT_SERVICE_TOKEN
 PAYMENT_SERVICE_URL
+DOCUMENT_GENERATION_OPERATION_DEADLINE
+DOCUMENT_GENERATION_CONNECT_TIMEOUT
+DOCUMENT_GENERATION_READ_TIMEOUT
 ```
 
 The Payment token is a distinct workload identity and is accepted only for
@@ -87,4 +102,6 @@ database before this path is enabled in a deployed fleet.
 - Regeneration is a later operation type. The initial slice permits one bounded
   generation operation per owner and saved job.
 - The legacy synchronous route is not removed by this change; Client migration
-  and integrated fleet evidence remain required before beta.
+  and integrated fleet evidence remain required before beta. It receives fixed
+  downstream connect/read ceilings but does not have the durable route's
+  absolute operation ledger.
