@@ -28,13 +28,22 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `1.2.0` adds a truthful recoverable application-document replacement
+response. The Gateway reserves a Tracker operation before Store writes, creates
+the new version in the existing document family, uses stable idempotency keys
+for Store and Export, and returns `202` with operation/recovery state whenever
+completion is still pending. Tracker alone commits the application reference.
+
 The User Profile, CV/Cover Letter and Document Export clients resolve as
 immutable, producer-owned private Maven packages
 `1.0.0-rev.86c8510ed319`, `2.0.0-rev.87fc2393309a` and
 `2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
-the consumer build. The raw Authentication, Document Store and Application
-Tracker adapters are checked against their pinned producer contracts. Generated
-sources and binaries are build output and are not committed. See
+the consumer build. The raw Authentication, Document Store, Application
+Tracker and replacement-upload adapters are checked against their pinned
+producer contracts; the replacement path consumes Store `2.2.0` and Export
+`2.1.0` while the ordinary export client remains at its immutable `2.0.0`
+coordinate until the new package is published. Generated sources and binaries
+are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 
 Authentication Service's producer-owned `/api/auth/me` contract is pinned to

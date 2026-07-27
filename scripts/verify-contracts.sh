@@ -51,9 +51,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    d9e6bc9fcbe4ef665334c58672c8062b1e4796aa \
+    03616f256feaf71199e0335ebb015facf2cb02c9 \
     contracts/openapi.json \
-    549cebba300c2caf3403b9de01d3c34de84464a280a02183751e8a9583ad982a
+    5a66ad075f36b5f9210cb9686167cc09c72ec71806b6ea88d746aa3467518734
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -69,15 +69,15 @@ verify_source \
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
-    a35fff34f86b77457df4b9e324000a32819d5aba \
+    9a26dd3239fc53e2cad434f8e18ea6b93802ab03 \
     contracts/openapi.json \
-    e696b76efc05149778d1a31df684b6ba5687120396fb6e000ce4f888346f5072
+    39ab107067af69bf082114eef5552eabe7eb08bf73217caeb9335f869a489b6a
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    b696fe81e9b900e0749e185f595ff4c98c24119d \
+    4180596ba5b23998ae6f001c4e624fbc395b4ce4 \
     contracts/openapi.json \
-    3d0595c83cc66d9037e08af6a4b087c115c9a5d99ec71491f1aa5fc3afffd6ba
+    d510b39c9629b6ea7663fa76baa6e3b14798b87315b44a65e76a8a8defab8715
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
@@ -144,7 +144,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "2.0.0") and
+    (.info.version == "2.1.0") and
     (.paths["/api/v1/document-exports/documents/{documentId}"].post.operationId
         == "exportDocument") and
     (.paths["/api/v1/document-exports/documents/{documentId}/upload"].post.operationId
@@ -159,6 +159,12 @@ jq -e '
             .in == "header" and
             .required == true and
             .schema.type == "string"))) and
+    (.paths["/api/v1/document-exports/documents/{documentId}/upload"].post.parameters
+        | any(
+            .name == "Idempotency-Key" and
+            .in == "header" and
+            .required == false and
+            .schema.type == "string")) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
@@ -172,25 +178,31 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "1.1.0") and
+    (.info.version == "2.2.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
-    (.paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"]
-        .patch.operationId == "activateDocumentVersion") and
+    (.paths["/api/v1/documents/{documentId}/approve"].patch.operationId
+        == "approveDocumentVersion") and
     (.paths["/api/v1/document-files/{id}/download"].get.operationId
         == "downloadDocumentFile") and
     ([.paths["/api/v1/documents/{id}"].get,
       .paths["/api/v1/documents"].post,
-      .paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"].patch,
+      .paths["/api/v1/documents/{documentId}/approve"].patch,
       .paths["/api/v1/document-files/{id}/download"].get]
         | all(.security | any(has("serviceToken")))) and
     ([.paths["/api/v1/documents/{id}"].get,
       .paths["/api/v1/documents"].post,
-      .paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"].patch,
+      .paths["/api/v1/documents/{documentId}/approve"].patch,
       .paths["/api/v1/document-files/{id}/download"].get]
         | all(.parameters | any(
             .name == "X-Document-Owner" and
             .in == "header"))) and
+    (.paths["/api/v1/documents"].post.parameters
+        | any(
+            .name == "Idempotency-Key" and
+            .in == "header" and
+            .required == false and
+            .schema.type == "string")) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
@@ -199,28 +211,44 @@ jq -e '
           index("documentType") != null and index("title") != null and
           index("content") != null) and
     (.components.schemas.CreateDocumentRequest.properties
-        | has("applicationId") and has("active") and
+        | has("applicationId") and has("documentFamilyId") and has("active") and
           has("originalFilename") and has("sourceType") and has("createdBy")) and
     (.components.schemas.GeneratedDocumentResponse.properties
-        | has("id") and has("version"))
+        | has("id") and has("documentFamilyId") and has("version") and
+          has("lifecycleState"))
 ' "$contract_dir/document-store-service.json" >/dev/null
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "1.1.0") and
+    (.info.version == "3.3.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
-    (.paths["/api/v1/applications/{id}/document-reference"].patch.operationId
-        == "updateDocumentReference") and
+    (.paths["/api/v1/applications/{id}/document-replacements"].post.operationId
+        == "beginDocumentReplacement") and
+    (.paths["/api/v1/applications/{id}/document-replacements/{operationId}/replacement-document"]
+        .patch.operationId == "registerReplacementDocument") and
+    (.paths["/api/v1/applications/{id}/document-replacements/{operationId}/complete"]
+        .patch.operationId == "completeDocumentReplacement") and
+    (.paths["/api/v1/applications/{id}/document-replacements/{operationId}/recovery-required"]
+        .patch.operationId == "markDocumentReplacementRecoveryRequired") and
     ([.paths["/api/v1/applications/{id}"].get,
       .paths["/api/v1/applications/document/{documentId}"].get,
-      .paths["/api/v1/applications/{id}/document-reference"].patch]
+      .paths["/api/v1/applications/{id}/document-replacements"].post,
+      .paths["/api/v1/applications/{id}/document-replacements/{operationId}/replacement-document"].patch,
+      .paths["/api/v1/applications/{id}/document-replacements/{operationId}/complete"].patch,
+      .paths["/api/v1/applications/{id}/document-replacements/{operationId}/recovery-required"].patch]
         | all(.security | any(has("serviceToken")))) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
-    (.components.schemas.UpdateDocumentReferenceRequest.required
-        | index("documentType") != null and index("documentId") != null) and
+    (.components.schemas.BeginDocumentReplacementRequest.required
+        | index("documentType") != null and index("requestSha256") != null) and
+    (.components.schemas.RegisterReplacementDocumentRequest.required
+        | index("replacementDocumentId") != null) and
+    (.components.schemas.DocumentReplacementWorkflowResponse.properties
+        | has("operationId") and has("sourceDocumentId") and
+          has("replacementDocumentId") and has("operationStatus") and
+          has("retryable") and has("recoveryCode")) and
     (.components.schemas.ApplicationRecordResponse.properties
         | has("id") and has("userId") and has("jobId") and
           has("cvDocumentId") and has("coverLetterDocumentId") and has("status"))

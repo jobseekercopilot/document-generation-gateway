@@ -103,6 +103,7 @@ public class DocumentGenerationController {
     @Operation(summary = "Replace the active CV or cover letter for an application")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Replacement DOCX stored, PDF generated, and application references updated"),
+            @ApiResponse(responseCode = "202", description = "Replacement accepted and awaiting recoverable completion"),
             @ApiResponse(responseCode = "400", description = "Invalid upload or locked application"),
             @ApiResponse(responseCode = "401", description = "No authenticated user"),
             @ApiResponse(responseCode = "502", description = "Downstream service failed")
@@ -112,11 +113,14 @@ public class DocumentGenerationController {
             @Parameter(hidden = true) Authentication authentication,
             @RequestParam("documentType") DocumentKind documentType,
             @RequestParam("file") MultipartFile file) {
-        return ResponseEntity.ok(service.replaceApplicationDocument(
+        DocumentUploadResponse response = service.replaceApplicationDocument(
                 applicationId,
                 authenticatedSubject(authentication),
                 file,
-                documentType));
+                documentType);
+        return "COMPLETED".equals(response.operationStatus())
+                ? ResponseEntity.ok(response)
+                : ResponseEntity.accepted().body(response);
     }
 
     private String authenticatedSubject(Authentication authentication) {

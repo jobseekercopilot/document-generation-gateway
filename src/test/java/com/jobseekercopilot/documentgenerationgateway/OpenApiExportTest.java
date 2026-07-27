@@ -41,7 +41,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("1.1.0", contract.path("info").path("version").asText());
+        assertEquals("1.2.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")

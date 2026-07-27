@@ -138,15 +138,53 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/export-owner" 
     exit 1
 fi
 
+copy_contracts "$temporary_dir/export-idempotency"
+jq '.paths["/api/v1/document-exports/documents/{documentId}/upload"].post.parameters |=
+        map(select(.name != "Idempotency-Key"))' \
+    "$temporary_dir/export-idempotency/document-export-service.json" \
+    > "$temporary_dir/export-idempotency/changed.json"
+mv "$temporary_dir/export-idempotency/changed.json" \
+   "$temporary_dir/export-idempotency/document-export-service.json"
+refresh_manifest "$temporary_dir/export-idempotency"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/export-idempotency" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Export replay key" >&2
+    exit 1
+fi
+
 copy_contracts "$temporary_dir/store-operation"
-jq 'del(.paths["/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"].patch)' \
+jq 'del(.paths["/api/v1/documents/{documentId}/approve"].patch)' \
     "$temporary_dir/store-operation/document-store-service.json" \
     > "$temporary_dir/store-operation/changed.json"
 mv "$temporary_dir/store-operation/changed.json" \
    "$temporary_dir/store-operation/document-store-service.json"
 refresh_manifest "$temporary_dir/store-operation"
 if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/store-operation" >/dev/null 2>&1; then
-    echo "contract policy negative test accepted removal of document activation" >&2
+    echo "contract policy negative test accepted removal of document approval" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/store-idempotency"
+jq '.paths["/api/v1/documents"].post.parameters |=
+        map(select(.name != "Idempotency-Key"))' \
+    "$temporary_dir/store-idempotency/document-store-service.json" \
+    > "$temporary_dir/store-idempotency/changed.json"
+mv "$temporary_dir/store-idempotency/changed.json" \
+   "$temporary_dir/store-idempotency/document-store-service.json"
+refresh_manifest "$temporary_dir/store-idempotency"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/store-idempotency" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Store replay key" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/store-family"
+jq 'del(.components.schemas.CreateDocumentRequest.properties.documentFamilyId)' \
+    "$temporary_dir/store-family/document-store-service.json" \
+    > "$temporary_dir/store-family/changed.json"
+mv "$temporary_dir/store-family/changed.json" \
+   "$temporary_dir/store-family/document-store-service.json"
+refresh_manifest "$temporary_dir/store-family"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/store-family" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Store family continuity" >&2
     exit 1
 fi
 
@@ -184,6 +222,18 @@ mv "$temporary_dir/tracker-security/changed.json" \
 refresh_manifest "$temporary_dir/tracker-security"
 if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/tracker-security" >/dev/null 2>&1; then
     echo "contract policy negative test accepted removal of tracker service identity" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/tracker-replacement"
+jq 'del(.paths["/api/v1/applications/{id}/document-replacements"].post)' \
+    "$temporary_dir/tracker-replacement/application-tracker-service.json" \
+    > "$temporary_dir/tracker-replacement/changed.json"
+mv "$temporary_dir/tracker-replacement/changed.json" \
+   "$temporary_dir/tracker-replacement/application-tracker-service.json"
+refresh_manifest "$temporary_dir/tracker-replacement"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/tracker-replacement" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Tracker replacement workflow" >&2
     exit 1
 fi
 

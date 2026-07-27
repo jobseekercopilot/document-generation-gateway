@@ -25,6 +25,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.Locale;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
@@ -175,12 +178,20 @@ public class DocumentGenerationService {
 
     public DocumentUploadResponse uploadReplacement(UUID generatedDocumentId, String userId, MultipartFile file,
                                                     DocumentKind documentKind, UploadFormat uploadedFormat) {
-        return uploadReplacementFile(generatedDocumentId, userId, file, documentKind, uploadedFormat, true);
+        return uploadReplacementFile(
+                generatedDocumentId,
+                userId,
+                file,
+                documentKind,
+                uploadedFormat,
+                true,
+                null);
     }
 
     private DocumentUploadResponse uploadReplacementFile(UUID generatedDocumentId, String userId, MultipartFile file,
                                                          DocumentKind documentKind, UploadFormat uploadedFormat,
-                                                         boolean validateApplicationLock) {
+                                                         boolean validateApplicationLock,
+                                                         String idempotencyKey) {
         long startedAt = System.nanoTime();
         log.info("Replacement document upload received generatedDocumentId={} documentKind={} uploadedFormat={} sizeBytes={}",
                 generatedDocumentId,
@@ -209,6 +220,9 @@ public class DocumentGenerationService {
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
             headers.set(SERVICE_TOKEN_HEADER, documentExportServiceToken);
             headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
+            if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+                headers.set("Idempotency-Key", idempotencyKey);
+            }
 
             ExportUploadResponse response = restTemplate.postForObject(
                     documentExportBaseUrl + "/api/v1/document-exports/documents/{generatedDocumentId}/upload",
@@ -235,101 +249,123 @@ public class DocumentGenerationService {
         Map<?, ?> application = fetchApplication(applicationId, userId);
         validateApplicationOwner(application, userId);
         validateApplicationStatus(application);
-
-        String currentDocumentId = currentDocumentId(application, documentKind);
-        if (currentDocumentId == null || currentDocumentId.isBlank()) {
-            throw new IllegalArgumentException("Active document reference is missing for " + documentKind);
-        }
-
-        Map<?, ?> currentDocument = restTemplate.exchange(
-                documentStoreBaseUrl + "/api/v1/documents/{documentId}",
-                HttpMethod.GET,
-                documentStoreRequest(userId, null, documentStoreReaderToken),
-                Map.class,
-                currentDocumentId).getBody();
-        if (currentDocument == null) {
-            throw new IllegalArgumentException("Document not found");
-        }
-        String content = extractDocxText(file);
-        String title = firstText(
-                stringValue(currentDocument, "title"),
-                ("%s replacement for %s").formatted(documentKind == DocumentKind.CV ? "CV" : "Cover letter",
-                        stringValue(application, "jobTitle")));
-
-        Map<String, Object> createDocument = new LinkedHashMap<>();
-        createDocument.put("userId", userId);
-        createDocument.put("jobId", stringValue(application, "jobId"));
-        createDocument.put("applicationId", applicationId.toString());
-        createDocument.put("documentType", documentKind.name());
-        createDocument.put("title", title);
-        createDocument.put("content", content);
-        createDocument.put("active", false);
-        createDocument.put("originalFilename", file.getOriginalFilename());
-        createDocument.put("sourceType", "UPLOADED");
-        createDocument.put("createdBy", userId);
-
-        Map<?, ?> created = restTemplate.exchange(
-                documentStoreBaseUrl + "/api/v1/documents",
-                HttpMethod.POST,
-                documentStoreRequest(userId, createDocument, documentStoreProducerToken),
-                Map.class).getBody();
-        if (created == null || created.get("id") == null) {
-            throw new IllegalStateException("Document Store returned no replacement document");
-        }
-        UUID newDocumentId = UUID.fromString(Objects.toString(created.get("id")));
-        Integer version = integerValue(created.get("version"));
-
-        DocumentUploadResponse uploadResponse;
+        Map<?, ?> workflow = beginReplacement(
+                applicationId,
+                userId,
+                documentKind,
+                sha256(file));
+        UUID operationId = requiredUuid(workflow, "operationId");
+        UUID sourceDocumentId = requiredUuid(workflow, "sourceDocumentId");
+        UUID newDocumentId = optionalUuid(workflow, "replacementDocumentId");
+        Integer version = null;
+        DocumentUploadResponse uploadResponse = null;
         try {
+            Map<?, ?> currentDocument = restTemplate.exchange(
+                    documentStoreBaseUrl + "/api/v1/documents/{documentId}",
+                    HttpMethod.GET,
+                    documentStoreRequest(
+                            userId, null, documentStoreReaderToken),
+                    Map.class,
+                    sourceDocumentId).getBody();
+            if (currentDocument == null
+                    || currentDocument.get("documentFamilyId") == null) {
+                throw new IllegalArgumentException(
+                        "Source document family is missing");
+            }
+            String content = extractDocxText(file);
+            String title = firstText(
+                    stringValue(currentDocument, "title"),
+                    ("%s replacement for %s").formatted(
+                            documentKind == DocumentKind.CV
+                                    ? "CV"
+                                    : "Cover letter",
+                            stringValue(application, "jobTitle")));
+
+            Map<String, Object> createDocument = new LinkedHashMap<>();
+            createDocument.put("userId", userId);
+            createDocument.put(
+                    "jobId", stringValue(application, "jobId"));
+            createDocument.put(
+                    "applicationId", applicationId.toString());
+            createDocument.put(
+                    "documentFamilyId",
+                    currentDocument.get("documentFamilyId"));
+            createDocument.put("documentType", documentKind.name());
+            createDocument.put("title", title);
+            createDocument.put("content", content);
+            createDocument.put("active", false);
+            createDocument.put(
+                    "originalFilename", file.getOriginalFilename());
+            createDocument.put("sourceType", "UPLOADED");
+            createDocument.put("createdBy", userId);
+
+            Map<?, ?> created = restTemplate.exchange(
+                    documentStoreBaseUrl + "/api/v1/documents",
+                    HttpMethod.POST,
+                    documentStoreRequest(
+                            userId,
+                            createDocument,
+                            documentStoreProducerToken,
+                            operationId + ":document"),
+                    Map.class).getBody();
+            if (created == null || created.get("id") == null) {
+                throw new IllegalStateException(
+                        "Document Store returned no replacement document");
+            }
+            newDocumentId = UUID.fromString(
+                    Objects.toString(created.get("id")));
+            version = integerValue(created.get("version"));
+            registerReplacement(
+                    applicationId, userId, operationId, newDocumentId);
+
             uploadResponse = uploadReplacementFile(
                     newDocumentId,
                     userId,
                     file,
                     documentKind,
                     UploadFormat.DOCX,
-                    false);
+                    false,
+                    operationId.toString());
+
+            restTemplate.exchange(
+                    documentStoreBaseUrl
+                            + "/api/v1/documents/{documentId}/approve",
+                    HttpMethod.PATCH,
+                    documentStoreRequest(
+                            userId, null, documentStoreProducerToken),
+                    Map.class,
+                    newDocumentId);
+
+            Map<?, ?> completed = completeReplacement(
+                    applicationId, userId, operationId);
+            log.info("Application document replacement completed applicationId={} documentKind={} version={} durationMs={}",
+                    applicationId,
+                    documentKind,
+                    version,
+                    (System.nanoTime() - startedAt) / 1_000_000);
+            return replacementResponse(
+                    completed,
+                    newDocumentId,
+                    applicationId,
+                    version,
+                    uploadResponse,
+                    documentKind);
         } catch (RuntimeException exception) {
-            throw new IllegalStateException("DOCUMENT_CONVERSION_FAILED", exception);
+            Map<?, ?> recovery = markReplacementRecovery(
+                    applicationId, userId, operationId);
+            log.warn(
+                    "Application document replacement requires recovery applicationId={} documentKind={} error={}",
+                    applicationId,
+                    documentKind,
+                    exception.getClass().getSimpleName());
+            return replacementResponse(
+                    recovery,
+                    newDocumentId,
+                    applicationId,
+                    version,
+                    uploadResponse,
+                    documentKind);
         }
-
-        restTemplate.exchange(
-                documentStoreBaseUrl + "/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}",
-                HttpMethod.PATCH,
-                documentStoreRequest(userId, null, documentStoreProducerToken),
-                Map.class,
-                applicationId.toString(),
-                documentKind.name(),
-                newDocumentId);
-
-        Map<String, Object> referenceUpdate = Map.of(
-                "documentType", documentKind.name(),
-                "documentId", newDocumentId.toString());
-        ResponseEntity<Map> updatedApplicationResponse = restTemplate.exchange(
-                applicationTrackerBaseUrl + "/api/v1/applications/{applicationId}/document-reference",
-                HttpMethod.PATCH,
-                applicationTrackerRequest(userId, referenceUpdate),
-                Map.class,
-                applicationId);
-        Map<?, ?> updatedApplication = updatedApplicationResponse.getBody();
-
-        log.info("Application document replacement completed applicationId={} documentKind={} newDocumentId={} version={} durationMs={}",
-                applicationId,
-                documentKind,
-                newDocumentId,
-                version,
-                (System.nanoTime() - startedAt) / 1_000_000);
-        return new DocumentUploadResponse(
-                newDocumentId,
-                applicationId,
-                stringValue(updatedApplication, "cvDocumentId"),
-                stringValue(updatedApplication, "coverLetterDocumentId"),
-                version,
-                uploadResponse.uploadedFile(),
-                uploadResponse.regeneratedFiles(),
-                uploadResponse.latestFiles(),
-                documentKind == DocumentKind.CV
-                        ? "CV replaced successfully. PDF version has been updated."
-                        : "Cover letter replaced successfully. PDF version has been updated.");
     }
 
     private GenerateCvCoverLetterResponse generateCvAndCoverLetter(String userId, Map<String, Object> profile, Job job) {
@@ -443,7 +479,159 @@ public class DocumentGenerationService {
                 new DocumentDownloadsResponse(
                         latest == null ? null : toDownload(latest.docx()),
                         latest == null ? null : toDownload(latest.pdf())),
+                null,
+                null,
+                false,
+                null,
                 response.message());
+    }
+
+    private Map<?, ?> beginReplacement(
+            UUID applicationId,
+            String userId,
+            DocumentKind documentKind,
+            String requestSha256) {
+        Map<String, Object> request = Map.of(
+                "documentType", documentKind.name(),
+                "requestSha256", requestSha256);
+        Map<?, ?> response = restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements",
+                HttpMethod.POST,
+                applicationTrackerRequest(userId, request),
+                Map.class,
+                applicationId).getBody();
+        if (response == null) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no replacement workflow");
+        }
+        return response;
+    }
+
+    private void registerReplacement(
+            UUID applicationId,
+            String userId,
+            UUID operationId,
+            UUID replacementDocumentId) {
+        restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements/{operationId}/replacement-document",
+                HttpMethod.PATCH,
+                applicationTrackerRequest(
+                        userId,
+                        Map.of(
+                                "replacementDocumentId",
+                                replacementDocumentId)),
+                Map.class,
+                applicationId,
+                operationId);
+    }
+
+    private Map<?, ?> completeReplacement(
+            UUID applicationId,
+            String userId,
+            UUID operationId) {
+        Map<?, ?> response = restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements/{operationId}/complete",
+                HttpMethod.PATCH,
+                applicationTrackerRequest(userId, null),
+                Map.class,
+                applicationId,
+                operationId).getBody();
+        if (response == null) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no replacement outcome");
+        }
+        return response;
+    }
+
+    private Map<?, ?> markReplacementRecovery(
+            UUID applicationId,
+            String userId,
+            UUID operationId) {
+        Map<?, ?> response = restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements/{operationId}/recovery-required",
+                HttpMethod.PATCH,
+                applicationTrackerRequest(userId, null),
+                Map.class,
+                applicationId,
+                operationId).getBody();
+        if (response == null) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no recovery outcome");
+        }
+        return response;
+    }
+
+    private DocumentUploadResponse replacementResponse(
+            Map<?, ?> workflow,
+            UUID replacementDocumentId,
+            UUID applicationId,
+            Integer version,
+            DocumentUploadResponse upload,
+            DocumentKind documentKind) {
+        String operationStatus =
+                stringValue(workflow, "operationStatus");
+        boolean completed = "COMPLETED".equals(operationStatus);
+        UUID resolvedDocumentId = replacementDocumentId == null
+                ? optionalUuid(workflow, "replacementDocumentId")
+                : replacementDocumentId;
+        return new DocumentUploadResponse(
+                resolvedDocumentId,
+                applicationId,
+                stringValue(workflow, "cvDocumentId"),
+                stringValue(workflow, "coverLetterDocumentId"),
+                version,
+                upload == null ? null : upload.uploadedFile(),
+                upload == null ? List.of() : upload.regeneratedFiles(),
+                upload == null ? null : upload.latestFiles(),
+                requiredUuid(workflow, "operationId"),
+                operationStatus,
+                booleanValue(workflow, "retryable"),
+                stringValue(workflow, "recoveryCode"),
+                completed
+                        ? documentKind == DocumentKind.CV
+                                ? "CV replaced successfully. PDF version has been updated."
+                                : "Cover letter replaced successfully. PDF version has been updated."
+                        : "Document replacement is pending recoverable completion.");
+    }
+
+    private UUID requiredUuid(Map<?, ?> map, String key) {
+        UUID value = optionalUuid(map, key);
+        if (value == null) {
+            throw new IllegalStateException(key + " is missing");
+        }
+        return value;
+    }
+
+    private UUID optionalUuid(Map<?, ?> map, String key) {
+        String value = stringValue(map, key);
+        return value == null || value.isBlank()
+                ? null
+                : UUID.fromString(value);
+    }
+
+    private boolean booleanValue(Map<?, ?> map, String key) {
+        Object value = map == null ? null : map.get(key);
+        return value instanceof Boolean bool
+                ? bool
+                : Boolean.parseBoolean(Objects.toString(value, "false"));
+    }
+
+    private String sha256(MultipartFile file) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(file.getBytes()));
+        } catch (java.io.IOException exception) {
+            throw new IllegalArgumentException(
+                    "Unable to read uploaded file");
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(
+                    "SHA-256 is unavailable", exception);
+        }
     }
 
     private DownloadFileResponse toDownload(ExportFileItem item) {
@@ -623,9 +811,21 @@ public class DocumentGenerationService {
             String userId,
             Object body,
             String serviceToken) {
+        return documentStoreRequest(
+                userId, body, serviceToken, null);
+    }
+
+    private HttpEntity<?> documentStoreRequest(
+            String userId,
+            Object body,
+            String serviceToken,
+            String idempotencyKey) {
         HttpHeaders headers = new HttpHeaders();
         headers.set(SERVICE_TOKEN_HEADER, serviceToken);
         headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            headers.set("Idempotency-Key", idempotencyKey);
+        }
         if (body != null) {
             headers.setContentType(MediaType.APPLICATION_JSON);
         }

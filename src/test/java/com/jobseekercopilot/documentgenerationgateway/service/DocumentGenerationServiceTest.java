@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,6 +34,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClientException;
 
 class DocumentGenerationServiceTest {
     private RestTemplate uploadRestTemplate;
@@ -259,8 +261,11 @@ class DocumentGenerationServiceTest {
         var restTemplate = Mockito.mock(RestTemplate.class);
         UUID applicationId = UUID.randomUUID();
         UUID currentDocumentId = UUID.randomUUID();
+        UUID documentFamilyId = UUID.randomUUID();
         UUID newDocumentId = UUID.randomUUID();
         UUID uploadedFileId = UUID.randomUUID();
+        UUID workflowId = UUID.randomUUID();
+        UUID coverLetterId = UUID.randomUUID();
 
         when(restTemplate.exchange(
                 Mockito.eq("http://tracker/api/v1/applications/{applicationId}"),
@@ -275,12 +280,29 @@ class DocumentGenerationServiceTest {
                         "status", "DOCUMENTS_GENERATED",
                         "cvDocumentId", currentDocumentId.toString())));
         when(restTemplate.exchange(
+                Mockito.eq("http://tracker/api/v1/applications/{applicationId}/document-replacements"),
+                Mockito.eq(HttpMethod.POST),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(applicationId)))
+                .thenReturn(ResponseEntity.accepted().body(Map.of(
+                        "operationId", workflowId.toString(),
+                        "applicationId", applicationId.toString(),
+                        "documentType", "CV",
+                        "sourceDocumentId", currentDocumentId.toString(),
+                        "operationStatus", "PENDING",
+                        "retryable", true,
+                        "cvDocumentId", currentDocumentId.toString(),
+                        "coverLetterDocumentId", coverLetterId.toString())));
+        when(restTemplate.exchange(
                 Mockito.eq("http://store/api/v1/documents/{documentId}"),
                 Mockito.eq(HttpMethod.GET),
                 Mockito.<HttpEntity<?>>any(),
                 Mockito.eq(Map.class),
-                Mockito.eq(currentDocumentId.toString())))
-                .thenReturn(ResponseEntity.ok(Map.of("title", "Developer CV")));
+                Mockito.eq(currentDocumentId)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "title", "Developer CV",
+                        "documentFamilyId", documentFamilyId.toString())));
         when(restTemplate.exchange(
                 Mockito.eq("http://store/api/v1/documents"),
                 Mockito.eq(HttpMethod.POST),
@@ -289,6 +311,16 @@ class DocumentGenerationServiceTest {
                 .thenReturn(ResponseEntity.ok(Map.of(
                         "id", newDocumentId.toString(),
                         "version", 2)));
+        when(restTemplate.exchange(
+                Mockito.eq("http://tracker/api/v1/applications/{applicationId}/document-replacements/{operationId}/replacement-document"),
+                Mockito.eq(HttpMethod.PATCH),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(applicationId),
+                Mockito.eq(workflowId)))
+                .thenReturn(ResponseEntity.accepted().body(Map.of(
+                        "operationId", workflowId.toString(),
+                        "operationStatus", "RUNNING")));
         when(restTemplate.postForObject(
                 Mockito.eq("http://export/api/v1/document-exports/documents/{generatedDocumentId}/upload"),
                 Mockito.any(),
@@ -306,23 +338,25 @@ class DocumentGenerationServiceTest {
                         new ExportLatestFiles(null, null),
                         "Uploaded"));
         when(restTemplate.exchange(
-                Mockito.eq("http://store/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"),
+                Mockito.eq("http://store/api/v1/documents/{documentId}/approve"),
                 Mockito.eq(HttpMethod.PATCH),
                 Mockito.<HttpEntity<?>>any(),
                 Mockito.eq(Map.class),
-                Mockito.eq(applicationId.toString()),
-                Mockito.eq("CV"),
                 Mockito.eq(newDocumentId)))
                 .thenReturn(ResponseEntity.ok(Map.of()));
         when(restTemplate.exchange(
-                Mockito.eq("http://tracker/api/v1/applications/{applicationId}/document-reference"),
+                Mockito.eq("http://tracker/api/v1/applications/{applicationId}/document-replacements/{operationId}/complete"),
                 Mockito.eq(HttpMethod.PATCH),
                 Mockito.<HttpEntity<?>>any(),
                 Mockito.eq(Map.class),
-                Mockito.eq(applicationId)))
+                Mockito.eq(applicationId),
+                Mockito.eq(workflowId)))
                 .thenReturn(ResponseEntity.ok(Map.of(
+                        "operationId", workflowId.toString(),
+                        "operationStatus", "COMPLETED",
+                        "retryable", false,
                         "cvDocumentId", newDocumentId.toString(),
-                        "coverLetterDocumentId", UUID.randomUUID().toString())));
+                        "coverLetterDocumentId", coverLetterId.toString())));
 
         var service = new DocumentGenerationService(
                 profiles,
@@ -353,6 +387,8 @@ class DocumentGenerationServiceTest {
                 DocumentKind.CV);
 
         assertEquals(newDocumentId, result.generatedDocumentId());
+        assertEquals(workflowId, result.operationId());
+        assertEquals("COMPLETED", result.operationStatus());
 
         var readRequest = ArgumentCaptor.forClass(HttpEntity.class);
         verify(restTemplate).exchange(
@@ -360,7 +396,7 @@ class DocumentGenerationServiceTest {
                 Mockito.eq(HttpMethod.GET),
                 readRequest.capture(),
                 Mockito.eq(Map.class),
-                Mockito.eq(currentDocumentId.toString()));
+                Mockito.eq(currentDocumentId));
         assertStoreIdentity(
                 readRequest.getValue(),
                 "test-only-document-store-reader-token-32-bytes");
@@ -375,19 +411,159 @@ class DocumentGenerationServiceTest {
                 createRequest.getValue(),
                 "test-only-document-store-producer-token-32-bytes");
         assertEquals("alice", ((Map<?, ?>) createRequest.getValue().getBody()).get("userId"));
+        assertEquals(
+                documentFamilyId.toString(),
+                ((Map<?, ?>) createRequest.getValue().getBody())
+                        .get("documentFamilyId"));
+        assertEquals(
+                workflowId + ":document",
+                createRequest.getValue().getHeaders()
+                        .getFirst("Idempotency-Key"));
 
-        var activateRequest = ArgumentCaptor.forClass(HttpEntity.class);
+        var approveRequest = ArgumentCaptor.forClass(HttpEntity.class);
         verify(restTemplate).exchange(
-                Mockito.eq("http://store/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}"),
+                Mockito.eq("http://store/api/v1/documents/{documentId}/approve"),
                 Mockito.eq(HttpMethod.PATCH),
-                activateRequest.capture(),
+                approveRequest.capture(),
                 Mockito.eq(Map.class),
-                Mockito.eq(applicationId.toString()),
-                Mockito.eq("CV"),
                 Mockito.eq(newDocumentId));
         assertStoreIdentity(
-                activateRequest.getValue(),
+                approveRequest.getValue(),
                 "test-only-document-store-producer-token-32-bytes");
+
+        var exportRequest = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).postForObject(
+                Mockito.eq("http://export/api/v1/document-exports/documents/{generatedDocumentId}/upload"),
+                exportRequest.capture(),
+                Mockito.eq(ExportUploadResponse.class),
+                Mockito.eq(newDocumentId));
+        assertEquals(
+                workflowId.toString(),
+                exportRequest.getValue().getHeaders()
+                        .getFirst("Idempotency-Key"));
+    }
+
+    @Test
+    void replacementDependencyFailureReturnsDurableRecoveryOutcome()
+            throws Exception {
+        var profiles = Mockito.mock(UserProfilesApi.class);
+        var exporter = Mockito.mock(DocumentExportsApi.class);
+        var restTemplate = Mockito.mock(RestTemplate.class);
+        UUID applicationId = UUID.randomUUID();
+        UUID sourceDocumentId = UUID.randomUUID();
+        UUID familyId = UUID.randomUUID();
+        UUID replacementId = UUID.randomUUID();
+        UUID operationId = UUID.randomUUID();
+
+        when(restTemplate.exchange(
+                Mockito.eq("http://tracker/api/v1/applications/{applicationId}"),
+                Mockito.eq(HttpMethod.GET),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(applicationId)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "userId", "alice",
+                        "jobId", "job-1",
+                        "jobTitle", "Developer",
+                        "status", "DOCUMENTS_GENERATED",
+                        "cvDocumentId", sourceDocumentId.toString())));
+        when(restTemplate.exchange(
+                Mockito.eq("http://tracker/api/v1/applications/{applicationId}/document-replacements"),
+                Mockito.eq(HttpMethod.POST),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(applicationId)))
+                .thenReturn(ResponseEntity.accepted().body(Map.of(
+                        "operationId", operationId.toString(),
+                        "sourceDocumentId", sourceDocumentId.toString(),
+                        "operationStatus", "PENDING",
+                        "retryable", true)));
+        when(restTemplate.exchange(
+                Mockito.eq("http://store/api/v1/documents/{documentId}"),
+                Mockito.eq(HttpMethod.GET),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(sourceDocumentId)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "title", "Developer CV",
+                        "documentFamilyId", familyId.toString())));
+        when(restTemplate.exchange(
+                Mockito.eq("http://store/api/v1/documents"),
+                Mockito.eq(HttpMethod.POST),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "id", replacementId.toString(),
+                        "version", 2)));
+        when(restTemplate.exchange(
+                Mockito.eq("http://tracker/api/v1/applications/{applicationId}/document-replacements/{operationId}/replacement-document"),
+                Mockito.eq(HttpMethod.PATCH),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(applicationId),
+                Mockito.eq(operationId)))
+                .thenReturn(ResponseEntity.accepted().body(Map.of(
+                        "operationId", operationId.toString(),
+                        "operationStatus", "RUNNING")));
+        when(restTemplate.postForObject(
+                Mockito.eq("http://export/api/v1/document-exports/documents/{generatedDocumentId}/upload"),
+                Mockito.any(),
+                Mockito.eq(ExportUploadResponse.class),
+                Mockito.eq(replacementId)))
+                .thenThrow(new RestClientException("export unavailable"));
+        when(restTemplate.exchange(
+                Mockito.eq("http://tracker/api/v1/applications/{applicationId}/document-replacements/{operationId}/recovery-required"),
+                Mockito.eq(HttpMethod.PATCH),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(applicationId),
+                Mockito.eq(operationId)))
+                .thenReturn(ResponseEntity.accepted().body(Map.of(
+                        "operationId", operationId.toString(),
+                        "operationStatus", "RECOVERY_REQUIRED",
+                        "retryable", true,
+                        "recoveryCode", "REPLACEMENT_STEP_FAILED",
+                        "cvDocumentId", sourceDocumentId.toString())));
+
+        var service = new DocumentGenerationService(
+                profiles,
+                exporter,
+                new ObjectMapper(),
+                restTemplate,
+                "http://cv",
+                "http://auth",
+                "http://export",
+                "http://store",
+                "http://tracker",
+                "test-only-authentication-service-token-32-bytes",
+                "test-only-application-producer-token-32-bytes",
+                "test-only-cv-cover-letter-service-token-32-bytes",
+                "test-only-document-export-service-token-32-bytes",
+                "test-only-document-store-producer-token-32-bytes",
+                "test-only-document-store-reader-token-32-bytes");
+        var file = new MockMultipartFile(
+                "file",
+                "cv.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                validDocx());
+
+        var result = service.replaceApplicationDocument(
+                applicationId,
+                "alice",
+                file,
+                DocumentKind.CV);
+
+        assertEquals(operationId, result.operationId());
+        assertEquals("RECOVERY_REQUIRED", result.operationStatus());
+        assertEquals(true, result.retryable());
+        assertEquals("REPLACEMENT_STEP_FAILED", result.recoveryCode());
+        assertEquals(sourceDocumentId.toString(), result.cvDocumentId());
+        verify(restTemplate, never()).exchange(
+                Mockito.eq("http://store/api/v1/documents/{documentId}/approve"),
+                Mockito.eq(HttpMethod.PATCH),
+                Mockito.<HttpEntity<?>>any(),
+                Mockito.eq(Map.class),
+                Mockito.eq(replacementId));
     }
 
     private DocumentExportResponse exportResponse(UUID docxFileId, UUID pdfFileId, String docxFileName, String pdfFileName) {

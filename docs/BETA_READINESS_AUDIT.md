@@ -85,6 +85,11 @@ record.
    consumer slices: Application Tracker lookups and Export replacement require
    a validated owner plus dedicated service identity. Cross-user fleet evidence
    remains required.
+   APP-08 now also reserves durable Tracker state before replacement writes,
+   preserves the old application reference until approval, replays Store and
+   Export writes with stable operation keys, and reports incomplete work as
+   recoverable `202`. Broader generation orchestration and fleet E2E evidence
+   remain required.
 8. Upload validation checks extension/MIME/basic ZIP members only; it lacks
    bounded decompression, macro/relationship/content checks, and filename
    hardening evidence.

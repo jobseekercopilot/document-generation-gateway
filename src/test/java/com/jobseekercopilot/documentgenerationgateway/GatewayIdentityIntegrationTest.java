@@ -8,9 +8,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownloadService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentGenerationService;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
@@ -20,6 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -119,6 +122,54 @@ class GatewayIdentityIntegrationTest {
         verify(downloadService).download(
                 ArgumentMatchers.eq(java.util.UUID.fromString(fileId)),
                 ArgumentMatchers.eq("alice"));
+    }
+
+    @Test
+    void recoverableReplacementReturnsAcceptedWithoutClaimingCompletion()
+            throws Exception {
+        UUID applicationId = UUID.randomUUID();
+        UUID operationId = UUID.randomUUID();
+        String token = JWKS.validToken("alice");
+        org.mockito.Mockito.when(generationService.replaceApplicationDocument(
+                        ArgumentMatchers.eq(applicationId),
+                        ArgumentMatchers.eq("alice"),
+                        ArgumentMatchers.any(),
+                        ArgumentMatchers.any()))
+                .thenReturn(new DocumentUploadResponse(
+                        null,
+                        applicationId,
+                        "11111111-1111-4111-8111-111111111111",
+                        null,
+                        null,
+                        null,
+                        List.of(),
+                        null,
+                        operationId,
+                        "RECOVERY_REQUIRED",
+                        true,
+                        "REPLACEMENT_STEP_FAILED",
+                        "Replacement is pending recoverable completion."));
+        MockMultipartFile file = new MockMultipartFile(
+                "file",
+                "cv.docx",
+                "application/vnd.openxmlformats-officedocument"
+                        + ".wordprocessingml.document",
+                "synthetic".getBytes());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request
+                        .MockMvcRequestBuilders.multipart(
+                                "/api/v1/document-generation/applications/"
+                                        + "{applicationId}/replace",
+                                applicationId)
+                        .file(file)
+                        .param("documentType", "CV")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.operationId")
+                        .value(operationId.toString()))
+                .andExpect(jsonPath("$.operationStatus")
+                        .value("RECOVERY_REQUIRED"))
+                .andExpect(jsonPath("$.retryable").value(true));
     }
 
     @Test
