@@ -1,0 +1,4 @@
+repository=jobseekercopilot/job-service
+revision=badf3f061732a0bc662722227ee19f877dd463da
+path=api/openapi.yaml
+sha256=6465ccfab96a5df67e3bb16a06c3edc4d2a76735b2d789a2237b264636127506

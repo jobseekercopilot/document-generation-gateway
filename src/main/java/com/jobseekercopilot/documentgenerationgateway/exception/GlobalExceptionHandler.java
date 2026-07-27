@@ -1,6 +1,8 @@
 package com.jobseekercopilot.documentgenerationgateway.exception;
 
 import java.util.Map;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -12,6 +14,22 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    @ExceptionHandler(GenerationNotFoundException.class)
+    ResponseEntity<Map<String, String>> operationNotFound(
+            GenerationNotFoundException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                "error", "GENERATION_OPERATION_NOT_FOUND",
+                "message", exception.getMessage()));
+    }
+
+    @ExceptionHandler(GenerationConflictException.class)
+    ResponseEntity<Map<String, String>> operationConflict(
+            GenerationConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "error", "GENERATION_OPERATION_CONFLICT",
+                "message", exception.getMessage()));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<Map<String, String>> invalidRequest(MethodArgumentNotValidException exception) {
         return ResponseEntity.badRequest().body(Map.of("error", "INVALID_REQUEST", "message", "Job is required"));

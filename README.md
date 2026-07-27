@@ -3,10 +3,11 @@
 Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
-This service is **not beta-ready**. The gateway accepts browser-supplied job
-data and runs a long synchronous non-atomic workflow. Its six direct service
-boundaries now bind reviewed credentials and owner context where required, but
-runtime fleet wiring and cross-user E2E evidence remain outstanding. See
+This service is **not beta-ready**. A new durable saved-job operation API now
+resolves canonical snapshots, coordinates AI Credit, stores drafts and waits
+for exact-version approval before export and Tracker creation. The older route
+still accepts browser-supplied Job data during migration, and runtime database,
+Client/BFF wiring and cross-user E2E evidence remain outstanding. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
 The cross-repository document ownership boundary is defined by the accepted
@@ -28,22 +29,25 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-Version `1.2.0` adds a truthful recoverable application-document replacement
+Version `1.3.0` adds the durable initial-generation operation described in
+[`docs/DOCGEN-09_DURABLE_COORDINATOR.md`](docs/DOCGEN-09_DURABLE_COORDINATOR.md).
+It retains the version `1.2.0` recoverable application-document replacement
 response. The Gateway reserves a Tracker operation before Store writes, creates
 the new version in the existing document family, uses stable idempotency keys
 for Store and Export, and returns `202` with operation/recovery state whenever
 completion is still pending. Tracker alone commits the application reference.
 
-The User Profile, CV/Cover Letter and Document Export clients resolve as
-immutable, producer-owned private Maven packages
+The User Profile, legacy CV/Cover Letter and Document Export clients resolve
+as immutable, producer-owned private Maven packages
 `1.0.0-rev.86c8510ed319`, `2.0.0-rev.87fc2393309a` and
 `2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
-the consumer build. The raw Authentication, Document Store, Application
-Tracker and replacement-upload adapters are checked against their pinned
-producer contracts; the replacement path consumes Store `2.2.0` and Export
-`2.1.0` while the ordinary export client remains at its immutable `2.0.0`
-coordinate until the new package is published. Generated sources and binaries
-are build output and are not committed. See
+the consumer build. The new durable flow uses focused handwritten adapters for
+Job `2.0.0`, Payment `3.0.0` and CV/Cover Letter `3.2.0`. The raw
+Authentication, Document Store, Application Tracker and replacement-upload
+adapters are also checked against their pinned producer contracts. The durable
+path consumes Store `2.2.0` and Export `3.0.0` through focused handwritten
+adapters, while the legacy route retains the immutable Export `2.0.0` client.
+Generated sources and binaries are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 
 Authentication Service's producer-owned `/api/auth/me` contract is pinned to
@@ -67,9 +71,13 @@ CV_COVER_LETTER_GATEWAY_TOKEN
 DOCUMENT_EXPORT_GATEWAY_TOKEN
 DOCUMENT_STORE_PRODUCER_TOKEN
 DOCUMENT_STORE_READER_TOKEN
+DOCUMENT_GENERATION_GATEWAY_TO_PAYMENT_SERVICE_TOKEN
+DOCUMENT_GENERATION_DATABASE_URL
+DOCUMENT_GENERATION_DATABASE_USERNAME
+DOCUMENT_GENERATION_DATABASE_PASSWORD
 ```
 
-The six service tokens must be pairwise distinct and contain at least 32 bytes. They
+The seven service tokens must be pairwise distinct and contain at least 32 bytes. They
 have no source-controlled runtime default. See
 [`docs/IDENTITY_BOUNDARY.md`](docs/IDENTITY_BOUNDARY.md).
 

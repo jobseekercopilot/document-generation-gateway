@@ -16,6 +16,7 @@ public class DownstreamServiceCredentials {
     private final String documentExportServiceToken;
     private final String documentStoreProducerToken;
     private final String documentStoreReaderToken;
+    private final String paymentServiceToken;
 
     public DownstreamServiceCredentials(
             @Value("${document-generation.security.authentication-service-token}")
@@ -29,7 +30,9 @@ public class DownstreamServiceCredentials {
             @Value("${document-generation.security.document-store-producer-token}")
             String documentStoreProducerToken,
             @Value("${document-generation.security.document-store-reader-token}")
-            String documentStoreReaderToken) {
+            String documentStoreReaderToken,
+            @Value("${document-generation.security.payment-service-token}")
+            String paymentServiceToken) {
         this.authenticationServiceToken = validate(
                 authenticationServiceToken,
                 "Authentication service token");
@@ -48,13 +51,17 @@ public class DownstreamServiceCredentials {
         this.documentStoreReaderToken = validate(
                 documentStoreReaderToken,
                 "Document Store reader token");
+        this.paymentServiceToken = validate(
+                paymentServiceToken,
+                "Payment Service token");
         requireDistinct(
                 authenticationServiceToken,
                 applicationTrackerProducerToken,
                 cvCoverLetterServiceToken,
                 documentExportServiceToken,
                 documentStoreProducerToken,
-                documentStoreReaderToken);
+                documentStoreReaderToken,
+                paymentServiceToken);
     }
 
     public String authenticationServiceToken() {
@@ -79,6 +86,10 @@ public class DownstreamServiceCredentials {
 
     public String documentStoreReaderToken() {
         return documentStoreReaderToken;
+    }
+
+    public String paymentServiceToken() {
+        return paymentServiceToken;
     }
 
     private static String validate(String value, String label) {

@@ -1,12 +1,13 @@
 # Producer contract governance
 
-Document Generation Gateway consumes six live cross-service boundaries. It
-resolves the User Profile, CV/Cover Letter and Document Export Java clients
-from their producers' immutable private Maven packages. It no longer generates
-Java clients inside the consumer build. Authentication, Document Store and
-Application Tracker use handwritten `RestTemplate` boundaries, so their
-consumed operations are pinned and checked without generating unused clients.
-The unused generated client dependencies and API beans are removed rather than
+Document Generation Gateway consumes eight live cross-service boundaries. It
+resolves the User Profile, legacy CV/Cover Letter and Document Export Java
+clients from their producers' immutable private Maven packages. It no longer
+generates Java clients inside the consumer build. Authentication, Job,
+Payment, Document Store, Application Tracker and the new CV/Cover Letter
+draft flow use focused handwritten HTTP boundaries, so their consumed
+operations are pinned and checked without generating unused clients. The
+unused generated client dependencies and API beans are removed rather than
 replaced with new dead output.
 
 ## Current pins
@@ -15,8 +16,10 @@ replaced with new dead output.
 | --- | --- | --- | --- | --- | --- |
 | `jobseekercopilot/authentication-service` | `2964aeb07b9861cce555d28cc58c6b9fab1f6107` | `contracts/openapi.json` | `1.0.0` | `ce7f707b921a16fb8e53b580032bac4542334ed47f8f07c474e63ba2ecc4c812` | Handwritten `/api/auth/me` adapter compatibility |
 | `jobseekercopilot/user-profile-service` | `86c8510ed319a059b991e6f9f1e43b0e101c5d1f` | `api/openapi.json` | `1.0.0` | `ffaaa16a169ab11d864f82440be9fcc7d5df2d4f2d63a3525d40bda497ea6598` | Published Java client `com.jobseekercopilot.clients:user-profile-service-client:1.0.0-rev.86c8510ed319` |
-| `jobseekercopilot/cv-cover-letter-service` | `87fc2393309ad3007cba6ac27aa618fc3cc81aa9` | `contracts/openapi.json` | `2.0.0` | `8583f844b297bc32472e1fbf0b4bc273972477cc81cb0a25eba6e2ac5a048d95` | Published Java client `com.jobseekercopilot.clients:cv-cover-letter-service-client:2.0.0-rev.87fc2393309a`; generation requires service identity plus owner |
-| `jobseekercopilot/document-export-service` | `9a26dd3239fc53e2cad434f8e18ea6b93802ab03` | `contracts/openapi.json` | `2.1.0` | `39ab107067af69bf082114eef5552eabe7eb08bf73217caeb9335f869a489b6a` | Handwritten replacement upload uses the replay-safe `Idempotency-Key`; ordinary export retains the reviewed `2.0.0-rev.a35fff34f86b` generated client until the `2.1.0` package is published |
+| `jobseekercopilot/cv-cover-letter-service` | `8efee874ef50f8967326346023181de19c03b5e2` | `contracts/openapi.json` | `3.2.0` | `cb8e6f194fac88c45a875c47d1e0616f9df157c2d9df8c815ccfe3ec931e1654` | New draft route requires service identity, owner and operation ID; the old generated client remains only for the legacy route |
+| `jobseekercopilot/job-service` | `badf3f061732a0bc662722227ee19f877dd463da` | `api/openapi.yaml` | `2.0.0` | `6465ccfab96a5df67e3bb16a06c3edc4d2a76735b2d789a2237b264636127506` | Saved-job lookup supplies the canonical immutable snapshot and digest |
+| `jobseekercopilot/payment-service` | `0430cd09fd390a09d5445672504560ffde64cbe4` | `contracts/openapi.json` | `3.0.0` | `08312957171b34df832b5b3e62ffba93d68007981ac7c284e8b0bff7de22295a` | Dedicated Gateway identity may use only owner-scoped reservation lifecycle routes |
+| `jobseekercopilot/document-export-service` | `b71014fe72d5b3660a95e55facd3d627078d892f` | `contracts/openapi.json` | `3.0.0` | `17d37926cc6c9dedacb526e018577cb3c1aaf976fdcda24a588d541f9ec4f042` | Handwritten ordinary export and replacement adapters use stable replay keys; the old generated client remains only for the legacy route |
 | `jobseekercopilot/document-store-service` | `4180596ba5b23998ae6f001c4e624fbc395b4ce4` | `contracts/openapi.json` | `2.2.0` | `d510b39c9629b6ea7663fa76baa6e3b14798b87315b44a65e76a8a8defab8715` | Owner-scoped handwritten read/create/approve/download adapter compatibility, including document-family and idempotency guarantees |
 | `jobseekercopilot/application-tracker-service` | `03616f256feaf71199e0335ebb015facf2cb02c9` | `contracts/openapi.json` | `3.3.0` | `5a66ad075f36b5f9210cb9686167cc09c72ec71806b6ea88d746aa3467518734` | Handwritten durable document-replacement workflow adapter compatibility |
 
@@ -39,8 +42,13 @@ The policy checks the exact operations and fields currently consumed:
 - Authentication account lookup, contact fields and its combined bearer and
   service-identity requirement;
 - authenticated User Profile retrieval and profile fields;
-- CV/Cover Letter generation request, job and generated document IDs;
-- Document Export DOCX/PDF export and replay-safe replacement upload;
+- Job Service owner-scoped saved-job lookup, immutable snapshot and content
+  digest;
+- CV/Cover Letter side-effect-free estimate and owner-scoped draft generation
+  with the coordinator operation ID and actual token usage;
+- Payment Service owner-scoped reserve/read/commit/release lifecycle through
+  the Gateway's least-privilege service identity;
+- Document Export replay-safe DOCX/PDF export and replacement upload;
 - Document Store get/create/approve/download operations, family continuity,
   idempotency, service identity and owner-context parameters;
 - Application Tracker owner-scoped reads and durable replacement

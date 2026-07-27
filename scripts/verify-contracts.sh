@@ -9,6 +9,7 @@ contract_names=(
     cv-cover-letter-service
     document-export-service
     document-store-service
+    payment-service
     user-profile-service
 )
 
@@ -21,6 +22,15 @@ for contract_name in "${contract_names[@]}"; do
             exit 1
         fi
     done
+done
+
+for required_file in \
+    "$contract_dir/job-service.yaml" \
+    "$contract_dir/job-service.SOURCE"; do
+    if [[ ! -f "$required_file" || -L "$required_file" ]]; then
+        echo "contract policy: required regular file is missing or is a symlink: $required_file" >&2
+        exit 1
+    fi
 done
 
 if [[ ! -f "$manifest" || -L "$manifest" ]]; then
@@ -63,21 +73,33 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    87fc2393309ad3007cba6ac27aa618fc3cc81aa9 \
+    8efee874ef50f8967326346023181de19c03b5e2 \
     contracts/openapi.json \
-    8583f844b297bc32472e1fbf0b4bc273972477cc81cb0a25eba6e2ac5a048d95
+    cb8e6f194fac88c45a875c47d1e0616f9df157c2d9df8c815ccfe3ec931e1654
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
-    9a26dd3239fc53e2cad434f8e18ea6b93802ab03 \
+    b71014fe72d5b3660a95e55facd3d627078d892f \
     contracts/openapi.json \
-    39ab107067af69bf082114eef5552eabe7eb08bf73217caeb9335f869a489b6a
+    17d37926cc6c9dedacb526e018577cb3c1aaf976fdcda24a588d541f9ec4f042
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
     4180596ba5b23998ae6f001c4e624fbc395b4ce4 \
     contracts/openapi.json \
     d510b39c9629b6ea7663fa76baa6e3b14798b87315b44a65e76a8a8defab8715
+verify_source \
+    job-service \
+    jobseekercopilot/job-service \
+    badf3f061732a0bc662722227ee19f877dd463da \
+    api/openapi.yaml \
+    6465ccfab96a5df67e3bb16a06c3edc4d2a76735b2d789a2237b264636127506
+verify_source \
+    payment-service \
+    jobseekercopilot/payment-service \
+    0430cd09fd390a09d5445672504560ffde64cbe4 \
+    contracts/openapi.json \
+    08312957171b34df832b5b3e62ffba93d68007981ac7c284e8b0bff7de22295a
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
@@ -117,34 +139,60 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "2.0.0") and
-    (.paths["/api/v1/cv-cover-letter/generate"].post.operationId == "generate") and
-    (.paths["/api/v1/cv-cover-letter/generate"].post.security
+    (.info.version == "3.2.0") and
+    (.paths["/api/v1/cv-cover-letter/drafts/estimate"].post.operationId
+        == "estimateDraft") and
+    (.paths["/api/v1/cv-cover-letter/drafts"].post.operationId
+        == "generateDraft") and
+    (.paths["/api/v1/cv-cover-letter/drafts"].post.security
         | any(has("serviceToken"))) and
-    (.paths["/api/v1/cv-cover-letter/generate"].post.parameters
+    (.paths["/api/v1/cv-cover-letter/drafts"].post.parameters
         | any(
             .name == "X-Document-Owner" and
             .in == "header" and
             .required == true and
             .schema.type == "string")) and
-    (.paths["/api/v1/cv-cover-letter/generate"].post.parameters
-        | all(.name != "X-User-Id")) and
+    (.paths["/api/v1/cv-cover-letter/drafts"].post.parameters
+        | any(
+            .name == "X-Generation-Operation-Id" and
+            .in == "header" and
+            .required == true)) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
     (.components.schemas.GenerateRequest.required
-        | index("userProfile") != null and index("job") != null) and
-    (.components.schemas.Job.required
-        | index("id") != null and index("title") != null and
-          index("company") != null and index("description") != null) and
-    (.components.schemas.GenerateCvCoverLetterResponse.properties
-        | has("applicationId") and has("cvDocumentId") and
-          has("coverLetterDocumentId"))
+        | index("inputSchemaVersion") != null and
+          index("profile") != null and index("job") != null) and
+    (.components.schemas.DraftGenerationResponse.required
+        | index("operationId") != null and index("usage") != null and
+          index("cvContent") != null and
+          index("coverLetterContent") != null)
 ' "$contract_dir/cv-cover-letter-service.json" >/dev/null
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "2.1.0") and
+    (.info.version == "3.0.0") and
+    (.paths["/api/v1/payments/reservations"].post.parameters
+        | any(.name == "X-Payment-Owner" and .required == true)) and
+    (.paths["/api/v1/payments/reservations/{reservationId}"].get != null) and
+    (.paths["/api/v1/payments/reservations/{reservationId}/commit"].post != null) and
+    (.paths["/api/v1/payments/reservations/{reservationId}/release"].post != null) and
+    (.components.schemas.CreateReservationRequest.required
+        | index("feature") != null and index("operationKey") != null) and
+    (.components.schemas.CreateReservationRequest.properties.operationKey.pattern
+        == "[A-Za-z0-9][A-Za-z0-9._:-]{0,199}")
+' "$contract_dir/payment-service.json" >/dev/null
+
+grep -F "  /api/jobs/saved/{savedJobId}:" \
+    "$contract_dir/job-service.yaml" >/dev/null
+grep -F "        contentVersion:" \
+    "$contract_dir/job-service.yaml" >/dev/null
+grep -F "        contentSha256:" \
+    "$contract_dir/job-service.yaml" >/dev/null
+
+jq -e '
+    (.openapi | type == "string" and startswith("3.")) and
+    (.info.version == "3.0.0") and
     (.paths["/api/v1/document-exports/documents/{documentId}"].post.operationId
         == "exportDocument") and
     (.paths["/api/v1/document-exports/documents/{documentId}/upload"].post.operationId
@@ -164,6 +212,12 @@ jq -e '
             .name == "Idempotency-Key" and
             .in == "header" and
             .required == false and
+            .schema.type == "string")) and
+    (.paths["/api/v1/document-exports/documents/{documentId}"].post.parameters
+        | any(
+            .name == "Idempotency-Key" and
+            .in == "header" and
+            .required == true and
             .schema.type == "string")) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and

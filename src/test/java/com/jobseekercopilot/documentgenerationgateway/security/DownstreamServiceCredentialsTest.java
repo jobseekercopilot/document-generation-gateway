@@ -19,6 +19,8 @@ class DownstreamServiceCredentialsTest {
             "test-only-document-store-producer-token-32-bytes";
     private static final String DOCUMENT_STORE_READER =
             "test-only-document-store-reader-token-32-bytes";
+    private static final String PAYMENT =
+            "test-only-payment-service-token-0000000000001";
 
     @Test
     void acceptsDistinctRuntimeInjectedCredentials() {
@@ -29,7 +31,8 @@ class DownstreamServiceCredentialsTest {
                         CV_COVER_LETTER,
                         DOCUMENT_EXPORT,
                         DOCUMENT_STORE_PRODUCER,
-                        DOCUMENT_STORE_READER);
+                        DOCUMENT_STORE_READER,
+                        PAYMENT);
 
         assertEquals(AUTHENTICATION, credentials.authenticationServiceToken());
         assertEquals(APPLICATION_TRACKER, credentials.applicationTrackerProducerToken());
@@ -37,6 +40,7 @@ class DownstreamServiceCredentialsTest {
         assertEquals(DOCUMENT_EXPORT, credentials.documentExportServiceToken());
         assertEquals(DOCUMENT_STORE_PRODUCER, credentials.documentStoreProducerToken());
         assertEquals(DOCUMENT_STORE_READER, credentials.documentStoreReaderToken());
+        assertEquals(PAYMENT, credentials.paymentServiceToken());
     }
 
     @Test
@@ -49,7 +53,8 @@ class DownstreamServiceCredentialsTest {
                         CV_COVER_LETTER,
                         DOCUMENT_EXPORT,
                         DOCUMENT_STORE_PRODUCER,
-                        DOCUMENT_STORE_READER));
+                        DOCUMENT_STORE_READER,
+                        PAYMENT));
         IllegalStateException shortToken = assertThrows(
                 IllegalStateException.class,
                 () -> new DownstreamServiceCredentials(
@@ -58,7 +63,8 @@ class DownstreamServiceCredentialsTest {
                         CV_COVER_LETTER,
                         DOCUMENT_EXPORT,
                         DOCUMENT_STORE_PRODUCER,
-                        DOCUMENT_STORE_READER));
+                        DOCUMENT_STORE_READER,
+                        PAYMENT));
         IllegalStateException missingCv = assertThrows(
                 IllegalStateException.class,
                 () -> new DownstreamServiceCredentials(
@@ -67,7 +73,8 @@ class DownstreamServiceCredentialsTest {
                         "",
                         DOCUMENT_EXPORT,
                         DOCUMENT_STORE_PRODUCER,
-                        DOCUMENT_STORE_READER));
+                        DOCUMENT_STORE_READER,
+                        PAYMENT));
         IllegalStateException missingExport = assertThrows(
                 IllegalStateException.class,
                 () -> new DownstreamServiceCredentials(
@@ -76,7 +83,8 @@ class DownstreamServiceCredentialsTest {
                         CV_COVER_LETTER,
                         "",
                         DOCUMENT_STORE_PRODUCER,
-                        DOCUMENT_STORE_READER));
+                        DOCUMENT_STORE_READER,
+                        PAYMENT));
         IllegalStateException sharedCv = assertThrows(
                 IllegalStateException.class,
                 () -> new DownstreamServiceCredentials(
@@ -85,6 +93,17 @@ class DownstreamServiceCredentialsTest {
                         DOCUMENT_EXPORT,
                         DOCUMENT_EXPORT,
                         DOCUMENT_STORE_PRODUCER,
+                        DOCUMENT_STORE_READER,
+                        PAYMENT));
+        IllegalStateException sharedPayment = assertThrows(
+                IllegalStateException.class,
+                () -> new DownstreamServiceCredentials(
+                        AUTHENTICATION,
+                        APPLICATION_TRACKER,
+                        CV_COVER_LETTER,
+                        DOCUMENT_EXPORT,
+                        DOCUMENT_STORE_PRODUCER,
+                        DOCUMENT_STORE_READER,
                         DOCUMENT_STORE_READER));
 
         assertEquals(
@@ -100,5 +119,6 @@ class DownstreamServiceCredentialsTest {
         assertEquals(
                 "Downstream service identity tokens must be distinct.",
                 sharedCv.getMessage());
+        assertEquals(sharedCv.getMessage(), sharedPayment.getMessage());
     }
 }

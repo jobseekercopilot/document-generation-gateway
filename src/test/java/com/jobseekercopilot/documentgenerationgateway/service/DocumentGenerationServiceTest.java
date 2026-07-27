@@ -80,7 +80,8 @@ class DocumentGenerationServiceTest {
                 "test-only-cv-cover-letter-service-token-32-bytes",
                 "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
-                "test-only-document-store-reader-token-32-bytes");
+                "test-only-document-store-reader-token-32-bytes",
+                "test-only-payment-service-token-0000000000001");
         var actual = service.generate("user-123", "Bearer token", job);
 
         assertEquals("application-1", actual.applicationId());
@@ -373,7 +374,8 @@ class DocumentGenerationServiceTest {
                 "test-only-cv-cover-letter-service-token-32-bytes",
                 "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
-                "test-only-document-store-reader-token-32-bytes");
+                "test-only-document-store-reader-token-32-bytes",
+                "test-only-payment-service-token-0000000000001");
         var file = new MockMultipartFile(
                 "file",
                 "cv.docx",
@@ -540,7 +542,8 @@ class DocumentGenerationServiceTest {
                 "test-only-cv-cover-letter-service-token-32-bytes",
                 "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
-                "test-only-document-store-reader-token-32-bytes");
+                "test-only-document-store-reader-token-32-bytes",
+                "test-only-payment-service-token-0000000000001");
         var file = new MockMultipartFile(
                 "file",
                 "cv.docx",
@@ -596,7 +599,8 @@ class DocumentGenerationServiceTest {
                 "test-only-cv-cover-letter-service-token-32-bytes",
                 "test-only-document-export-service-token-32-bytes",
                 "test-only-document-store-producer-token-32-bytes",
-                "test-only-document-store-reader-token-32-bytes");
+                "test-only-document-store-reader-token-32-bytes",
+                "test-only-payment-service-token-0000000000001");
     }
 
     private void assertStoreIdentity(HttpEntity<?> request, String expectedToken) {

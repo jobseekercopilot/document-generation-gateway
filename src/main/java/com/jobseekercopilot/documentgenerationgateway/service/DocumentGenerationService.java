@@ -115,7 +115,8 @@ public class DocumentGenerationService {
                               String cvCoverLetterServiceToken,
                               String documentExportServiceToken,
                               String documentStoreProducerToken,
-                              String documentStoreReaderToken) {
+                              String documentStoreReaderToken,
+                              String paymentServiceToken) {
         this(userProfilesApi,
                 documentExportsApi,
                 objectMapper,
@@ -131,7 +132,8 @@ public class DocumentGenerationService {
                         cvCoverLetterServiceToken,
                         documentExportServiceToken,
                         documentStoreProducerToken,
-                        documentStoreReaderToken));
+                        documentStoreReaderToken,
+                        paymentServiceToken));
     }
 
     public DocumentGenerationResponse generate(String userId, String authorization, Job job) {

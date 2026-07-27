@@ -20,7 +20,8 @@ class DownstreamApiConfigTest {
                 cvCoverLetterToken,
                 documentExportToken,
                 "test-only-document-store-producer-token-32-bytes",
-                "test-only-document-store-reader-token-32-bytes");
+                "test-only-document-store-reader-token-32-bytes",
+                "test-only-payment-service-token-0000000000001");
 
         var config = new DownstreamApiConfig();
         var cvApi = config.cvCoverLetterApi("http://cv-cover-letter", credentials);

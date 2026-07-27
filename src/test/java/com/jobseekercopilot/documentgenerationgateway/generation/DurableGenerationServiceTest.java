@@ -1,0 +1,414 @@
+package com.jobseekercopilot.documentgenerationgateway.generation;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.client.ResourceAccessException;
+
+@SpringBootTest
+class DurableGenerationServiceTest {
+    private static final String OWNER = "candidate-123";
+    private static final String AUTHORIZATION = "Bearer validated-token";
+    private static final UUID SAVED_JOB_ID =
+            UUID.fromString("10000000-0000-0000-0000-000000000001");
+    private static final UUID RESERVATION_ID =
+            UUID.fromString("20000000-0000-0000-0000-000000000001");
+    private static final UUID CV_DOCUMENT_ID =
+            UUID.fromString("30000000-0000-0000-0000-000000000001");
+    private static final UUID COVER_LETTER_DOCUMENT_ID =
+            UUID.fromString("30000000-0000-0000-0000-000000000002");
+    private static final UUID APPLICATION_ID =
+            UUID.fromString("40000000-0000-0000-0000-000000000001");
+
+    @Autowired private DurableGenerationService service;
+    @Autowired private JdbcTemplate jdbc;
+    @MockBean private GenerationDownstreamClient downstream;
+
+    @BeforeEach
+    void resetState() {
+        jdbc.update("DELETE FROM generation_operations");
+        reset(downstream);
+        successfulDownstream();
+    }
+
+    @Test
+    void completesOneReplaySafeOperationThenApprovesExactDrafts() {
+        var first = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1");
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                first.state());
+        assertEquals(CV_DOCUMENT_ID, first.cvDocumentId());
+        assertEquals(
+                COVER_LETTER_DOCUMENT_ID,
+                first.coverLetterDocumentId());
+        assertTrue(first.replaySafe());
+        assertFalse(first.manualActionRequired());
+
+        var replay = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1");
+        assertEquals(first.operationId(), replay.operationId());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+
+        assertThrows(
+                GenerationConflictException.class,
+                () -> service.approve(
+                        OWNER,
+                        first.operationId(),
+                        new ApproveGenerationRequest(
+                                UUID.randomUUID(),
+                                COVER_LETTER_DOCUMENT_ID)));
+
+        var completed = service.approve(
+                OWNER,
+                first.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                completed.state());
+        assertEquals(APPLICATION_ID, completed.applicationId());
+        assertTrue(completed.downloads().containsKey("cv"));
+        assertTrue(completed.downloads().containsKey("coverLetter"));
+
+        ArgumentCaptor<Map> application =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).createApplication(
+                org.mockito.ArgumentMatchers.eq(OWNER),
+                org.mockito.ArgumentMatchers.eq(
+                        first.operationId() + ":application"),
+                application.capture());
+        assertEquals(
+                CV_DOCUMENT_ID,
+                application.getValue().get("cvDocumentId"));
+        assertEquals(
+                COVER_LETTER_DOCUMENT_ID,
+                application.getValue().get(
+                        "coverLetterDocumentId"));
+        assertEquals(
+                "DOCUMENTS_GENERATED",
+                application.getValue().get("initialStatus"));
+        verify(downstream).commit(
+                OWNER, RESERVATION_ID, 600);
+        verify(downstream, never()).release(
+                anyString(), any(), anyString());
+
+        assertThrows(
+                GenerationNotFoundException.class,
+                () -> service.get(
+                        "different-owner", first.operationId()));
+    }
+
+    @Test
+    void concurrentSameJobRequestsPerformOnlyOneModelInvocation() throws Exception {
+        CountDownLatch generationEntered = new CountDownLatch(1);
+        CountDownLatch releaseGeneration = new CountDownLatch(1);
+        doAnswer(invocation -> {
+                    generationEntered.countDown();
+                    assertTrue(releaseGeneration.await(
+                            5, TimeUnit.SECONDS));
+                    return generated(invocation.getArgument(1));
+                })
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> service.start(
+                    OWNER,
+                    AUTHORIZATION,
+                    SAVED_JOB_ID,
+                    "concurrent-key-a"));
+            assertTrue(generationEntered.await(
+                    5, TimeUnit.SECONDS));
+            var duplicate = executor.submit(() -> service.start(
+                    OWNER,
+                    AUTHORIZATION,
+                    SAVED_JOB_ID,
+                    "concurrent-key-b"));
+            var duplicateResponse = duplicate.get(
+                    5, TimeUnit.SECONDS);
+            assertEquals(
+                    GenerationOperationState.GENERATION_IN_PROGRESS,
+                    duplicateResponse.state());
+            releaseGeneration.countDown();
+            assertEquals(
+                    GenerationOperationState.AWAITING_APPROVAL,
+                    first.get(5, TimeUnit.SECONDS).state());
+        } finally {
+            executor.shutdownNow();
+        }
+
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                service.start(
+                        OWNER,
+                        AUTHORIZATION,
+                        SAVED_JOB_ID,
+                        "concurrent-key-b").state());
+    }
+
+    @Test
+    void ambiguousGenerationIsNeverRetriedOrReleasedAutomatically() {
+        doThrow(new ResourceAccessException(
+                        "connection closed after request"))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var unknown = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1");
+
+        assertEquals(
+                GenerationOperationState.GENERATION_OUTCOME_UNKNOWN,
+                unknown.state());
+        assertTrue(unknown.manualActionRequired());
+        assertEquals(
+                "GENERATION_OUTCOME_UNKNOWN",
+                unknown.failureCode());
+
+        var replay = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1");
+        assertEquals(unknown.operationId(), replay.operationId());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+        verify(downstream, never()).release(
+                anyString(), any(), anyString());
+    }
+
+    @Test
+    void replaySafeStoreFailureResumesWithTheSameKeys() {
+        AtomicInteger coverLetterAttempts = new AtomicInteger();
+        List<String> documentKeys = new ArrayList<>();
+        doAnswer(invocation -> {
+                    String key = invocation.getArgument(1);
+                    Map<String, Object> request =
+                            invocation.getArgument(2);
+                    documentKeys.add(key);
+                    if ("COVER_LETTER".equals(
+                            request.get("documentType"))
+                            && coverLetterAttempts
+                            .getAndIncrement() == 0) {
+                        throw new ResourceAccessException(
+                                "store unavailable");
+                    }
+                    return documentResponse(request);
+                })
+                .when(downstream)
+                .createDocument(anyString(), anyString(), anyMap());
+
+        var interrupted = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1");
+        assertEquals(
+                GenerationOperationState.CREDIT_COMMITTED,
+                interrupted.state());
+        assertEquals(
+                "DOWNSTREAM_RETRYABLE",
+                interrupted.failureCode());
+
+        var resumed = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1");
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                resumed.state());
+        assertEquals(
+                List.of(
+                        resumed.operationId() + ":cv-document",
+                        resumed.operationId()
+                                + ":cover-letter-document",
+                        resumed.operationId() + ":cv-document",
+                        resumed.operationId()
+                                + ":cover-letter-document"),
+                documentKeys);
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1))
+                .commit(OWNER, RESERVATION_ID, 600);
+    }
+
+    @Test
+    void timedOutExportResumesWithTheSameReplayKey() {
+        var awaiting = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "export-failure-1");
+        doThrow(new ResourceAccessException(
+                        "connection closed after export"))
+                .when(downstream)
+                .exportDocument(anyString(), any(), anyString());
+
+        var retryable = service.approve(
+                OWNER,
+                awaiting.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.CV_EXPORT_IN_PROGRESS,
+                retryable.state());
+        assertEquals(
+                "DOWNSTREAM_RETRYABLE",
+                retryable.failureCode());
+        assertFalse(retryable.manualActionRequired());
+
+        doAnswer(invocation -> Map.of(
+                        "documentId",
+                        invocation.getArgument(1).toString(),
+                        "exports", List.of(
+                                Map.of("format", "DOCX"),
+                                Map.of("format", "PDF"))))
+                .when(downstream)
+                .exportDocument(anyString(), any(), anyString());
+        var completed = service.approve(
+                OWNER,
+                awaiting.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                completed.state());
+        verify(downstream, times(2)).exportDocument(
+                OWNER,
+                CV_DOCUMENT_ID,
+                awaiting.operationId() + ":cv-export");
+    }
+
+    private void successfulDownstream() {
+        when(downstream.savedJob(
+                any(), anyString())).thenReturn(Map.of(
+                "savedJobId", SAVED_JOB_ID.toString(),
+                "canonicalJobId", "canonical-job-1",
+                "snapshotVersion", 3,
+                "contentVersion", "sha256:"
+                        + "a".repeat(64),
+                "job", Map.of(
+                        "id", "provider-job-1",
+                        "canonicalJobId", "canonical-job-1",
+                        "provider", "REED",
+                        "externalJobId", "reed-1",
+                        "title", "Java Developer",
+                        "company", "Example Ltd",
+                        "location", "London",
+                        "employmentType", "FULL_TIME",
+                        "postedDate", "2026-07-01",
+                        "description", "Build reliable services.")));
+        when(downstream.profile()).thenReturn(Map.of(
+                "id", 42,
+                "userId", OWNER,
+                "skills", List.of("Java", "PostgreSQL"),
+                "aspirations", Map.of(
+                        "targetRoles",
+                        List.of("Backend Developer")),
+                "qualifications", List.of(Map.of(
+                        "qualificationName", "BSc Computing",
+                        "status", "COMPLETED")),
+                "roles", List.of(Map.of(
+                        "jobTitle", "Developer",
+                        "employer", "Previous Ltd",
+                        "startDate", "2022-01-01",
+                        "status", "CURRENT"))));
+        when(downstream.account(anyString())).thenReturn(Map.of(
+                "name", "Alex Candidate",
+                "email", "alex@example.com"));
+        when(downstream.estimate(anyString(), anyMap()))
+                .thenReturn(1000L);
+        when(downstream.reserve(
+                anyString(), any(), anyLong()))
+                .thenReturn(Map.of(
+                        "reservationId",
+                        RESERVATION_ID.toString(),
+                        "status", "RESERVED"));
+        when(downstream.generate(
+                anyString(), any(), anyMap()))
+                .thenAnswer(invocation ->
+                        generated(invocation.getArgument(1)));
+        when(downstream.createDocument(
+                anyString(), anyString(), anyMap()))
+                .thenAnswer(invocation ->
+                        documentResponse(invocation.getArgument(2)));
+        when(downstream.approveDocument(
+                anyString(), any())).thenAnswer(invocation -> Map.of(
+                "id", invocation.getArgument(1).toString(),
+                "lifecycleState", "APPROVED"));
+        when(downstream.exportDocument(
+                anyString(), any(), anyString())).thenAnswer(invocation -> Map.of(
+                "documentId",
+                invocation.getArgument(1).toString(),
+                "exports", List.of(
+                        Map.of("format", "DOCX"),
+                        Map.of("format", "PDF"))));
+        when(downstream.createApplication(
+                anyString(), anyString(), anyMap()))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "status", "DOCUMENTS_GENERATED"));
+    }
+
+    private Map<String, Object> generated(UUID operationId) {
+        return Map.of(
+                "operationId", operationId.toString(),
+                "inputSchemaVersion", "1.0",
+                "cvTitle", "Tailored CV",
+                "cvContent", "CV content",
+                "coverLetterTitle", "Cover letter",
+                "coverLetterContent", "Letter content",
+                "generationMetadata", Map.of(
+                        "releaseId", "release-1"),
+                "usage", Map.of(
+                        "inputTokens", 400,
+                        "outputTokens", 200,
+                        "totalTokens", 600),
+                "audit", Map.of("modelId", "fixture"));
+    }
+
+    private Map<String, Object> documentResponse(
+            Map<String, Object> request) {
+        boolean cv = "CV".equals(request.get("documentType"));
+        return Map.of(
+                "id",
+                (cv ? CV_DOCUMENT_ID
+                        : COVER_LETTER_DOCUMENT_ID).toString(),
+                "documentType", request.get("documentType"),
+                "lifecycleState", "DRAFT",
+                "contentSha256", "b".repeat(64));
+    }
+}

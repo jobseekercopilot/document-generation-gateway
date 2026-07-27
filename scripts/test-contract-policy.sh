@@ -9,6 +9,7 @@ copy_contracts() {
     local destination="$1"
     mkdir -p "$destination"
     cp "$repository_root"/src/main/openapi/*.json \
+       "$repository_root"/src/main/openapi/*.yaml \
        "$repository_root"/src/main/openapi/*.SOURCE \
        "$repository_root/src/main/openapi/SHA256SUMS" \
        "$destination/"
@@ -24,6 +25,8 @@ refresh_manifest() {
             cv-cover-letter-service.json \
             document-export-service.json \
             document-store-service.json \
+            job-service.yaml \
+            payment-service.json \
             user-profile-service.json \
             > SHA256SUMS
     )
@@ -62,20 +65,21 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/profile-securi
 fi
 
 copy_contracts "$temporary_dir/cv-response"
-jq 'del(.components.schemas.GenerateCvCoverLetterResponse.properties.applicationId)' \
+jq '.components.schemas.DraftGenerationResponse.required |=
+        map(select(. != "operationId"))' \
     "$temporary_dir/cv-response/cv-cover-letter-service.json" \
     > "$temporary_dir/cv-response/changed.json"
 mv "$temporary_dir/cv-response/changed.json" \
    "$temporary_dir/cv-response/cv-cover-letter-service.json"
 refresh_manifest "$temporary_dir/cv-response"
 if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/cv-response" >/dev/null 2>&1; then
-    echo "contract policy negative test accepted removal of generated application ID" >&2
+    echo "contract policy negative test accepted removal of draft operation ID" >&2
     exit 1
 fi
 
 copy_contracts "$temporary_dir/cv-security"
 jq 'del(
-        .paths["/api/v1/cv-cover-letter/generate"].post.security,
+        .paths["/api/v1/cv-cover-letter/drafts"].post.security,
         .components.securitySchemes.serviceToken
     )' \
     "$temporary_dir/cv-security/cv-cover-letter-service.json" \
@@ -89,7 +93,7 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/cv-security" >
 fi
 
 copy_contracts "$temporary_dir/cv-owner"
-jq '.paths["/api/v1/cv-cover-letter/generate"].post.parameters |=
+jq '.paths["/api/v1/cv-cover-letter/drafts"].post.parameters |=
         map(select(.name != "X-Document-Owner"))' \
     "$temporary_dir/cv-owner/cv-cover-letter-service.json" \
     > "$temporary_dir/cv-owner/changed.json"
@@ -98,6 +102,31 @@ mv "$temporary_dir/cv-owner/changed.json" \
 refresh_manifest "$temporary_dir/cv-owner"
 if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/cv-owner" >/dev/null 2>&1; then
     echo "contract policy negative test accepted removal of CV owner context" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/payment-owner"
+jq '.paths["/api/v1/payments/reservations"].post.parameters |=
+        map(select(.name != "X-Payment-Owner"))' \
+    "$temporary_dir/payment-owner/payment-service.json" \
+    > "$temporary_dir/payment-owner/changed.json"
+mv "$temporary_dir/payment-owner/changed.json" \
+   "$temporary_dir/payment-owner/payment-service.json"
+refresh_manifest "$temporary_dir/payment-owner"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/payment-owner" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Payment owner context" >&2
+    exit 1
+fi
+
+copy_contracts "$temporary_dir/job-snapshot"
+sed '/        contentSha256:/d' \
+    "$temporary_dir/job-snapshot/job-service.yaml" \
+    > "$temporary_dir/job-snapshot/changed.yaml"
+mv "$temporary_dir/job-snapshot/changed.yaml" \
+   "$temporary_dir/job-snapshot/job-service.yaml"
+refresh_manifest "$temporary_dir/job-snapshot"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/job-snapshot" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of Job snapshot digest" >&2
     exit 1
 fi
 
@@ -139,7 +168,7 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/export-owner" 
 fi
 
 copy_contracts "$temporary_dir/export-idempotency"
-jq '.paths["/api/v1/document-exports/documents/{documentId}/upload"].post.parameters |=
+jq '.paths["/api/v1/document-exports/documents/{documentId}"].post.parameters |=
         map(select(.name != "Idempotency-Key"))' \
     "$temporary_dir/export-idempotency/document-export-service.json" \
     > "$temporary_dir/export-idempotency/changed.json"
@@ -147,7 +176,7 @@ mv "$temporary_dir/export-idempotency/changed.json" \
    "$temporary_dir/export-idempotency/document-export-service.json"
 refresh_manifest "$temporary_dir/export-idempotency"
 if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/export-idempotency" >/dev/null 2>&1; then
-    echo "contract policy negative test accepted removal of Export replay key" >&2
+    echo "contract policy negative test accepted removal of ordinary Export replay key" >&2
     exit 1
 fi
 
