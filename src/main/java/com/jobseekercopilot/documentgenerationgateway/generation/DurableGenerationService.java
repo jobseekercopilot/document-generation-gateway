@@ -538,8 +538,11 @@ public class DurableGenerationService {
             return generationOutcomeUnknown(
                     operation, leaseToken, exception);
         } catch (RuntimeException invalidResponse) {
-            return generationOutcomeUnknown(
-                    operation, leaseToken, invalidResponse);
+            return releaseAndFail(
+                    operation,
+                    leaseToken,
+                    "INVALID_GENERATION_RESPONSE",
+                    "The generated draft response was invalid and no credits were charged.");
         }
     }
 

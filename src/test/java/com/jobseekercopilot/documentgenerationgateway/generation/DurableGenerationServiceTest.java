@@ -524,6 +524,65 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void releasesCreditWhenTheModelOutputCannotBeGrounded() {
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unprocessable Entity",
+                org.springframework.http.HttpHeaders.EMPTY,
+                new byte[0],
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var rejected = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "ungrounded-output-1",
+                selectionRequest());
+
+        assertEquals(
+                GenerationOperationState.FAILED,
+                rejected.state());
+        assertEquals(
+                "GENERATION_REJECTED",
+                rejected.failureCode());
+        verify(downstream).release(
+                OWNER,
+                RESERVATION_ID,
+                "GENERATION_REJECTED");
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+    }
+
+    @Test
+    void releasesCreditWhenTheSuccessfulResponseContractIsInvalid() {
+        doReturn(Map.of("unexpected", "response"))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var rejected = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "invalid-generation-response-1",
+                selectionRequest());
+
+        assertEquals(
+                GenerationOperationState.FAILED,
+                rejected.state());
+        assertEquals(
+                "INVALID_GENERATION_RESPONSE",
+                rejected.failureCode());
+        verify(downstream).release(
+                OWNER,
+                RESERVATION_ID,
+                "INVALID_GENERATION_RESPONSE");
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void acceptsAnExplicitlyBlankOptionalClaimReview() {
         doAnswer(invocation -> {
