@@ -190,7 +190,7 @@ public class BoundedGenerationWorkScheduler
         SecurityContext previousSecurityContext =
                 SecurityContextHolder.getContext();
         var previousMdc = MDC.getCopyOfContextMap();
-            SecurityContext workerSecurityContext =
+        SecurityContext workerSecurityContext =
                 SecurityContextHolder.createEmptyContext();
         workerSecurityContext.setAuthentication(authentication);
         SecurityContextHolder.setContext(workerSecurityContext);
