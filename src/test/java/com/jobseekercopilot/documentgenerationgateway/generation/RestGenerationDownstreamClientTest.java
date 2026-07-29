@@ -8,8 +8,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
+import com.jobseekercopilot.documentgenerationgateway.dto.EvidenceSection;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
+import com.jobseekercopilot.generated.userprofileservice.api.EvidenceSnapshotsApi;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshot;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotRequest;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +42,7 @@ class RestGenerationDownstreamClientTest {
 
     @Mock private RestTemplate restTemplate;
     @Mock private UserProfilesApi profilesApi;
+    @Mock private EvidenceSnapshotsApi evidenceSnapshotsApi;
 
     private RestGenerationDownstreamClient client;
 
@@ -43,7 +51,8 @@ class RestGenerationDownstreamClientTest {
         client = new RestGenerationDownstreamClient(
                 restTemplate,
                 profilesApi,
-                new ObjectMapper(),
+                evidenceSnapshotsApi,
+                new ObjectMapper().findAndRegisterModules(),
                 new DownstreamServiceCredentials(
                         "auth-token-0000000000000000000000000001",
                         "tracker-token-00000000000000000000000001",
@@ -59,6 +68,50 @@ class RestGenerationDownstreamClientTest {
                 "http://store",
                 "http://export",
                 "http://tracker");
+    }
+
+    @Test
+    void evidenceSnapshotPreservesClaimantEntryAndSectionOrder() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        when(evidenceSnapshotsApi.createEvidenceSnapshot(
+                any(EvidenceSnapshotRequest.class)))
+                .thenReturn(new EvidenceSnapshot(
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        "a".repeat(64),
+                        List.of(
+                                com.jobseekercopilot.generated
+                                        .userprofileservice.model
+                                        .EvidenceCategory.PROJECT,
+                                com.jobseekercopilot.generated
+                                        .userprofileservice.model
+                                        .EvidenceCategory.VOLUNTEERING),
+                        List.of(),
+                        "b".repeat(64),
+                        java.time.OffsetDateTime.now())
+                        .purpose(com.jobseekercopilot.generated
+                                .userprofileservice.model
+                                .EvidenceSnapshotPurpose.CV));
+
+        client.evidenceSnapshot(new DocumentEvidenceSelection(
+                DocumentPurpose.CV,
+                List.of(first, second),
+                List.of(
+                        EvidenceSection.PROJECT,
+                        EvidenceSection.VOLUNTEERING)));
+
+        ArgumentCaptor<EvidenceSnapshotRequest> request =
+                ArgumentCaptor.forClass(EvidenceSnapshotRequest.class);
+        verify(evidenceSnapshotsApi).createEvidenceSnapshot(
+                request.capture());
+        assertEquals(List.of(first, second),
+                request.getValue().getEntryIds());
+        assertEquals(
+                List.of("PROJECT", "VOLUNTEERING"),
+                request.getValue().getSectionOrder().stream()
+                        .map(Enum::name)
+                        .toList());
     }
 
     @Test

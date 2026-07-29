@@ -2,7 +2,12 @@ package com.jobseekercopilot.documentgenerationgateway.generation;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.generated.userprofileservice.api.EvidenceSnapshotsApi;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceCategory;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotPurpose;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotRequest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +31,7 @@ public class RestGenerationDownstreamClient
 
     private final RestTemplate restTemplate;
     private final UserProfilesApi profilesApi;
+    private final EvidenceSnapshotsApi evidenceSnapshotsApi;
     private final ObjectMapper objectMapper;
     private final DownstreamServiceCredentials credentials;
     private final String jobBaseUrl;
@@ -39,6 +45,7 @@ public class RestGenerationDownstreamClient
     public RestGenerationDownstreamClient(
             RestTemplate restTemplate,
             UserProfilesApi profilesApi,
+            EvidenceSnapshotsApi evidenceSnapshotsApi,
             ObjectMapper objectMapper,
             DownstreamServiceCredentials credentials,
             @Value("${services.job-service.base-url}") String jobBaseUrl,
@@ -55,6 +62,7 @@ public class RestGenerationDownstreamClient
             String trackerBaseUrl) {
         this.restTemplate = restTemplate;
         this.profilesApi = profilesApi;
+        this.evidenceSnapshotsApi = evidenceSnapshotsApi;
         this.objectMapper = objectMapper;
         this.credentials = credentials;
         this.jobBaseUrl = jobBaseUrl;
@@ -86,6 +94,22 @@ public class RestGenerationDownstreamClient
                 profilesApi.getMyProfile(),
                 "User Profile Service returned no profile.");
         return objectMapper.convertValue(profile, LinkedHashMap.class);
+    }
+
+    @Override
+    public Map<String, Object> evidenceSnapshot(
+            DocumentEvidenceSelection selection) {
+        EvidenceSnapshotRequest request = new EvidenceSnapshotRequest()
+                .purpose(EvidenceSnapshotPurpose.valueOf(
+                        selection.purpose().name()))
+                .entryIds(selection.entryIds())
+                .sectionOrder(selection.sectionOrder().stream()
+                        .map(section -> EvidenceCategory.valueOf(section.name()))
+                        .toList());
+        Object snapshot = Objects.requireNonNull(
+                evidenceSnapshotsApi.createEvidenceSnapshot(request),
+                "User Profile Service returned no evidence snapshot.");
+        return objectMapper.convertValue(snapshot, LinkedHashMap.class);
     }
 
     @Override

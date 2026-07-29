@@ -1,7 +1,6 @@
 package com.jobseekercopilot.documentgenerationgateway.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
@@ -13,14 +12,11 @@ import com.jobseekercopilot.documentgenerationgateway.dto.ExportFileItem;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportLatestFiles;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
-import com.jobseekercopilot.generated.cvcoverletterservice.model.GenerateCvCoverLetterResponse;
-import com.jobseekercopilot.generated.cvcoverletterservice.model.Job;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportItem;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportRequest;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportResponse;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
-import com.jobseekercopilot.generated.userprofileservice.model.UserProfile;
 import java.io.ByteArrayOutputStream;
 import java.util.Map;
 import java.util.UUID;
@@ -38,101 +34,6 @@ import org.springframework.web.client.RestClientException;
 
 class DocumentGenerationServiceTest {
     private RestTemplate uploadRestTemplate;
-
-    @Test
-    void getsProfileGeneratesDocumentsExportsFilesAndReturnsGatewayDownloadUrls() {
-        var profiles = Mockito.mock(UserProfilesApi.class);
-        var exporter = Mockito.mock(DocumentExportsApi.class);
-        var restTemplate = Mockito.mock(RestTemplate.class);
-        var profile = new UserProfile();
-        var job = new Job().id("job-123").title("Developer").company("Example").description("Build things");
-        UUID cvDocumentId = UUID.randomUUID();
-        UUID coverLetterDocumentId = UUID.randomUUID();
-        UUID cvDocxFileId = UUID.randomUUID();
-        UUID cvPdfFileId = UUID.randomUUID();
-        UUID letterDocxFileId = UUID.randomUUID();
-        UUID letterPdfFileId = UUID.randomUUID();
-        var generated = new GenerateCvCoverLetterResponse()
-                .applicationId("application-1")
-                .cvDocumentId(cvDocumentId.toString())
-                .coverLetterDocumentId(coverLetterDocumentId.toString());
-        when(profiles.getMyProfile()).thenReturn(profile);
-        when(restTemplate.exchange(Mockito.eq("http://auth/api/auth/me"), Mockito.eq(HttpMethod.GET),
-                Mockito.<HttpEntity<?>>any(), Mockito.eq(Map.class)))
-                .thenReturn(ResponseEntity.ok(java.util.Map.of("name", "Alex Candidate", "email", "alex@example.com")));
-        when(restTemplate.postForObject(Mockito.eq("http://cv/api/v1/cv-cover-letter/generate"),
-                Mockito.any(), Mockito.eq(GenerateCvCoverLetterResponse.class))).thenReturn(generated);
-        when(exporter.exportDocument(
-                Mockito.eq("user-123"),
-                Mockito.eq(cvDocumentId),
-                Mockito.any()))
-                .thenReturn(exportResponse(cvDocxFileId, cvPdfFileId, "cv.docx", "cv.pdf"));
-        when(exporter.exportDocument(
-                Mockito.eq("user-123"),
-                Mockito.eq(coverLetterDocumentId),
-                Mockito.any()))
-                .thenReturn(exportResponse(letterDocxFileId, letterPdfFileId, "letter.docx", "letter.pdf"));
-
-        var service = new DocumentGenerationService(profiles, exporter, new ObjectMapper(), restTemplate,
-                "http://cv", "http://auth", "http://export", "http://store", "http://tracker",
-                "test-only-authentication-service-token-32-bytes",
-                "test-only-application-producer-token-32-bytes",
-                "test-only-cv-cover-letter-service-token-32-bytes",
-                "test-only-document-export-service-token-32-bytes",
-                "test-only-document-store-producer-token-32-bytes",
-                "test-only-document-store-reader-token-32-bytes",
-                "test-only-payment-service-token-0000000000001");
-        var actual = service.generate("user-123", "Bearer token", job);
-
-        assertEquals("application-1", actual.applicationId());
-        assertEquals(cvDocumentId.toString(), actual.cvDocumentId());
-        assertEquals(coverLetterDocumentId.toString(), actual.coverLetterDocumentId());
-        assertEquals(cvDocxFileId, actual.downloads().cv().docx().fileId());
-        assertEquals("/api/v1/document-generation/files/" + cvDocxFileId + "/download",
-                actual.downloads().cv().docx().downloadUrl());
-        assertEquals("cv.docx", actual.downloads().cv().docx().fileName());
-        assertEquals(cvPdfFileId, actual.downloads().cv().pdf().fileId());
-        assertEquals(letterDocxFileId, actual.downloads().coverLetter().docx().fileId());
-        assertEquals(letterPdfFileId, actual.downloads().coverLetter().pdf().fileId());
-
-        var generationRequest = ArgumentCaptor.forClass(Object.class);
-        verify(restTemplate).postForObject(Mockito.eq("http://cv/api/v1/cv-cover-letter/generate"),
-                generationRequest.capture(), Mockito.eq(GenerateCvCoverLetterResponse.class));
-        var entity = (HttpEntity<?>) generationRequest.getValue();
-        assertEquals(
-                "test-only-cv-cover-letter-service-token-32-bytes",
-                entity.getHeaders().getFirst("X-Service-Token"));
-        assertEquals(1, entity.getHeaders().get("X-Service-Token").size());
-        assertEquals("user-123", entity.getHeaders().getFirst("X-Document-Owner"));
-        assertEquals(1, entity.getHeaders().get("X-Document-Owner").size());
-        assertNull(entity.getHeaders().getFirst("X-User-Id"));
-        var body = (java.util.Map<?, ?>) entity.getBody();
-        var profileBody = (java.util.Map<?, ?>) body.get("userProfile");
-        assertEquals("Alex Candidate", profileBody.get("fullName"));
-        assertEquals("alex@example.com", profileBody.get("email"));
-
-        var authenticationRequest = ArgumentCaptor.forClass(HttpEntity.class);
-        verify(restTemplate).exchange(
-                Mockito.eq("http://auth/api/auth/me"),
-                Mockito.eq(HttpMethod.GET),
-                authenticationRequest.capture(),
-                Mockito.eq(Map.class));
-        assertEquals(
-                "Bearer token",
-                authenticationRequest.getValue().getHeaders().getFirst("Authorization"));
-        assertEquals(
-                "test-only-authentication-service-token-32-bytes",
-                authenticationRequest.getValue().getHeaders().getFirst("X-Service-Token"));
-
-        var exportRequest = ArgumentCaptor.forClass(DocumentExportRequest.class);
-        verify(exporter).exportDocument(
-                Mockito.eq("user-123"),
-                Mockito.eq(cvDocumentId),
-                exportRequest.capture());
-        assertEquals(
-                java.util.List.of(DocumentExportRequest.FormatsEnum.DOCX, DocumentExportRequest.FormatsEnum.PDF),
-                exportRequest.getValue().getFormats());
-    }
 
     @Test
     void uploadReplacementAllowsDocumentsGeneratedApplications() {

@@ -73,9 +73,9 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    8efee874ef50f8967326346023181de19c03b5e2 \
+    027db472b3bf39a722e7612de32e80ce7310b7c3 \
     contracts/openapi.json \
-    cb8e6f194fac88c45a875c47d1e0616f9df157c2d9df8c815ccfe3ec931e1654
+    85bbcdcb47f79c6d3a8cb2e5c19b4ac8dccb1e8ba39ac697ad2a18205dd1745d
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
@@ -103,9 +103,9 @@ verify_source \
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
-    86c8510ed319a059b991e6f9f1e43b0e101c5d1f \
+    85ac64be8c541d0a252d8c7657306f950fec3c08 \
     api/openapi.json \
-    ffaaa16a169ab11d864f82440be9fcc7d5df2d4f2d63a3525d40bda497ea6598
+    54a50801e5b4f871d33c93efdf5fe8c93f65f78b9b673be74ac4321a7d193eec
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
@@ -127,19 +127,26 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "1.0.0") and
+    (.info.version == "1.3.0") and
     (.paths["/api/profiles/me"].get.operationId == "getMyProfile") and
     (.paths["/api/profiles/me"].get.security | any(has("bearerAuth"))) and
     (.components.securitySchemes.bearerAuth.type == "http") and
     (.components.securitySchemes.bearerAuth.scheme == "bearer") and
     (.components.schemas.UserProfile.properties
         | has("userId") and has("skills") and has("aspirations") and
-          has("workPreferences") and has("qualifications") and has("roles"))
+          has("workPreferences") and has("qualifications") and has("roles")) and
+    (.paths["/api/evidence/snapshots"].post.operationId
+        == "createEvidenceSnapshot") and
+    (.paths["/api/evidence/snapshots/{snapshotId}"].get.operationId
+        == "getEvidenceSnapshot") and
+    (.components.schemas.EvidenceSnapshotRequest.required
+        | index("purpose") != null and index("entryIds") != null and
+          index("sectionOrder") != null)
 ' "$contract_dir/user-profile-service.json" >/dev/null
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.2.0") and
+    (.info.version == "3.3.0") and
     (.paths["/api/v1/cv-cover-letter/drafts/estimate"].post.operationId
         == "estimateDraft") and
     (.paths["/api/v1/cv-cover-letter/drafts"].post.operationId
@@ -163,6 +170,8 @@ jq -e '
     (.components.schemas.GenerateRequest.required
         | index("inputSchemaVersion") != null and
           index("profile") != null and index("job") != null) and
+    (.components.schemas.GenerateRequest.properties.evidenceSnapshots["$ref"]
+        == "#/components/schemas/EvidenceSnapshotsInput") and
     (.components.schemas.DraftGenerationResponse.required
         | index("operationId") != null and index("usage") != null and
           index("cvContent") != null and

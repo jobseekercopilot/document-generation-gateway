@@ -3,7 +3,10 @@ package com.jobseekercopilot.documentgenerationgateway.generation;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationDeadlineExceededException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
@@ -17,6 +20,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -66,15 +70,25 @@ public class DurableGenerationService {
             String ownerId,
             String authorization,
             UUID savedJobId,
-            String idempotencyKey) {
+            String idempotencyKey,
+            StartGenerationRequest request) {
         requireOwner(ownerId);
         requireAuthorization(authorization);
         requireIdempotencyKey(idempotencyKey);
+        validateSelectionRequest(request);
+        Map<String, Object> initialData = new LinkedHashMap<>();
+        initialData.put(
+                "evidenceSelectionRequest",
+                objectMapper.convertValue(request, LinkedHashMap.class));
         GenerationOperation operation = repository.createOrReplay(
                 ownerId,
                 idempotencyKey,
                 savedJobId,
-                sha256("generation-v1:" + savedJobId),
+                sha256("generation-v2:"
+                        + savedJobId
+                        + ":"
+                        + sha256Json(request)),
+                initialData,
                 deadline);
         if (operation.state().terminal()
                 || operation.state() == GenerationOperationState.AWAITING_APPROVAL) {
@@ -297,6 +311,26 @@ public class DurableGenerationService {
         Map<String, Object> rawJob = map(savedJob.get("job"), "saved job");
         Map<String, Object> rawProfile =
                 bounded(operation, downstream::profile);
+        StartGenerationRequest selectionRequest =
+                selectionRequest(operation);
+        Map<String, Object> cvEvidenceSnapshot = bounded(
+                operation,
+                () -> downstream.evidenceSnapshot(selection(
+                        selectionRequest, DocumentPurpose.CV)));
+        validateEvidenceSnapshot(
+                selection(selectionRequest, DocumentPurpose.CV),
+                cvEvidenceSnapshot);
+        Map<String, Object> coverLetterEvidenceSnapshot = bounded(
+                operation,
+                () -> downstream.evidenceSnapshot(selection(
+                        selectionRequest, DocumentPurpose.COVER_LETTER)));
+        validateEvidenceSnapshot(
+                selection(selectionRequest, DocumentPurpose.COVER_LETTER),
+                coverLetterEvidenceSnapshot);
+        validateProfileAndPurposeBindings(
+                rawProfile,
+                cvEvidenceSnapshot,
+                coverLetterEvidenceSnapshot);
         Map<String, Object> account;
         try {
             account = bounded(
@@ -311,15 +345,26 @@ public class DurableGenerationService {
         Map<String, Object> profileSnapshot =
                 profileSnapshot(operation, rawProfile, account, capturedAt);
         Map<String, Object> generationRequest = new LinkedHashMap<>();
-        generationRequest.put("inputSchemaVersion", "1.0");
+        generationRequest.put("inputSchemaVersion", "2.0");
         generationRequest.put("profile", profileSnapshot);
         generationRequest.put("job", jobSnapshot);
+        generationRequest.put("evidenceSnapshots", Map.of(
+                "cv", cvEvidenceSnapshot,
+                "coverLetter", coverLetterEvidenceSnapshot));
 
         Map<String, Object> data = data(operation);
         data.put("savedJob", savedJob);
         data.put("generationRequest", generationRequest);
         data.put("jobSnapshotSha256", sha256Json(jobSnapshot));
         data.put("profileSnapshotSha256", sha256Json(profileSnapshot));
+        data.put("cvEvidenceSnapshotId",
+                requiredText(cvEvidenceSnapshot, "snapshotId"));
+        data.put("cvEvidenceSnapshotDigest",
+                requiredText(cvEvidenceSnapshot, "snapshotDigest"));
+        data.put("coverLetterEvidenceSnapshotId",
+                requiredText(coverLetterEvidenceSnapshot, "snapshotId"));
+        data.put("coverLetterEvidenceSnapshotDigest",
+                requiredText(coverLetterEvidenceSnapshot, "snapshotDigest"));
         data.put("canonicalJobId", firstText(
                 savedJob.get("canonicalJobId"),
                 rawJob.get("canonicalJobId"),
@@ -788,17 +833,24 @@ public class DurableGenerationService {
             Map<String, Object> profile,
             Map<String, Object> account,
             Instant capturedAt) {
-        String profileVersion = "sha256:" + sha256Json(profile);
+        String revisionId = requiredText(profile, "revisionId");
+        String contentDigest = requiredText(profile, "contentDigest");
+        try {
+            UUID.fromString(revisionId);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(
+                    "User Profile Service returned an invalid revision ID.");
+        }
+        if (!CONTENT_SHA256.matcher(contentDigest).matches()) {
+            throw new IllegalStateException(
+                    "User Profile Service returned an invalid profile digest.");
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("provenance", provenance(
                 "USER_PROFILE_SERVICE",
-                firstText(profile.get("id"),
-                        profile.get("userId"),
-                        operation.ownerId()),
-                profileVersion,
+                revisionId,
+                "sha256:" + contentDigest,
                 capturedAt));
-        result.put("skills",
-                boundedStrings(list(profile.get("skills")), 40, 100));
         Map<String, Object> aspirations = optionalMap(
                 profile.get("aspirations"));
         result.put("targetRoles", boundedStrings(
@@ -810,10 +862,9 @@ public class DurableGenerationService {
         if (location != null) {
             result.put("location", bounded(location, 160));
         }
-        result.put("qualifications",
-                qualifications(list(profile.get("qualifications"))));
-        result.put("employmentHistory",
-                employment(list(profile.get("roles"))));
+        result.put("skills", List.of());
+        result.put("qualifications", List.of());
+        result.put("employmentHistory", List.of());
 
         String fullName = firstText(
                 account.get("name"), account.get("fullName"));
@@ -830,6 +881,164 @@ public class DurableGenerationService {
             result.put("contact", contact);
         }
         return result;
+    }
+
+    private StartGenerationRequest selectionRequest(
+            GenerationOperation operation) {
+        Object value = operation.data().get("evidenceSelectionRequest");
+        try {
+            return objectMapper.convertValue(
+                    value, StartGenerationRequest.class);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(
+                    "Generation operation has no valid evidence selection.",
+                    exception);
+        }
+    }
+
+    private DocumentEvidenceSelection selection(
+            StartGenerationRequest request,
+            DocumentPurpose purpose) {
+        return request.documents().stream()
+                .filter(document -> document.purpose() == purpose)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Generation evidence purpose is missing."));
+    }
+
+    private void validateSelectionRequest(StartGenerationRequest request) {
+        if (request == null
+                || request.documents() == null
+                || request.documents().size() != 2) {
+            throw new IllegalArgumentException(
+                    "Exactly one CV and one cover-letter evidence selection are required.");
+        }
+        var purposes = new HashSet<DocumentPurpose>();
+        for (DocumentEvidenceSelection document : request.documents()) {
+            if (document == null
+                    || document.purpose() == null
+                    || document.entryIds() == null
+                    || document.entryIds().isEmpty()
+                    || document.entryIds().size() > 50
+                    || document.sectionOrder() == null
+                    || document.sectionOrder().isEmpty()
+                    || document.sectionOrder().size() > 9
+                    || new HashSet<>(document.entryIds()).size()
+                            != document.entryIds().size()
+                    || new HashSet<>(document.sectionOrder()).size()
+                            != document.sectionOrder().size()
+                    || !purposes.add(document.purpose())) {
+                throw new IllegalArgumentException(
+                        "Evidence selections must be bounded, unique and purpose-specific.");
+            }
+        }
+        if (!purposes.equals(
+                java.util.EnumSet.allOf(DocumentPurpose.class))) {
+            throw new IllegalArgumentException(
+                    "Both document evidence purposes are required.");
+        }
+    }
+
+    private void validateEvidenceSnapshot(
+            DocumentEvidenceSelection requested,
+            Map<String, Object> snapshot) {
+        requiredUuid(snapshot, "snapshotId");
+        requiredUuid(snapshot, "profileRevisionId");
+        String digest = requiredText(snapshot, "snapshotDigest");
+        String profileDigest =
+                requiredText(snapshot, "profileContentDigest");
+        if (!CONTENT_SHA256.matcher(digest).matches()
+                || !CONTENT_SHA256.matcher(profileDigest).matches()
+                || !requested.purpose().name().equals(
+                        requiredText(snapshot, "purpose"))) {
+            throw new IllegalStateException(
+                    "User Profile Service returned inconsistent evidence snapshot metadata.");
+        }
+        List<?> sections = list(snapshot.get("sectionOrder"));
+        if (!sections.stream().map(this::text).toList().equals(
+                requested.sectionOrder().stream()
+                        .map(Enum::name)
+                        .toList())) {
+            throw new IllegalStateException(
+                    "User Profile Service returned a different section order.");
+        }
+        List<?> selections = list(snapshot.get("selections"));
+        List<String> returnedEntryIds = selections.stream()
+                .map(this::optionalMap)
+                .map(item -> requiredText(item, "entryId"))
+                .toList();
+        if (!returnedEntryIds.equals(requested.entryIds().stream()
+                .map(UUID::toString)
+                .toList())) {
+            throw new IllegalStateException(
+                    "User Profile Service returned a different evidence selection.");
+        }
+        var factIds = new HashSet<UUID>();
+        for (Object value : selections) {
+            Map<String, Object> selected = optionalMap(value);
+            requiredUuid(selected, "revisionId");
+            if (number(selected, "revisionNumber").longValue() < 1
+                    || !requested.sectionOrder().stream()
+                            .map(Enum::name)
+                            .toList()
+                            .contains(requiredText(selected, "category"))) {
+                throw new IllegalStateException(
+                        "Evidence selection has invalid revision or category metadata.");
+            }
+            String contentDigest =
+                    requiredText(selected, "contentDigest");
+            if (!CONTENT_SHA256.matcher(contentDigest).matches()) {
+                throw new IllegalStateException(
+                        "Evidence selection has an invalid revision digest.");
+            }
+            List<?> facts = list(selected.get("facts"));
+            if (facts.isEmpty()) {
+                throw new IllegalStateException(
+                        "Evidence selection contains no approved facts.");
+            }
+            for (Object factValue : facts) {
+                Map<String, Object> fact = optionalMap(factValue);
+                UUID factId = requiredUuid(fact, "factId");
+                if (!factIds.add(factId)
+                        || text(fact.get("factType")) == null
+                        || text(fact.get("factValue")) == null
+                        || !(fact.get("numericClaim") instanceof Boolean)) {
+                    throw new IllegalStateException(
+                            "Evidence snapshot contains an invalid or duplicate fact.");
+                }
+            }
+        }
+        if (factIds.isEmpty()) {
+            throw new IllegalStateException(
+                "Evidence snapshot contains no approved facts.");
+        }
+    }
+
+    private void validateProfileAndPurposeBindings(
+            Map<String, Object> profile,
+            Map<String, Object> cv,
+            Map<String, Object> coverLetter) {
+        UUID profileRevisionId = requiredUuid(profile, "revisionId");
+        String profileDigest = requiredText(profile, "contentDigest");
+        UUID cvProfileRevisionId =
+                requiredUuid(cv, "profileRevisionId");
+        UUID coverProfileRevisionId =
+                requiredUuid(coverLetter, "profileRevisionId");
+        String cvProfileDigest =
+                requiredText(cv, "profileContentDigest");
+        String coverProfileDigest =
+                requiredText(coverLetter, "profileContentDigest");
+        UUID cvSnapshotId = requiredUuid(cv, "snapshotId");
+        UUID coverSnapshotId =
+                requiredUuid(coverLetter, "snapshotId");
+        if (!profileRevisionId.equals(cvProfileRevisionId)
+                || !profileRevisionId.equals(coverProfileRevisionId)
+                || !profileDigest.equals(cvProfileDigest)
+                || !profileDigest.equals(coverProfileDigest)
+                || cvSnapshotId.equals(coverSnapshotId)) {
+            throw new IllegalStateException(
+                    "Evidence snapshots are not bound to the exact current profile revision and distinct document purposes.");
+        }
     }
 
     private List<Map<String, Object>> qualifications(List<?> values) {

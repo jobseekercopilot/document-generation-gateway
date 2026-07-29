@@ -19,8 +19,8 @@
         <java.version>17</java.version>
         <springdoc.version>2.3.0</springdoc.version>
         <apache.poi.version>5.2.5</apache.poi.version>
-        <user-profile-client.version>1.0.0-rev.86c8510ed319</user-profile-client.version>
-        <cv-cover-letter-client.version>2.0.0-rev.87fc2393309a</cv-cover-letter-client.version>
+        <user-profile-client.version>1.3.0-rev.85ac64be8c54</user-profile-client.version>
+        <cv-cover-letter-client.version>3.3.0-rev.027db472b3bf</cv-cover-letter-client.version>
         <document-export-client.version>2.0.0-rev.a35fff34f86b</document-export-client.version>
         <testcontainers.version>1.21.4</testcontainers.version>
     </properties>

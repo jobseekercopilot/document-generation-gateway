@@ -19,6 +19,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
+import com.jobseekercopilot.documentgenerationgateway.dto.EvidenceSection;
+import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -60,6 +64,10 @@ class DurableGenerationServiceTest {
             UUID.fromString("30000000-0000-0000-0000-000000000002");
     private static final UUID APPLICATION_ID =
             UUID.fromString("40000000-0000-0000-0000-000000000001");
+    private static final UUID CV_EVIDENCE_ID =
+            UUID.fromString("50000000-0000-4000-8000-000000000001");
+    private static final UUID COVER_LETTER_EVIDENCE_ID =
+            UUID.fromString("50000000-0000-4000-8000-000000000002");
 
     @Autowired private DurableGenerationService service;
     @Autowired private GenerationOperationRepository repository;
@@ -78,7 +86,8 @@ class DurableGenerationServiceTest {
     @Test
     void completesOneReplaySafeOperationThenApprovesExactDrafts() {
         var first = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1",
+                selectionRequest());
 
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
@@ -91,7 +100,8 @@ class DurableGenerationServiceTest {
         assertFalse(first.manualActionRequired());
 
         var replay = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1",
+                selectionRequest());
         assertEquals(first.operationId(), replay.operationId());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
@@ -150,6 +160,93 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void sendsOnlyPurposeSpecificImmutableEvidenceSnapshotsToGeneration() {
+        service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "purpose-specific-evidence-1",
+                selectionRequest());
+
+        ArgumentCaptor<Map> generationRequest =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).generate(
+                org.mockito.ArgumentMatchers.eq(OWNER),
+                any(),
+                generationRequest.capture());
+        Map<?, ?> request = generationRequest.getValue();
+        assertEquals("2.0", request.get("inputSchemaVersion"));
+        Map<?, ?> profile = (Map<?, ?>) request.get("profile");
+        assertEquals(List.of(), profile.get("skills"));
+        assertEquals(List.of(), profile.get("qualifications"));
+        assertEquals(List.of(), profile.get("employmentHistory"));
+
+        Map<?, ?> snapshots =
+                (Map<?, ?>) request.get("evidenceSnapshots");
+        Map<?, ?> cv = (Map<?, ?>) snapshots.get("cv");
+        Map<?, ?> coverLetter =
+                (Map<?, ?>) snapshots.get("coverLetter");
+        assertEquals("CV", cv.get("purpose"));
+        assertEquals("COVER_LETTER", coverLetter.get("purpose"));
+        assertEquals(
+                CV_EVIDENCE_ID.toString(),
+                ((Map<?, ?>) ((List<?>) cv.get("selections")).get(0))
+                        .get("entryId"));
+        assertEquals(
+                COVER_LETTER_EVIDENCE_ID.toString(),
+                ((Map<?, ?>) ((List<?>) coverLetter.get("selections")).get(0))
+                        .get("entryId"));
+    }
+
+    @Test
+    void idempotencyKeyCannotBeReusedForDifferentEvidenceSelection() {
+        service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "selection-conflict-1",
+                selectionRequest());
+
+        assertThrows(
+                GenerationConflictException.class,
+                () -> service.start(
+                        OWNER,
+                        AUTHORIZATION,
+                        SAVED_JOB_ID,
+                        "selection-conflict-1",
+                        selectionRequest(
+                                UUID.randomUUID(),
+                                COVER_LETTER_EVIDENCE_ID)));
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void claimantCanGenerateAgainForTheSameJobWithANewSelection() {
+        var first = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "selection-a",
+                selectionRequest());
+        var second = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "selection-b",
+                selectionRequest(
+                        UUID.randomUUID(),
+                        UUID.randomUUID()));
+
+        assertFalse(first.operationId().equals(second.operationId()));
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                second.state());
+        verify(downstream, times(2))
+                .generate(anyString(), any(), anyMap());
+    }
+
+    @Test
     void normalizesARealProviderUkPostedDateForTheCvContract() {
         when(downstream.savedJob(
                 SAVED_JOB_ID, AUTHORIZATION))
@@ -160,7 +257,8 @@ class DurableGenerationServiceTest {
                 OWNER,
                 AUTHORIZATION,
                 SAVED_JOB_ID,
-                "provider-date-1");
+                "provider-date-1",
+                selectionRequest());
 
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
@@ -193,14 +291,16 @@ class DurableGenerationServiceTest {
                     OWNER,
                     AUTHORIZATION,
                     SAVED_JOB_ID,
-                    "concurrent-key-a"));
+                    "concurrent-key-a",
+                    selectionRequest()));
             assertTrue(generationEntered.await(
                     5, TimeUnit.SECONDS));
             var duplicate = executor.submit(() -> service.start(
                     OWNER,
                     AUTHORIZATION,
                     SAVED_JOB_ID,
-                    "concurrent-key-b"));
+                    "concurrent-key-a",
+                    selectionRequest()));
             var duplicateResponse = duplicate.get(
                     5, TimeUnit.SECONDS);
             assertEquals(
@@ -222,7 +322,8 @@ class DurableGenerationServiceTest {
                         OWNER,
                         AUTHORIZATION,
                         SAVED_JOB_ID,
-                        "concurrent-key-b").state());
+                        "concurrent-key-a",
+                        selectionRequest()).state());
     }
 
     @Test
@@ -233,7 +334,8 @@ class DurableGenerationServiceTest {
                 .generate(anyString(), any(), anyMap());
 
         var unknown = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1",
+                selectionRequest());
 
         assertEquals(
                 GenerationOperationState.GENERATION_OUTCOME_UNKNOWN,
@@ -244,7 +346,8 @@ class DurableGenerationServiceTest {
                 unknown.failureCode());
 
         var replay = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1",
+                selectionRequest());
         assertEquals(unknown.operationId(), replay.operationId());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
@@ -276,7 +379,8 @@ class DurableGenerationServiceTest {
                 .createDocument(anyString(), anyString(), anyMap());
 
         var interrupted = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1",
+                selectionRequest());
         assertEquals(
                 GenerationOperationState.CREDIT_COMMITTED,
                 interrupted.state());
@@ -285,7 +389,8 @@ class DurableGenerationServiceTest {
                 interrupted.failureCode());
 
         var resumed = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1",
+                selectionRequest());
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
                 resumed.state());
@@ -307,7 +412,8 @@ class DurableGenerationServiceTest {
     @Test
     void timedOutExportResumesWithTheSameReplayKey() {
         var awaiting = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "export-failure-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "export-failure-1",
+                selectionRequest());
         doThrow(new ResourceAccessException(
                         "connection closed after export"))
                 .when(downstream)
@@ -359,7 +465,8 @@ class DurableGenerationServiceTest {
                 .thenReturn(savedJobResponse("EXPIRED_SNAPSHOT"));
 
         var failed = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1",
+                selectionRequest());
 
         assertEquals(GenerationOperationState.CREATED, failed.state());
         assertEquals(
@@ -376,7 +483,8 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .savedJob(SAVED_JOB_ID, AUTHORIZATION);
         var refreshed = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1",
+                selectionRequest());
         assertEquals(failed.operationId(), refreshed.operationId());
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
@@ -399,7 +507,8 @@ class DurableGenerationServiceTest {
                 .savedJob(SAVED_JOB_ID, AUTHORIZATION);
 
         var failed = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1",
+                selectionRequest());
 
         assertEquals(GenerationOperationState.CREATED, failed.state());
         assertEquals(
@@ -415,7 +524,8 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .savedJob(SAVED_JOB_ID, AUTHORIZATION);
         var nowAvailable = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1",
+                selectionRequest());
         assertEquals(failed.operationId(), nowAvailable.operationId());
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
@@ -440,7 +550,8 @@ class DurableGenerationServiceTest {
                 });
 
         var failed = shortDeadlineService.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-snapshot-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-snapshot-1",
+                selectionRequest());
 
         assertEquals(GenerationOperationState.FAILED, failed.state());
         assertEquals(
@@ -471,7 +582,8 @@ class DurableGenerationServiceTest {
                 .generate(anyString(), any(), anyMap());
 
         var unknown = shortDeadlineService.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1",
+                selectionRequest());
 
         assertEquals(
                 GenerationOperationState.GENERATION_OUTCOME_UNKNOWN,
@@ -480,7 +592,8 @@ class DurableGenerationServiceTest {
                 "GENERATION_OUTCOME_UNKNOWN",
                 unknown.failureCode());
         shortDeadlineService.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1",
+                selectionRequest());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, never()).commit(
@@ -509,7 +622,8 @@ class DurableGenerationServiceTest {
                 .reserve(anyString(), any(), anyLong());
 
         var recovery = shortDeadlineService.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-reserve-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-reserve-1",
+                selectionRequest());
 
         assertEquals(
                 GenerationOperationState.RECOVERY_REQUIRED,
@@ -532,7 +646,8 @@ class DurableGenerationServiceTest {
                 .estimate(anyString(), anyMap());
 
         var retryable = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "cancel-1");
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "cancel-1",
+                selectionRequest());
         assertEquals(
                 GenerationOperationState.SNAPSHOTS_RESOLVED,
                 retryable.state());
@@ -551,7 +666,8 @@ class DurableGenerationServiceTest {
                         OWNER,
                         AUTHORIZATION,
                         SAVED_JOB_ID,
-                        "cancel-1").state());
+                        "cancel-1",
+                        selectionRequest()).state());
         verify(downstream, never()).reserve(
                 anyString(), any(), anyLong());
         verify(downstream, never()).generate(
@@ -565,6 +681,9 @@ class DurableGenerationServiceTest {
         when(downstream.profile()).thenReturn(Map.of(
                 "id", 42,
                 "userId", OWNER,
+                "revisionId",
+                "60000000-0000-4000-8000-000000000001",
+                "contentDigest", "f".repeat(64),
                 "skills", List.of("Java", "PostgreSQL"),
                 "aspirations", Map.of(
                         "targetRoles",
@@ -577,6 +696,10 @@ class DurableGenerationServiceTest {
                         "employer", "Previous Ltd",
                         "startDate", "2022-01-01",
                         "status", "CURRENT"))));
+        when(downstream.evidenceSnapshot(
+                any(DocumentEvidenceSelection.class)))
+                .thenAnswer(invocation -> evidenceSnapshot(
+                        invocation.getArgument(0)));
         when(downstream.account(anyString())).thenReturn(Map.of(
                 "name", "Alex Candidate",
                 "email", "alex@example.com"));
@@ -647,7 +770,7 @@ class DurableGenerationServiceTest {
     private Map<String, Object> generated(UUID operationId) {
         return Map.of(
                 "operationId", operationId.toString(),
-                "inputSchemaVersion", "1.0",
+                "inputSchemaVersion", "2.0",
                 "cvTitle", "Tailored CV",
                 "cvContent", "CV content",
                 "coverLetterTitle", "Cover letter",
@@ -659,6 +782,66 @@ class DurableGenerationServiceTest {
                         "outputTokens", 200,
                         "totalTokens", 600),
                 "audit", Map.of("modelId", "fixture"));
+    }
+
+    private StartGenerationRequest selectionRequest() {
+        return selectionRequest(
+                CV_EVIDENCE_ID,
+                COVER_LETTER_EVIDENCE_ID);
+    }
+
+    private StartGenerationRequest selectionRequest(
+            UUID cvEvidenceId,
+            UUID coverLetterEvidenceId) {
+        return new StartGenerationRequest(List.of(
+                new DocumentEvidenceSelection(
+                        DocumentPurpose.CV,
+                        List.of(cvEvidenceId),
+                        List.of(EvidenceSection.PROJECT)),
+                new DocumentEvidenceSelection(
+                        DocumentPurpose.COVER_LETTER,
+                        List.of(coverLetterEvidenceId),
+                        List.of(EvidenceSection.VOLUNTEERING))));
+    }
+
+    private Map<String, Object> evidenceSnapshot(
+            DocumentEvidenceSelection requested) {
+        boolean cv = requested.purpose() == DocumentPurpose.CV;
+        List<Map<String, Object>> selections = new ArrayList<>();
+        for (UUID entryId : requested.entryIds()) {
+            selections.add(Map.of(
+                    "entryId", entryId.toString(),
+                    "revisionId", cv
+                            ? "70000000-0000-4000-8000-000000000001"
+                            : "70000000-0000-4000-8000-000000000002",
+                    "revisionNumber", 2,
+                    "category", requested.sectionOrder().get(0).name(),
+                    "contentDigest", "e".repeat(64),
+                    "facts", List.of(Map.of(
+                            "factId", cv
+                                    ? "80000000-0000-4000-8000-000000000001"
+                                    : "80000000-0000-4000-8000-000000000002",
+                            "factType", "DESCRIPTION",
+                            "factValue", cv
+                                    ? "Built a community scheduling tool."
+                                    : "Volunteered as a careers mentor.",
+                            "numericClaim", false))));
+        }
+        return Map.of(
+                "snapshotId", cv
+                        ? "90000000-0000-4000-8000-000000000001"
+                        : "90000000-0000-4000-8000-000000000002",
+                "purpose", requested.purpose().name(),
+                "profileRevisionId",
+                "60000000-0000-4000-8000-000000000001",
+                "profileContentDigest", "f".repeat(64),
+                "snapshotDigest", cv
+                        ? "a".repeat(64)
+                        : "b".repeat(64),
+                "sectionOrder", requested.sectionOrder().stream()
+                        .map(Enum::name)
+                        .toList(),
+                "selections", selections);
     }
 
     private Map<String, Object> documentResponse(

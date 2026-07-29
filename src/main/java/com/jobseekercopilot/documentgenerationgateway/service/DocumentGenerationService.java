@@ -3,17 +3,13 @@ package com.jobseekercopilot.documentgenerationgateway.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentKind;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentDownloadsResponse;
-import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DownloadFileResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportFileItem;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportLatestFiles;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportUploadResponse;
-import com.jobseekercopilot.documentgenerationgateway.dto.GenerationDownloadsResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
-import com.jobseekercopilot.generated.cvcoverletterservice.model.GenerateCvCoverLetterResponse;
-import com.jobseekercopilot.generated.cvcoverletterservice.model.Job;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportItem;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportRequest;
@@ -134,48 +130,6 @@ public class DocumentGenerationService {
                         documentStoreProducerToken,
                         documentStoreReaderToken,
                         paymentServiceToken));
-    }
-
-    public DocumentGenerationResponse generate(String userId, String authorization, Job job) {
-        long startedAt = System.nanoTime();
-        log.info("Document generation request received userId={} jobId={}",
-                userId,
-                job == null ? null : job.getId());
-        long profileStartedAt = System.nanoTime();
-        log.info("Calling user-profile-service for document generation userId={}", userId);
-        var downstreamProfile = userProfilesApi.getMyProfile();
-        if (downstreamProfile == null) {
-            throw new IllegalStateException("User profile service returned no profile");
-        }
-        log.info("user-profile-service returned profile userId={} durationMs={}",
-                userId,
-                (System.nanoTime() - profileStartedAt) / 1_000_000);
-
-        Map<String, Object> profile = objectMapper.convertValue(downstreamProfile, LinkedHashMap.class);
-        enrichContactDetails(profile, authorization);
-        GenerateCvCoverLetterResponse generated = generateCvAndCoverLetter(userId, profile, job);
-        if (generated == null) {
-            throw new IllegalStateException("CV cover letter service returned no generation result");
-        }
-
-        UUID cvDocumentId = parseDocumentId(generated.getCvDocumentId(), "CV");
-        UUID coverLetterDocumentId = parseDocumentId(generated.getCoverLetterDocumentId(), "cover letter");
-
-        DocumentDownloadsResponse cvDownloads = exportDocument(cvDocumentId, userId);
-        DocumentDownloadsResponse coverLetterDownloads =
-                exportDocument(coverLetterDocumentId, userId);
-        log.info("Document generation gateway completed userId={} applicationId={} cvDocumentId={} coverLetterDocumentId={} durationMs={}",
-                userId,
-                generated.getApplicationId(),
-                generated.getCvDocumentId(),
-                generated.getCoverLetterDocumentId(),
-                (System.nanoTime() - startedAt) / 1_000_000);
-
-        return new DocumentGenerationResponse(
-                generated.getApplicationId(),
-                generated.getCvDocumentId(),
-                generated.getCoverLetterDocumentId(),
-                new GenerationDownloadsResponse(cvDownloads, coverLetterDownloads));
     }
 
     public DocumentUploadResponse uploadReplacement(UUID generatedDocumentId, String userId, MultipartFile file,
@@ -367,62 +321,6 @@ public class DocumentGenerationService {
                     version,
                     uploadResponse,
                     documentKind);
-        }
-    }
-
-    private GenerateCvCoverLetterResponse generateCvAndCoverLetter(String userId, Map<String, Object> profile, Job job) {
-        long startedAt = System.nanoTime();
-        log.info("Calling cv-cover-letter-service userId={} jobId={}", userId, job == null ? null : job.getId());
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("userProfile", profile);
-        request.put("job", job);
-        HttpHeaders headers = new HttpHeaders();
-        headers.set(SERVICE_TOKEN_HEADER, cvCoverLetterServiceToken);
-        headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        GenerateCvCoverLetterResponse response = restTemplate.postForObject(
-                cvCoverLetterBaseUrl + "/api/v1/cv-cover-letter/generate",
-                new HttpEntity<>(request, headers),
-                GenerateCvCoverLetterResponse.class);
-        log.info("cv-cover-letter-service returned userId={} jobId={} applicationId={} durationMs={}",
-                userId,
-                job == null ? null : job.getId(),
-                response == null ? null : response.getApplicationId(),
-                (System.nanoTime() - startedAt) / 1_000_000);
-        return response;
-    }
-
-    private void enrichContactDetails(Map<String, Object> profile, String authorization) {
-        if (authorization == null || authorization.isBlank()) {
-            return;
-        }
-        try {
-            long startedAt = System.nanoTime();
-            log.info("Calling authentication-service for contact enrichment");
-            HttpHeaders headers = new HttpHeaders();
-            headers.set(HttpHeaders.AUTHORIZATION, authorization);
-            headers.set(SERVICE_TOKEN_HEADER, authenticationServiceToken);
-            Map<?, ?> account = restTemplate.exchange(
-                    authenticationBaseUrl + "/api/auth/me",
-                    org.springframework.http.HttpMethod.GET,
-                    new HttpEntity<>(headers),
-                    Map.class).getBody();
-            if (account != null) {
-                putIfText(profile, "fullName", account.get("name"));
-                putIfText(profile, "email", account.get("email"));
-            }
-            log.info("authentication-service contact enrichment completed durationMs={}",
-                    (System.nanoTime() - startedAt) / 1_000_000);
-        } catch (RestClientException exception) {
-            log.warn("authentication-service contact enrichment failed error={}",
-                    exception.getClass().getSimpleName());
-            // Contact details improve document presentation, but generation should not fail if auth lookup is unavailable.
-        }
-    }
-
-    private void putIfText(Map<String, Object> profile, String key, Object value) {
-        if (value instanceof String text && !text.isBlank()) {
-            profile.put(key, text.trim());
         }
     }
 

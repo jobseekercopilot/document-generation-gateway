@@ -45,6 +45,7 @@ public class GenerationOperationRepository {
             String idempotencyKey,
             UUID savedJobId,
             String requestFingerprint,
+            Map<String, Object> initialData,
             Duration deadline) {
         Instant now = Instant.now();
         GenerationOperation created = new GenerationOperation(
@@ -54,7 +55,7 @@ public class GenerationOperationRepository {
                 savedJobId,
                 requestFingerprint,
                 GenerationOperationState.CREATED,
-                Map.of(),
+                initialData,
                 null,
                 null,
                 now.plus(deadline),
@@ -77,7 +78,7 @@ public class GenerationOperationRepository {
                     created.savedJobId(),
                     created.requestFingerprint(),
                     created.state().name(),
-                    "{}",
+                    writeData(created.data()),
                     atOffset(created.deadlineAt()),
                     created.version(),
                     atOffset(created.createdAt()),
@@ -95,9 +96,23 @@ public class GenerationOperationRepository {
                 }
                 return replay;
             }
-            return findByOwnerAndSavedJobId(ownerId, savedJobId)
-                    .orElseThrow(() -> duplicate);
+            throw duplicate;
         }
+    }
+
+    public GenerationOperation createOrReplay(
+            String ownerId,
+            String idempotencyKey,
+            UUID savedJobId,
+            String requestFingerprint,
+            Duration deadline) {
+        return createOrReplay(
+                ownerId,
+                idempotencyKey,
+                savedJobId,
+                requestFingerprint,
+                Map.of(),
+                deadline);
     }
 
     public Optional<GenerationOperation> findByOwnerAndId(UUID id, String ownerId) {

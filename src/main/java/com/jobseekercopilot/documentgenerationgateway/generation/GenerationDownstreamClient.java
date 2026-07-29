@@ -1,5 +1,6 @@
 package com.jobseekercopilot.documentgenerationgateway.generation;
 
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
 import java.util.Map;
 import java.util.UUID;
 
@@ -7,6 +8,8 @@ public interface GenerationDownstreamClient {
     Map<String, Object> savedJob(UUID savedJobId, String authorization);
 
     Map<String, Object> profile();
+
+    Map<String, Object> evidenceSnapshot(DocumentEvidenceSelection selection);
 
     Map<String, Object> account(String authorization);
 

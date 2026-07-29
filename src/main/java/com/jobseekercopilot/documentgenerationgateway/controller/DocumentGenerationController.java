@@ -2,11 +2,10 @@ package com.jobseekercopilot.documentgenerationgateway.controller;
 
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentKind;
 import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
-import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationRequest;
-import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.generation.DurableGenerationService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownloadService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentGenerationService;
@@ -53,7 +52,8 @@ public class DocumentGenerationController {
             summary = "Start or replay durable draft generation from an owner-scoped saved job",
             description = "The same owner and Idempotency-Key return the same operation. "
                     + "The request accepts only an active canonical Job 2.0 snapshot, freezes "
-                    + "Job/Profile evidence, applies one deadline across downstream calls, "
+                    + "Job/Profile evidence and two explicit purpose-bound evidence selections, "
+                    + "applies one deadline across downstream calls, "
                     + "reserves AI Credit, performs at most one automatic model invocation "
                     + "and stores DRAFT documents.")
     @ApiResponses({
@@ -69,13 +69,15 @@ public class DocumentGenerationController {
             @RequestHeader(name = "Authorization", required = false)
             String authorization,
             @RequestHeader(name = "Idempotency-Key")
-            String idempotencyKey) {
+            String idempotencyKey,
+            @Valid @RequestBody StartGenerationRequest request) {
         return ResponseEntity.accepted().body(
                 durableGenerationService.start(
                         authenticatedSubject(authentication),
                         authorization,
                         savedJobId,
-                        idempotencyKey));
+                        idempotencyKey,
+                        request));
     }
 
     @GetMapping("/operations/{operationId}")
@@ -113,31 +115,6 @@ public class DocumentGenerationController {
             @Parameter(hidden = true) Authentication authentication) {
         return ResponseEntity.ok(durableGenerationService.cancel(
                 authenticatedSubject(authentication), operationId));
-    }
-
-    @PostMapping("/jobs/{jobId}/generate")
-    @Operation(summary = "Generate a tailored CV and cover letter and export DOCX/PDF files")
-    @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Documents generated, exported, and stored"),
-            @ApiResponse(responseCode = "400", description = "Invalid or mismatched job data"),
-            @ApiResponse(responseCode = "401", description = "No authenticated user"),
-            @ApiResponse(responseCode = "502", description = "A downstream service failed")
-    })
-    public ResponseEntity<DocumentGenerationResponse> generate(
-            @PathVariable String jobId,
-            @Parameter(hidden = true) Authentication authentication,
-            @Parameter(hidden = true)
-            @RequestHeader(name = "Authorization", required = false) String authorization,
-            @Valid @RequestBody DocumentGenerationRequest request) {
-        if (isBlank(request.getJob().getId())
-                || isBlank(request.getJob().getTitle())
-                || isBlank(request.getJob().getCompany())
-                || isBlank(request.getJob().getDescription())
-                || !jobId.equals(request.getJob().getId())) {
-            return ResponseEntity.badRequest().build();
-        }
-        return ResponseEntity.ok(
-                service.generate(authenticatedSubject(authentication), authorization, request.getJob()));
     }
 
     @GetMapping("/files/{fileId}/download")
