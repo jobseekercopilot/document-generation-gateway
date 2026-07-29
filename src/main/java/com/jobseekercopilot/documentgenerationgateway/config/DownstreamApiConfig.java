@@ -3,6 +3,7 @@ package com.jobseekercopilot.documentgenerationgateway.config;
 import com.jobseekercopilot.generated.cvcoverletterservice.api.CvCoverLetterControllerApi;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
+import com.jobseekercopilot.generated.userprofileservice.api.EvidenceSnapshotsApi;
 import com.jobseekercopilot.documentgenerationgateway.generation.OperationDeadlineGuard;
 import com.jobseekercopilot.documentgenerationgateway.security.CurrentAccessTokenSupplier;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
@@ -29,6 +30,18 @@ public class DownstreamApiConfig {
         client.setBasePath(baseUrl);
         client.setBearerToken(accessTokenSupplier);
         return new UserProfilesApi(client);
+    }
+
+    @Bean
+    EvidenceSnapshotsApi evidenceSnapshotsApi(
+            @Value("${services.user-profile-service.base-url}") String baseUrl,
+            CurrentAccessTokenSupplier accessTokenSupplier,
+            RestTemplate restTemplate) {
+        var client = new com.jobseekercopilot.generated.userprofileservice.client.ApiClient(
+                restTemplate);
+        client.setBasePath(baseUrl);
+        client.setBearerToken(accessTokenSupplier);
+        return new EvidenceSnapshotsApi(client);
     }
 
     @Bean

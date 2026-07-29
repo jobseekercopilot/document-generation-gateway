@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("1.4.0", contract.path("info").path("version").asText());
+        assertEquals("2.0.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -52,13 +52,42 @@ class OpenApiExportTest {
                         .path("scheme")
                         .asText());
         assertFalse(spec.contains("X-User-Id"));
+        assertFalse(contract.path("paths")
+                .has("/api/v1/document-generation/jobs/{jobId}/generate"));
+        JsonNode start = contract.path("paths")
+                .path("/api/v1/document-generation/saved-jobs/{savedJobId}/operations")
+                .path("post");
+        assertTrue(start.path("requestBody").path("required").asBoolean());
         assertEquals(
-                java.util.Set.of("id", "title", "company", "description"),
+                "#/components/schemas/StartGenerationRequest",
+                start.path("requestBody")
+                        .path("content")
+                        .path("application/json")
+                        .path("schema")
+                        .path("$ref")
+                        .asText());
+        JsonNode schemas = contract.path("components").path("schemas");
+        assertEquals(
+                java.util.Set.of("documents"),
                 new java.util.HashSet<>(objectMapper.convertValue(
-                        contract.path("components").path("schemas").path("Job").path("required"),
+                        schemas.path("StartGenerationRequest").path("required"),
                         objectMapper.getTypeFactory().constructCollectionType(
                                 java.util.List.class,
                                 String.class))));
+        assertEquals(
+                java.util.Set.of("purpose", "entryIds", "sectionOrder"),
+                new java.util.HashSet<>(objectMapper.convertValue(
+                        schemas.path("DocumentEvidenceSelection").path("required"),
+                        objectMapper.getTypeFactory().constructCollectionType(
+                                java.util.List.class,
+                                String.class))));
+        assertEquals(
+                "[\"CV\",\"COVER_LETTER\"]",
+                schemas.path("DocumentEvidenceSelection")
+                        .path("properties")
+                        .path("purpose")
+                        .path("enum")
+                        .toString());
         contract.path("paths").forEach(path ->
                 path.forEach(operation ->
                         assertTrue(operation.path("security").toString().contains("bearerAuth"))));

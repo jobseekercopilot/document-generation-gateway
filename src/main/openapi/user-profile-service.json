@@ -2,13 +2,21 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Job Seeker Copilot User Profile API",
-    "version": "1.0.0",
-    "description": "Producer-owned contract for authenticated current-user profile operations."
+    "version": "1.3.0",
+    "description": "Producer-owned contract for authenticated current-user profile, versioned evidence and immutable purpose-bound snapshot operations."
   },
   "tags": [
     {
       "name": "User Profiles",
       "description": "Authenticated current-user profile operations"
+    },
+    {
+      "name": "Evidence Library",
+      "description": "Authenticated owner-scoped reusable evidence operations"
+    },
+    {
+      "name": "Evidence snapshots",
+      "description": "Authenticated owner-scoped immutable evidence selections"
     }
   ],
   "paths": {
@@ -27,6 +35,14 @@
         "responses": {
           "200": {
             "description": "Profile found",
+            "headers": {
+              "ETag": {
+                "description": "Quoted monotonic profile revision for optimistic concurrency",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -54,6 +70,18 @@
             "bearerAuth": []
           }
         ],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional quoted profile revision. Omission is retained temporarily for legacy clients.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"?[0-9]+\"?$"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -67,6 +95,14 @@
         "responses": {
           "200": {
             "description": "Profile saved",
+            "headers": {
+              "ETag": {
+                "description": "Quoted resulting profile revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -82,13 +118,487 @@
             "description": "Missing or invalid access token"
           },
           "409": {
-            "description": "Concurrent profile write conflict; retrying the complete request is safe"
+            "description": "Stale profile revision or concurrent profile write conflict"
           }
+        }
+      },
+      "patch": {
+        "tags": [
+          "User Profiles"
+        ],
+        "operationId": "updateMyPreferences",
+        "summary": "Update current profile preferences without replacing historical profile fields",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional quoted profile revision for optimistic concurrency.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"?[0-9]+\"?$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePreferencesUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preferences saved while legacy roles and qualifications are preserved",
+            "headers": {
+              "ETag": {
+                "description": "Quoted resulting profile revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Preference validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "409": {
+            "description": "Stale profile revision"
+          }
+        }
+      }
+    },
+    "/api/evidence": {
+      "get": {
+        "tags": [
+          "Evidence Library"
+        ],
+        "operationId": "listEvidence",
+        "summary": "List evidence owned by the authenticated claimant",
+        "description": "Includes review-required drafts created idempotently from legacy roles and qualifications.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "includeArchived",
+            "in": "query",
+            "required": false,
+            "description": "Include archived entries for Evidence Library history views",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owner-scoped evidence entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EvidenceEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Evidence Library"
+        ],
+        "operationId": "createEvidence",
+        "summary": "Create a reusable evidence entry as a draft",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Draft evidence entry created",
+            "headers": {
+              "ETag": {
+                "description": "Quoted evidence entry version",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Evidence validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        }
+      }
+    },
+    "/api/evidence/{entryId}": {
+      "get": {
+        "tags": [
+          "Evidence Library"
+        ],
+        "operationId": "getEvidence",
+        "summary": "Get one evidence entry owned by the authenticated claimant",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence entry",
+            "headers": {
+              "ETag": {
+                "description": "Quoted evidence entry version",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Evidence Library"
+        ],
+        "operationId": "updateEvidence",
+        "summary": "Create a new immutable draft revision",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/EvidenceEntryId"
+          },
+          {
+            "$ref": "#/components/parameters/EvidenceIfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/EvidenceEntryResponse"
+          },
+          "400": {
+            "description": "Evidence validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          },
+          "409": {
+            "description": "Stale version or lifecycle conflict"
+          }
+        }
+      }
+    },
+    "/api/evidence/{entryId}/confirm": {
+      "post": {
+        "tags": ["Evidence Library"],
+        "operationId": "confirmEvidence",
+        "summary": "Confirm the latest draft as a new immutable revision",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/EvidenceEntryId"},
+          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+        ],
+        "responses": {
+          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Entry does not exist or is owned by another claimant"},
+          "409": {"description": "Stale version or latest revision is not a draft"}
+        }
+      }
+    },
+    "/api/evidence/{entryId}/hide": {
+      "post": {
+        "tags": ["Evidence Library"],
+        "operationId": "hideEvidence",
+        "summary": "Hide an evidence entry from routine selectors",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/EvidenceEntryId"},
+          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+        ],
+        "responses": {
+          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Entry does not exist or is owned by another claimant"},
+          "409": {"description": "Stale version"}
+        }
+      }
+    },
+    "/api/evidence/{entryId}/show": {
+      "post": {
+        "tags": ["Evidence Library"],
+        "operationId": "showEvidence",
+        "summary": "Show an evidence entry in routine selectors",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/EvidenceEntryId"},
+          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+        ],
+        "responses": {
+          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Entry does not exist or is owned by another claimant"},
+          "409": {"description": "Stale version"}
+        }
+      }
+    },
+    "/api/evidence/{entryId}/archive": {
+      "post": {
+        "tags": ["Evidence Library"],
+        "operationId": "archiveEvidence",
+        "summary": "Archive evidence while retaining immutable history",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/EvidenceEntryId"},
+          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+        ],
+        "responses": {
+          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Entry does not exist or is owned by another claimant"},
+          "409": {"description": "Stale version or lifecycle conflict"}
+        }
+      }
+    },
+    "/api/evidence/{entryId}/restore": {
+      "post": {
+        "tags": ["Evidence Library"],
+        "operationId": "restoreEvidence",
+        "summary": "Restore archived evidence",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/EvidenceEntryId"},
+          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+        ],
+        "responses": {
+          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Entry does not exist or is owned by another claimant"},
+          "409": {"description": "Stale version or lifecycle conflict"}
+        }
+      }
+    },
+    "/api/evidence/{entryId}/supersede": {
+      "post": {
+        "tags": ["Evidence Library"],
+        "operationId": "supersedeEvidence",
+        "summary": "Supersede evidence with another owned active entry",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/EvidenceEntryId"},
+          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/EvidenceSupersedeRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
+          "400": {"description": "Invalid replacement entry"},
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Entry does not exist or is owned by another claimant"},
+          "409": {"description": "Stale version or lifecycle conflict"}
+        }
+      }
+    },
+    "/api/evidence/snapshots": {
+      "post": {
+        "tags": ["Evidence snapshots"],
+        "operationId": "createEvidenceSnapshot",
+        "summary": "Create an immutable purpose-bound snapshot from explicitly selected evidence",
+        "description": "The server derives the owner and resolves only the latest visible, active, user-confirmed revision for each ordered server-issued entry ID. Evidence is never included automatically.",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/EvidenceSnapshotRequest"}
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Immutable evidence snapshot created",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/EvidenceSnapshot"}
+              }
+            }
+          },
+          "400": {"description": "Snapshot request validation failed"},
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Profile or selected entry does not exist for the authenticated claimant"},
+          "409": {"description": "Duplicate, stale, draft, hidden, review-required, archived or superseded evidence"}
+        }
+      }
+    },
+    "/api/evidence/snapshots/{snapshotId}": {
+      "get": {
+        "tags": ["Evidence snapshots"],
+        "operationId": "getEvidenceSnapshot",
+        "summary": "Get an immutable evidence snapshot owned by the authenticated claimant",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {
+            "name": "snapshotId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owned immutable evidence snapshot",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/EvidenceSnapshot"}
+              }
+            }
+          },
+          "401": {"description": "Missing or invalid access token"},
+          "404": {"description": "Snapshot does not exist or is owned by another claimant"}
         }
       }
     }
   },
   "components": {
+    "parameters": {
+      "EvidenceEntryId": {
+        "name": "entryId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "EvidenceIfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": false,
+        "description": "Optional quoted evidence entry version for optimistic concurrency.",
+        "schema": {
+          "type": "string",
+          "pattern": "^\"?[0-9]+\"?$"
+        }
+      }
+    },
+    "responses": {
+      "EvidenceEntryResponse": {
+        "description": "Updated evidence entry",
+        "headers": {
+          "ETag": {
+            "description": "Quoted resulting evidence entry version",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/EvidenceEntry"
+            }
+          }
+        }
+      }
+    },
     "securitySchemes": {
       "bearerAuth": {
         "type": "http",
@@ -109,6 +619,25 @@
             "type": "string",
             "maxLength": 128,
             "readOnly": true
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "readOnly": true,
+            "description": "Monotonic revision of claimant-declared profile content"
+          },
+          "revisionId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true,
+            "description": "Immutable opaque identity for this profile revision"
+          },
+          "contentDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "readOnly": true,
+            "description": "SHA-256 digest of normalized claimant-declared profile content"
           },
           "skills": {
             "type": "array",
@@ -177,8 +706,95 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 500
+          },
+          "employmentTypes": {
+            "type": "array",
+            "maxItems": 5,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/EmploymentType"
+            }
+          },
+          "workingPatterns": {
+            "type": "array",
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/WorkingPattern"
+            }
+          },
+          "workplaceArrangements": {
+            "type": "array",
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/WorkplaceArrangement"
+            }
+          },
+          "availableFrom": {
+            "type": "string",
+            "format": "date",
+            "description": "Explicit claimant-selected availability date; never fabricated"
+          },
+          "noticePeriodDays": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3650,
+            "description": "Explicit claimant-selected notice period; mutually exclusive with availableFrom"
           }
         }
+      },
+      "ProfilePreferencesUpdate": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "aspirations": {
+            "$ref": "#/components/schemas/Aspirations"
+          },
+          "workPreferences": {
+            "$ref": "#/components/schemas/WorkPreferences"
+          }
+        },
+        "description": "Current intentions and preferences only; roles and qualifications are preserved"
+      },
+      "EmploymentType": {
+        "type": "string",
+        "enum": [
+          "PERMANENT",
+          "FIXED_TERM",
+          "TEMPORARY",
+          "APPRENTICESHIP",
+          "CONTRACT"
+        ]
+      },
+      "WorkingPattern": {
+        "type": "string",
+        "enum": [
+          "FULL_TIME",
+          "PART_TIME",
+          "FLEXIBLE",
+          "DAY",
+          "EVENING",
+          "NIGHT",
+          "WEEKEND",
+          "SHIFT"
+        ]
+      },
+      "WorkplaceArrangement": {
+        "type": "string",
+        "enum": [
+          "ONSITE",
+          "HYBRID",
+          "REMOTE"
+        ]
       },
       "PostcodeLocation": {
         "type": "object",
@@ -308,6 +924,615 @@
         "enum": [
           "CURRENT",
           "PREVIOUS_ROLE"
+        ]
+      },
+      "EvidenceEntry": {
+        "type": "object",
+        "required": [
+          "entryId",
+          "category",
+          "visibility",
+          "lifecycle",
+          "reviewRequired",
+          "version",
+          "revisions"
+        ],
+        "properties": {
+          "entryId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "category": {
+            "$ref": "#/components/schemas/EvidenceCategory"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/EvidenceVisibility"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/EvidenceLifecycle"
+          },
+          "supersededByEntryId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "reviewRequired": {
+            "type": "boolean",
+            "description": "True when a claimant must review imported or changed evidence before confirmation"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "readOnly": true,
+            "description": "Monotonic entry version used by If-Match for lifecycle-safe writes"
+          },
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRevision"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "readOnly": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "readOnly": true
+          }
+        }
+      },
+      "EvidenceRevision": {
+        "type": "object",
+        "required": [
+          "revisionId",
+          "revisionNumber",
+          "confirmationState",
+          "contentDigest",
+          "heading",
+          "ongoing",
+          "demonstratedSkills",
+          "supportingLinks",
+          "facts",
+          "createdAt",
+          "createdBy"
+        ],
+        "properties": {
+          "revisionId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "revisionNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "readOnly": true
+          },
+          "confirmationState": {
+            "$ref": "#/components/schemas/EvidenceConfirmationState"
+          },
+          "contentDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "readOnly": true
+          },
+          "heading": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "organisationContext": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "roleTitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "programmeOrSubject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "institution": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "qualificationTitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "issuer": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "resultOrStatus": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "projectRole": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "responsibilities": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "achievements": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "careerBreakReason": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Optional and never eligible for automatic selection"
+          },
+          "privateCredentialIdentifier": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Claimant-visible private value; excluded from model input by default"
+          },
+          "ongoing": {
+            "type": "boolean"
+          },
+          "startDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "endDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "issueDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "expiryDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "demonstratedSkills": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "supportingLinks": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048,
+              "pattern": "^https://"
+            }
+          },
+          "facts": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/EvidenceFact"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "readOnly": true
+          },
+          "createdBy": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "USER",
+              "LEGACY_MIGRATION",
+              "SYSTEM"
+            ]
+          }
+        }
+      },
+      "EvidenceWriteRequest": {
+        "type": "object",
+        "required": [
+          "category",
+          "heading"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/EvidenceCategory"
+          },
+          "heading": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "organisationContext": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "roleTitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "programmeOrSubject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "institution": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "qualificationTitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "issuer": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "resultOrStatus": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "projectRole": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "responsibilities": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "achievements": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "careerBreakReason": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "privateCredentialIdentifier": {
+            "type": "string",
+            "maxLength": 500,
+            "writeOnly": true
+          },
+          "ongoing": {
+            "type": "boolean",
+            "default": false
+          },
+          "startDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "endDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "issueDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "expiryDate": {
+            "$ref": "#/components/schemas/PartialDate"
+          },
+          "demonstratedSkills": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "supportingLinks": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048,
+              "pattern": "^https://"
+            }
+          }
+        },
+        "description": "Bounded plain-text evidence content. Category-specific required fields are enforced by the service."
+      },
+      "EvidenceSupersedeRequest": {
+        "type": "object",
+        "required": [
+          "replacementEntryId"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "replacementEntryId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "EvidenceSnapshotRequest": {
+        "type": "object",
+        "required": [
+          "purpose",
+          "entryIds",
+          "sectionOrder"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "purpose": {
+            "$ref": "#/components/schemas/EvidenceSnapshotPurpose"
+          },
+          "entryIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "description": "Ordered server-issued evidence entry IDs; fact or revision IDs are not accepted from the browser",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "sectionOrder": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 9,
+            "items": {
+              "$ref": "#/components/schemas/EvidenceCategory"
+            }
+          }
+        }
+      },
+      "EvidenceSnapshot": {
+        "type": "object",
+        "required": [
+          "snapshotId",
+          "purpose",
+          "profileRevisionId",
+          "profileContentDigest",
+          "sectionOrder",
+          "selections",
+          "snapshotDigest",
+          "createdAt"
+        ],
+        "properties": {
+          "snapshotId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/EvidenceSnapshotPurpose"
+          },
+          "profileRevisionId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "profileContentDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "readOnly": true
+          },
+          "sectionOrder": {
+            "type": "array",
+            "maxItems": 9,
+            "items": {
+              "$ref": "#/components/schemas/EvidenceCategory"
+            },
+            "readOnly": true
+          },
+          "selections": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSnapshotSelection"
+            },
+            "readOnly": true
+          },
+          "snapshotDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "readOnly": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "readOnly": true
+          }
+        }
+      },
+      "EvidenceSnapshotSelection": {
+        "type": "object",
+        "required": [
+          "entryId",
+          "revisionId",
+          "revisionNumber",
+          "category",
+          "contentDigest",
+          "facts"
+        ],
+        "properties": {
+          "entryId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "revisionId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "revisionNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "readOnly": true
+          },
+          "category": {
+            "allOf": [
+              {"$ref": "#/components/schemas/EvidenceCategory"}
+            ],
+            "readOnly": true
+          },
+          "contentDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "readOnly": true
+          },
+          "facts": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSnapshotFact"
+            },
+            "readOnly": true
+          }
+        }
+      },
+      "EvidenceSnapshotFact": {
+        "type": "object",
+        "required": [
+          "factId",
+          "factType",
+          "factValue",
+          "numericClaim"
+        ],
+        "properties": {
+          "factId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "factType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "readOnly": true
+          },
+          "factValue": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "readOnly": true
+          },
+          "numericClaim": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        }
+      },
+      "EvidenceSnapshotPurpose": {
+        "type": "string",
+        "enum": [
+          "CV",
+          "COVER_LETTER"
+        ]
+      },
+      "PartialDate": {
+        "type": "object",
+        "required": [
+          "precision",
+          "year"
+        ],
+        "properties": {
+          "precision": {
+            "type": "string",
+            "enum": [
+              "YEAR",
+              "MONTH",
+              "DAY"
+            ]
+          },
+          "year": {
+            "type": "integer",
+            "minimum": 1900,
+            "maximum": 2200
+          },
+          "month": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31
+          }
+        }
+      },
+      "EvidenceFact": {
+        "type": "object",
+        "required": [
+          "factId",
+          "factType",
+          "factValue",
+          "numericClaim",
+          "position"
+        ],
+        "properties": {
+          "factId": {
+            "type": "string",
+            "format": "uuid",
+            "readOnly": true
+          },
+          "factType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "factValue": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "numericClaim": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "EvidenceCategory": {
+        "type": "string",
+        "enum": [
+          "EMPLOYMENT",
+          "EDUCATION",
+          "QUALIFICATION_TRAINING",
+          "PROJECT",
+          "VOLUNTEERING",
+          "FREELANCE",
+          "ACHIEVEMENT",
+          "CAREER_BREAK",
+          "OTHER"
+        ]
+      },
+      "EvidenceConfirmationState": {
+        "type": "string",
+        "enum": [
+          "DRAFT",
+          "USER_CONFIRMED"
+        ]
+      },
+      "EvidenceVisibility": {
+        "type": "string",
+        "enum": [
+          "VISIBLE",
+          "HIDDEN"
+        ]
+      },
+      "EvidenceLifecycle": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "ARCHIVED",
+          "SUPERSEDED"
         ]
       }
     }

@@ -48,7 +48,7 @@ class GenerationOperationRepositoryPostgresTest {
     }
 
     @Test
-    void migrationEnforcesOneOperationAndOneLeaseForConcurrentOwnerJob()
+    void migrationAllowsDistinctSelectionsWhileEachOperationHasOneLease()
             throws Exception {
         UUID savedJobId = UUID.randomUUID();
         CountDownLatch start = new CountDownLatch(1);
@@ -78,9 +78,10 @@ class GenerationOperationRepositoryPostgresTest {
             GenerationOperation secondOperation =
                     second.get(10, TimeUnit.SECONDS);
 
-            assertEquals(firstOperation.id(), secondOperation.id());
+            org.junit.jupiter.api.Assertions.assertNotEquals(
+                    firstOperation.id(), secondOperation.id());
             assertEquals(
-                    1,
+                    2,
                     jdbc.queryForObject(
                             "SELECT COUNT(*) FROM generation_operations",
                             Integer.class));

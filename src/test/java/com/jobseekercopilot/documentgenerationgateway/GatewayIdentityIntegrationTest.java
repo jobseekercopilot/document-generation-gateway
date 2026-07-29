@@ -7,9 +7,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.generation.DurableGenerationService;
 import com.jobseekercopilot.documentgenerationgateway.generation.GenerationOperationState;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownloadService;
@@ -19,6 +19,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -77,40 +78,13 @@ class GatewayIdentityIntegrationTest {
     private DurableGenerationService durableGenerationService;
 
     @Test
-    void browserIdentityHeaderCannotAuthenticateOrOverrideJwtSubject() throws Exception {
+    void browserIdentityHeaderCannotAuthenticate() throws Exception {
         mockMvc.perform(get("/api/v1/document-generation/files/{fileId}/download",
                         "00000000-0000-0000-0000-000000000001")
                         .header("X-User-Id", "victim"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
 
-        org.mockito.Mockito.when(generationService.generate(
-                        ArgumentMatchers.anyString(),
-                        ArgumentMatchers.anyString(),
-                        ArgumentMatchers.any()))
-                .thenReturn(new DocumentGenerationResponse(null, null, null, null));
-
-        String token = JWKS.validToken("alice");
-        mockMvc.perform(post("/api/v1/document-generation/jobs/{jobId}/generate", "job-1")
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-                        .header("X-User-Id", "victim")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "job": {
-                                    "id": "job-1",
-                                    "title": "Developer",
-                                    "company": "Example",
-                                    "description": "Build things"
-                                  }
-                                }
-                                """))
-                .andExpect(status().isOk());
-
-        verify(generationService).generate(
-                ArgumentMatchers.eq("alice"),
-                ArgumentMatchers.eq("Bearer " + token),
-                ArgumentMatchers.any());
     }
 
     @Test
@@ -143,7 +117,8 @@ class GatewayIdentityIntegrationTest {
                         ArgumentMatchers.anyString(),
                         ArgumentMatchers.anyString(),
                         ArgumentMatchers.any(),
-                        ArgumentMatchers.anyString()))
+                        ArgumentMatchers.anyString(),
+                        ArgumentMatchers.any(StartGenerationRequest.class)))
                 .thenReturn(new GenerationOperationResponse(
                         operationId,
                         savedJobId,
@@ -168,16 +143,45 @@ class GatewayIdentityIntegrationTest {
                                 HttpHeaders.AUTHORIZATION,
                                 "Bearer " + token)
                         .header("Idempotency-Key", operationKey)
-                        .header("X-Document-Owner", "victim"))
+                        .header("X-Document-Owner", "victim")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "documents": [
+                                    {
+                                      "purpose": "CV",
+                                      "entryIds": [
+                                        "50000000-0000-4000-8000-000000000001"
+                                      ],
+                                      "sectionOrder": ["PROJECT"]
+                                    },
+                                    {
+                                      "purpose": "COVER_LETTER",
+                                      "entryIds": [
+                                        "50000000-0000-4000-8000-000000000002"
+                                      ],
+                                      "sectionOrder": ["VOLUNTEERING"]
+                                    }
+                                  ]
+                                }
+                                """))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.operationId")
                         .value(operationId.toString()));
 
+        ArgumentCaptor<StartGenerationRequest> selection =
+                ArgumentCaptor.forClass(StartGenerationRequest.class);
         verify(durableGenerationService).start(
                 ArgumentMatchers.eq("alice"),
                 ArgumentMatchers.eq("Bearer " + token),
                 ArgumentMatchers.eq(savedJobId),
-                ArgumentMatchers.eq(operationKey));
+                ArgumentMatchers.eq(operationKey),
+                selection.capture());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                java.util.List.of("CV", "COVER_LETTER"),
+                selection.getValue().documents().stream()
+                        .map(document -> document.purpose().name())
+                        .toList());
     }
 
     @Test

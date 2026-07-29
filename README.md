@@ -5,9 +5,10 @@ and replacing CV and cover-letter documents.
 
 This service is **not beta-ready**. A new durable saved-job operation API now
 resolves canonical snapshots, coordinates AI Credit, stores drafts and waits
-for exact-version approval before export and Tracker creation. The older route
-still accepts browser-supplied Job data during migration, and runtime database,
-Client/BFF wiring and cross-user E2E evidence remain outstanding. See
+for exact-version approval before export and Tracker creation. Version 2.0
+removes the unsafe browser-supplied Job route: all new generation now requires
+a saved canonical job and explicit CV and cover-letter evidence selections.
+Runtime database and cross-user E2E evidence remain outstanding. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
 The cross-repository document ownership boundary is defined by the accepted
@@ -29,7 +30,10 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-Version `1.4.0` validates active canonical Job 2.0 snapshot evidence and
+Version `2.0.0` requires separate claimant-selected entry and section order
+for CV and cover-letter generation, resolves immutable evidence snapshots and
+removes the legacy browser-supplied Job route. Version `1.4.0` validates active
+canonical Job 2.0 snapshot evidence and
 applies the operation's remaining absolute deadline to every durable-flow
 downstream HTTP connect/read. Version `1.3.0` added the durable
 initial-generation operation described in
@@ -40,16 +44,17 @@ the new version in the existing document family, uses stable idempotency keys
 for Store and Export, and returns `202` with operation/recovery state whenever
 completion is still pending. Tracker alone commits the application reference.
 
-The User Profile, legacy CV/Cover Letter and Document Export clients resolve
+The User Profile, CV/Cover Letter and Document Export clients resolve
 as immutable, producer-owned private Maven packages
-`1.0.0-rev.86c8510ed319`, `2.0.0-rev.87fc2393309a` and
+`1.3.0-rev.85ac64be8c54`, `3.3.0-rev.027db472b3bf` and
 `2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
 the consumer build. The new durable flow uses focused handwritten adapters for
-Job `2.0.0`, Payment `3.0.0` and CV/Cover Letter `3.2.0`. The raw
+Job `2.0.0` and Payment `3.0.0`, plus producer-owned clients for User Profile
+`1.3.0` and CV/Cover Letter `3.3.0`. The raw
 Authentication, Document Store, Application Tracker and replacement-upload
 adapters are also checked against their pinned producer contracts. The durable
 path consumes Store `2.2.0` and Export `3.0.0` through focused handwritten
-adapters, while the legacy route retains the immutable Export `2.0.0` client.
+adapters, while replacement flows retain the immutable Export `2.0.0` client.
 Generated sources and binaries are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 

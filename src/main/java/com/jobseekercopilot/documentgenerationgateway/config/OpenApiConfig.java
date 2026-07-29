@@ -4,8 +4,6 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.security.SecurityScheme;
-import java.util.List;
-import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -22,15 +20,9 @@ public class OpenApiConfig {
                                 .bearerFormat("JWT")))
                 .info(new Info()
                         .title("Jobseeker Copilot - Document Generation Gateway API")
-                        .version("1.4.0")
-                        .description("Durably coordinates owner-scoped canonical snapshots, bounded tailored document generation and approval."));
-    }
-
-    @Bean
-    OpenApiCustomizer documentGenerationSchemaRequirements() {
-        return openApi -> openApi.getComponents()
-                .getSchemas()
-                .get("Job")
-                .setRequired(List.of("id", "title", "company", "description"));
+                        .version("2.0.0")
+                        .description("Durably coordinates owner-scoped canonical snapshots, "
+                                + "explicit purpose-bound evidence selections, bounded tailored "
+                                + "document generation and approval."));
     }
 }
