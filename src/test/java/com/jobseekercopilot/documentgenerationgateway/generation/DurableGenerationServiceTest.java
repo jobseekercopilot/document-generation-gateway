@@ -213,13 +213,38 @@ class DurableGenerationServiceTest {
                 Map.of(
                         "id", APPLICATION_ID.toString(),
                         "canonicalJobId", "canonical-job-1",
-                        "status", "DOCUMENTS_GENERATED")));
+                        "status", "SAVED",
+                        "version", 3)));
         when(downstream.updateApplicationDocument(
-                anyString(), any(), anyString(), any()))
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID))
                 .thenReturn(Map.of(
                         "id", APPLICATION_ID.toString(),
                         "canonicalJobId", "canonical-job-1",
-                        "status", "DOCUMENTS_GENERATED"));
+                        "status", "SAVED",
+                        "version", 4));
+        when(downstream.updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 5));
+        when(downstream.updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED",
+                        "version", 6));
 
         var recovered = service.start(
                 OWNER,
@@ -249,6 +274,113 @@ class DurableGenerationServiceTest {
                 APPLICATION_ID,
                 "COVER_LETTER",
                 COVER_LETTER_DOCUMENT_ID);
+        verify(downstream).updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5);
+    }
+
+    @Test
+    void retryAcceptsMatchingDocumentsWhenStatusUpdateOutcomeWasUnknown() {
+        String idempotencyKey = "ambiguous-status-update-1";
+        var generated = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                idempotencyKey,
+                selectionRequest());
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.CONFLICT,
+                "Conflict",
+                org.springframework.http.HttpHeaders.EMPTY,
+                """
+                {"status":409,"message":"An application for this canonical job is already tracked for the owner."}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+        when(downstream.applications(OWNER)).thenReturn(
+                List.of(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 3)),
+                List.of(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED",
+                        "cvDocumentId", CV_DOCUMENT_ID.toString(),
+                        "coverLetterDocumentId",
+                                COVER_LETTER_DOCUMENT_ID.toString(),
+                        "version", 6)));
+        when(downstream.updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "status", "SAVED",
+                        "version", 4));
+        when(downstream.updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "status", "SAVED",
+                        "version", 5));
+        when(downstream.updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5))
+                .thenThrow(new ResourceAccessException(
+                        "status response was lost"));
+
+        var ambiguous = service.approve(
+                OWNER,
+                generated.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.EXPORTED,
+                ambiguous.state());
+        assertEquals("DOWNSTREAM_RETRYABLE", ambiguous.failureCode());
+
+        var recovered = service.approve(
+                OWNER,
+                generated.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                recovered.state());
+        assertEquals(APPLICATION_ID, recovered.applicationId());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1)).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID);
+        verify(downstream, times(1)).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID);
+        verify(downstream, times(1)).updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5);
     }
 
     @Test

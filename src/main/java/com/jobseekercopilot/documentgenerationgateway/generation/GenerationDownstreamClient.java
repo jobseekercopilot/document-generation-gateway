@@ -54,4 +54,10 @@ public interface GenerationDownstreamClient {
             UUID applicationId,
             String documentType,
             UUID documentId);
+
+    Map<String, Object> updateApplicationStatus(
+            String ownerId,
+            UUID applicationId,
+            String status,
+            long expectedVersion);
 }

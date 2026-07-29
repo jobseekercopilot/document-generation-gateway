@@ -856,6 +856,23 @@ public class DurableGenerationService {
                 .findFirst()
                 .orElseThrow(() -> conflict);
         UUID applicationId = requiredUuid(application, "id");
+        String status = requiredText(application, "status");
+        if ("DOCUMENTS_GENERATED".equals(status)) {
+            if (requiredUuid(operation.data(), "cvDocumentId").equals(
+                            uuid(application, "cvDocumentId"))
+                    && requiredUuid(
+                                    operation.data(),
+                                    "coverLetterDocumentId")
+                            .equals(uuid(
+                                    application,
+                                    "coverLetterDocumentId"))) {
+                return application;
+            }
+            throw conflict;
+        }
+        if (!"SAVED".equals(status)) {
+            throw conflict;
+        }
         bounded(
                 operation,
                 () -> downstream.updateApplicationDocument(
@@ -865,7 +882,7 @@ public class DurableGenerationService {
                         requiredUuid(
                                 operation.data(),
                                 "cvDocumentId")));
-        return bounded(
+        Map<String, Object> applicationWithDocuments = bounded(
                 operation,
                 () -> downstream.updateApplicationDocument(
                         operation.ownerId(),
@@ -874,6 +891,15 @@ public class DurableGenerationService {
                         requiredUuid(
                                 operation.data(),
                                 "coverLetterDocumentId")));
+        long expectedVersion =
+                number(applicationWithDocuments, "version").longValue();
+        return bounded(
+                operation,
+                () -> downstream.updateApplicationStatus(
+                        operation.ownerId(),
+                        applicationId,
+                        "DOCUMENTS_GENERATED",
+                        expectedVersion));
     }
 
     private boolean recoverableApplicationConflict(

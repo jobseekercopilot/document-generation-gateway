@@ -2,14 +2,14 @@
   "openapi" : "3.0.1",
   "info" : {
     "title" : "Jobseeker Copilot - Application Tracker API",
-    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions frozen when an application first progresses.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
+    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions frozen when an application first progresses.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
     "contact" : {
       "name" : "Jobseeker Copilot"
     },
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "3.5.0"
+    "version" : "4.1.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8088",
@@ -323,6 +323,7 @@
       "patch" : {
         "tags" : [ "Application Records" ],
         "summary" : "Update application status",
+        "description" : "Bearer users follow the public lifecycle matrix. Approved producers are restricted to SAVED-to-DOCUMENTS_GENERATED and idempotent recovery of that completed bridge.",
         "operationId" : "updateStatus",
         "parameters" : [ {
           "name" : "id",
@@ -332,6 +333,14 @@
           "schema" : {
             "type" : "string",
             "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
           }
         } ],
         "requestBody" : {
@@ -345,6 +354,26 @@
           "required" : true
         },
         "responses" : {
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Authenticated identity is not permitted to perform the requested transition",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
           "400" : {
             "description" : "Invalid status value",
             "content" : {
@@ -375,12 +404,12 @@
               }
             }
           },
-          "404" : {
-            "description" : "Application record not found",
+          "401" : {
+            "description" : "Missing or invalid authentication",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -388,6 +417,8 @@
         },
         "security" : [ {
           "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
         } ]
       }
     },
@@ -572,7 +603,8 @@
     "/api/v1/applications/{id}/document-reference" : {
       "patch" : {
         "tags" : [ "Application Records" ],
-        "summary" : "Replace a current approved document reference before application use",
+        "summary" : "Attach or replace a current approved document reference before application use",
+        "description" : "Available while the application is SAVED or DOCUMENTS_GENERATED; attaching a complete pair does not change lifecycle status",
         "operationId" : "updateDocumentReference",
         "parameters" : [ {
           "name" : "id",
@@ -603,8 +635,8 @@
           "required" : true
         },
         "responses" : {
-          "400" : {
-            "description" : "Reference is invalid or already frozen",
+          "200" : {
+            "description" : "Current reference attached or replaced",
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -613,8 +645,8 @@
               }
             }
           },
-          "200" : {
-            "description" : "Current reference replaced",
+          "400" : {
+            "description" : "Reference is invalid or already frozen",
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -993,28 +1025,8 @@
           }
         } ],
         "responses" : {
-          "404" : {
-            "description" : "Bearer subject and requested owner do not match",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "401" : {
             "description" : "Missing, invalid or ambiguous authentication",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
-                }
-              }
-            }
-          },
-          "403" : {
-            "description" : "Authenticated identity lacks reader permission",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1032,6 +1044,26 @@
                   "items" : {
                     "$ref" : "#/components/schemas/ApplicationRecordResponse"
                   }
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Authenticated identity lacks reader permission",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Bearer subject and requested owner do not match",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1177,7 +1209,7 @@
           },
           "status" : {
             "type" : "string",
-            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
           },
           "createdAt" : {
             "type" : "string",
@@ -1338,9 +1370,9 @@
           },
           "initialStatus" : {
             "type" : "string",
-            "description" : "Initial lifecycle state. GENERATED may start as DOCUMENTS_GENERATED or APPLIED; MANUAL and EXTERNAL start as APPLIED.",
-            "example" : "APPLIED",
-            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+            "description" : "Initial lifecycle state. GENERATED may start as DOCUMENTS_GENERATED or APPLIED; MANUAL and EXTERNAL default to APPLIED and may explicitly start as SAVED.",
+            "example" : "SAVED",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
           }
         },
         "description" : "Request to create a new application record"
@@ -1432,7 +1464,7 @@
             "type" : "string",
             "description" : "Current application status",
             "example" : "DOCUMENTS_GENERATED",
-            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
           },
           "createdAt" : {
             "type" : "string",
@@ -1485,7 +1517,7 @@
             "type" : "array",
             "items" : {
               "type" : "string",
-              "enum" : [ "EMPLOYMENT", "EDUCATION", "CERTIFICATIONS", "PROJECTS", "SKILLS", "ACHIEVEMENTS", "VOLUNTEERING", "PUBLICATIONS", "OTHER" ]
+              "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
             }
           },
           "claimLedger" : {
@@ -1558,7 +1590,7 @@
           },
           "category" : {
             "type" : "string",
-            "enum" : [ "EMPLOYMENT", "EDUCATION", "CERTIFICATIONS", "PROJECTS", "SKILLS", "ACHIEVEMENTS", "VOLUNTEERING", "PUBLICATIONS", "OTHER" ]
+            "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
           },
           "contentDigest" : {
             "type" : "string"
@@ -1703,7 +1735,7 @@
             "type" : "string",
             "description" : "New status value",
             "example" : "APPLIED",
-            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
           },
           "expectedVersion" : {
             "minimum" : 0,
@@ -1751,6 +1783,19 @@
           }
         }
       },
+      "SecurityErrorResponse" : {
+        "required" : [ "code", "message" ],
+        "type" : "object",
+        "properties" : {
+          "code" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Stable redacted authentication or authorization error"
+      },
       "RegisterReplacementDocumentRequest" : {
         "required" : [ "replacementDocumentId" ],
         "type" : "object",
@@ -1792,11 +1837,11 @@
           },
           "fromStatus" : {
             "type" : "string",
-            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
           },
           "toStatus" : {
             "type" : "string",
-            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
           },
           "actorType" : {
             "type" : "string",
@@ -1836,7 +1881,7 @@
           },
           "currentStatus" : {
             "type" : "string",
-            "enum" : [ "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
           },
           "currentVersion" : {
             "type" : "integer",
@@ -1913,19 +1958,6 @@
           }
         },
         "description" : "Durable application/document-reference reconciliation state"
-      },
-      "SecurityErrorResponse" : {
-        "required" : [ "code", "message" ],
-        "type" : "object",
-        "properties" : {
-          "code" : {
-            "type" : "string"
-          },
-          "message" : {
-            "type" : "string"
-          }
-        },
-        "description" : "Stable redacted authentication or authorization error"
       }
     },
     "securitySchemes" : {

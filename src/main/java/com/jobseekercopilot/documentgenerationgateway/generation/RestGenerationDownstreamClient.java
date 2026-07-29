@@ -329,6 +329,30 @@ public class RestGenerationDownstreamClient
                 applicationId));
     }
 
+    @Override
+    public Map<String, Object> updateApplicationStatus(
+            String ownerId,
+            UUID applicationId,
+            String status,
+            long expectedVersion) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return body(restTemplate.exchange(
+                trackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/status",
+                HttpMethod.PATCH,
+                new HttpEntity<>(
+                        Map.of(
+                                "status", status,
+                                "expectedVersion", expectedVersion),
+                        headers),
+                Map.class,
+                applicationId));
+    }
+
     private Map<String, Object> post(
             String url,
             HttpHeaders headers,
