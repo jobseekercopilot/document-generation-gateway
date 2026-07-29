@@ -9,7 +9,7 @@
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "2.2.0"
+    "version" : "2.3.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8089",
@@ -364,6 +364,16 @@
           "required" : true
         },
         "responses" : {
+          "413" : {
+            "description" : "Decoded file or archive exceeds a configured safety limit",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404" : {
             "description" : "Generated document not found",
             "content" : {
@@ -400,16 +410,6 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/DocumentFileResponse"
-                }
-              }
-            }
-          },
-          "413" : {
-            "description" : "Decoded file or archive exceeds a configured safety limit",
-            "content" : {
-              "*/*" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1365,6 +1365,80 @@
   },
   "components" : {
     "schemas" : {
+      "DocumentEvidenceProvenance" : {
+        "required" : [ "claimLedger", "evidenceRevisions", "evidenceSnapshotDigest", "evidenceSnapshotId", "generatedAt", "profileContentDigest", "profileRevisionId", "sectionOrder" ],
+        "type" : "object",
+        "properties" : {
+          "profileRevisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "profileContentDigest" : {
+            "pattern" : "^[a-f0-9]{64}$",
+            "type" : "string"
+          },
+          "evidenceSnapshotId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "evidenceSnapshotDigest" : {
+            "pattern" : "^[a-f0-9]{64}$",
+            "type" : "string"
+          },
+          "evidenceRevisions" : {
+            "maxItems" : 50,
+            "minItems" : 0,
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/EvidenceRevisionReference"
+            }
+          },
+          "sectionOrder" : {
+            "maxItems" : 9,
+            "minItems" : 0,
+            "type" : "array",
+            "items" : {
+              "type" : "string",
+              "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
+            }
+          },
+          "claimLedger" : {
+            "$ref" : "#/components/schemas/ValidatedClaimLedger"
+          },
+          "generatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Immutable evidence and claim provenance for one document version.\nRaw claimant evidence values are retained by the purpose-specific\nUser Profile snapshot rather than duplicated here.\n"
+      },
+      "EvidenceRevisionReference" : {
+        "required" : [ "category", "contentDigest", "entryId", "revisionId", "revisionNumber" ],
+        "type" : "object",
+        "properties" : {
+          "entryId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionNumber" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "category" : {
+            "type" : "string",
+            "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
+          },
+          "contentDigest" : {
+            "pattern" : "^[a-f0-9]{64}$",
+            "type" : "string"
+          }
+        },
+        "description" : "Exact immutable evidence revision selected for this document"
+      },
       "GeneratedDocument" : {
         "type" : "object",
         "properties" : {
@@ -1415,6 +1489,21 @@
           },
           "generationProvenance" : {
             "$ref" : "#/components/schemas/GenerationProvenance"
+          },
+          "evidenceProvenance" : {
+            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
+          },
+          "groundingState" : {
+            "type" : "string",
+            "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
+          },
+          "parentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "parentDocumentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
           },
           "approvedAt" : {
             "type" : "string",
@@ -1600,6 +1689,74 @@
           }
         }
       },
+      "ValidatedClaim" : {
+        "required" : [ "claimId", "contentPaths", "disposition", "evidenceIds", "reviewText" ],
+        "type" : "object",
+        "properties" : {
+          "claimId" : {
+            "pattern" : "^CLAIM-[0-9]{3,4}$",
+            "type" : "string"
+          },
+          "disposition" : {
+            "type" : "string",
+            "enum" : [ "SUPPORTED", "REWORDED", "CONFIRMATION_REQUIRED", "REJECTED" ]
+          },
+          "evidenceIds" : {
+            "maxItems" : 30,
+            "minItems" : 0,
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "contentPaths" : {
+            "maxItems" : 30,
+            "minItems" : 0,
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "reviewText" : {
+            "maxLength" : 500,
+            "minLength" : 0,
+            "type" : "string"
+          }
+        }
+      },
+      "ValidatedClaimLedger" : {
+        "required" : [ "claims", "ledgerId", "ledgerSha256", "parserVersion", "policyVersion" ],
+        "type" : "object",
+        "properties" : {
+          "ledgerId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "ledgerSha256" : {
+            "pattern" : "^[a-f0-9]{64}$",
+            "type" : "string"
+          },
+          "policyVersion" : {
+            "maxLength" : 32,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "parserVersion" : {
+            "maxLength" : 32,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "claims" : {
+            "maxItems" : 40,
+            "minItems" : 0,
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ValidatedClaim"
+            }
+          }
+        },
+        "description" : "Exact bounded claim ledger accepted by strict generation validation"
+      },
       "SystemDataResult" : {
         "type" : "object",
         "properties" : {
@@ -1697,6 +1854,9 @@
           },
           "generationMetadata" : {
             "$ref" : "#/components/schemas/GenerationMetadata"
+          },
+          "evidenceProvenance" : {
+            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
           },
           "createdBy" : {
             "type" : "string",
@@ -1835,6 +1995,23 @@
           },
           "generationMetadata" : {
             "$ref" : "#/components/schemas/GenerationMetadata"
+          },
+          "evidenceProvenance" : {
+            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
+          },
+          "groundingState" : {
+            "type" : "string",
+            "description" : "Evidence-review state for this immutable document version",
+            "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
+          },
+          "parentDocumentId" : {
+            "type" : "string",
+            "description" : "Immediate parent document version, when this is a later version",
+            "format" : "uuid"
+          },
+          "parentDocumentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
           },
           "approvedAt" : {
             "type" : "string",
@@ -2102,6 +2279,21 @@
           },
           "generationMetadata" : {
             "$ref" : "#/components/schemas/GenerationMetadata"
+          },
+          "evidenceProvenance" : {
+            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
+          },
+          "groundingState" : {
+            "type" : "string",
+            "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
+          },
+          "parentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "parentDocumentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         },
         "description" : "Owner-scoped immutable document-version reference without document content"

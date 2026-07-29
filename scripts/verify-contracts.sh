@@ -61,9 +61,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    03616f256feaf71199e0335ebb015facf2cb02c9 \
+    b6a2a54adb18ef7dc9d9e0c25c34addc62ec0aaa \
     contracts/openapi.json \
-    5a66ad075f36b5f9210cb9686167cc09c72ec71806b6ea88d746aa3467518734
+    5c5b032793fbe46deafffca2015b0725997d2afa7d12a61899bf106bef150ec2
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -73,9 +73,9 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    027db472b3bf39a722e7612de32e80ce7310b7c3 \
+    fed6400b706b7b44bdbf3241809123fc0d66d3f7 \
     contracts/openapi.json \
-    85bbcdcb47f79c6d3a8cb2e5c19b4ac8dccb1e8ba39ac697ad2a18205dd1745d
+    9b0001257ff800bec919c7fff7e0d43eebfd3600e7f86d9d3fdd9616cf3e5d08
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
@@ -85,9 +85,9 @@ verify_source \
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    4180596ba5b23998ae6f001c4e624fbc395b4ce4 \
+    2c4e34c8f7466fd2685c1687e2d58a5dd1963180 \
     contracts/openapi.json \
-    d510b39c9629b6ea7663fa76baa6e3b14798b87315b44a65e76a8a8defab8715
+    ea289a4ce7bc3488d5dcec8e00cb2faec9cf88d10ec30d209de1225b89a16fd3
 verify_source \
     job-service \
     jobseekercopilot/job-service \
@@ -146,7 +146,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.3.0") and
+    (.info.version == "3.4.0") and
     (.paths["/api/v1/cv-cover-letter/drafts/estimate"].post.operationId
         == "estimateDraft") and
     (.paths["/api/v1/cv-cover-letter/drafts"].post.operationId
@@ -175,7 +175,12 @@ jq -e '
     (.components.schemas.DraftGenerationResponse.required
         | index("operationId") != null and index("usage") != null and
           index("cvContent") != null and
-          index("coverLetterContent") != null)
+          index("coverLetterContent") != null and
+          index("claimLedger") != null) and
+    (.components.schemas.ValidatedClaimLedger.required
+        | index("ledgerId") != null and
+          index("ledgerSha256") != null and
+          index("claims") != null)
 ' "$contract_dir/cv-cover-letter-service.json" >/dev/null
 
 jq -e '
@@ -241,7 +246,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "2.2.0") and
+    (.info.version == "2.3.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
     (.paths["/api/v1/documents/{documentId}/approve"].patch.operationId
@@ -275,15 +280,26 @@ jq -e '
           index("content") != null) and
     (.components.schemas.CreateDocumentRequest.properties
         | has("applicationId") and has("documentFamilyId") and has("active") and
-          has("originalFilename") and has("sourceType") and has("createdBy")) and
+          has("originalFilename") and has("sourceType") and
+          has("evidenceProvenance") and has("createdBy")) and
     (.components.schemas.GeneratedDocumentResponse.properties
         | has("id") and has("documentFamilyId") and has("version") and
-          has("lifecycleState"))
+          has("lifecycleState") and has("evidenceProvenance") and
+          has("groundingState") and has("parentDocumentId")) and
+    (.components.schemas.DocumentEvidenceProvenance.required
+        | index("profileRevisionId") != null and
+          index("profileContentDigest") != null and
+          index("evidenceSnapshotId") != null and
+          index("evidenceSnapshotDigest") != null and
+          index("evidenceRevisions") != null and
+          index("sectionOrder") != null and
+          index("claimLedger") != null and
+          index("generatedAt") != null)
 ' "$contract_dir/document-store-service.json" >/dev/null
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.3.0") and
+    (.info.version == "3.5.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
@@ -314,7 +330,12 @@ jq -e '
           has("retryable") and has("recoveryCode")) and
     (.components.schemas.ApplicationRecordResponse.properties
         | has("id") and has("userId") and has("jobId") and
-          has("cvDocumentId") and has("coverLetterDocumentId") and has("status"))
+          has("cvDocumentId") and has("coverLetterDocumentId") and
+          has("cvDocumentReference") and
+          has("applicationUsedCvDocumentReference") and has("status")) and
+    (.components.schemas.DocumentVersionReference.properties
+        | has("contentSha256") and has("evidenceProvenance") and
+          has("groundingState"))
 ' "$contract_dir/application-tracker-service.json" >/dev/null
 
 echo "contract policy: all pinned producer sources are present, intact and compatible"
