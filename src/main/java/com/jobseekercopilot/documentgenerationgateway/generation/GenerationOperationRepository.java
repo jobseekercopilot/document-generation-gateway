@@ -13,6 +13,7 @@ import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -21,6 +22,7 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class GenerationOperationRepository {
+    private static final int APPROVAL_ACCEPT_ATTEMPTS = 3;
     private static final TypeReference<LinkedHashMap<String, Object>> DATA_TYPE =
             new TypeReference<>() {
             };
@@ -96,7 +98,13 @@ public class GenerationOperationRepository {
                 }
                 return replay;
             }
-            throw duplicate;
+            return findLatestReplaySafe(
+                    ownerId,
+                    savedJobId,
+                    requestFingerprint)
+                    .orElseThrow(() -> new GenerationConflictException(
+                            "An active generation request could not be "
+                                    + "reconciled safely."));
         }
     }
 
@@ -150,23 +158,18 @@ public class GenerationOperationRepository {
                          WHERE owner_id = ?
                            AND saved_job_id = ?
                            AND request_fingerprint = ?
-                           AND state IN (
-                               'CREATED',
-                               'SNAPSHOTS_RESOLVED',
-                               'ESTIMATED',
-                               'CREDIT_RESERVED',
-                               'DRAFT_GENERATED',
-                               'CREDIT_COMMITTED',
-                               'DRAFTS_STORED',
-                               'AWAITING_APPROVAL')
-                           AND deadline_at > ?
+                           AND state NOT IN (
+                               'COMPLETED',
+                               'GENERATION_OUTCOME_UNKNOWN',
+                               'RECOVERY_REQUIRED',
+                               'FAILED',
+                               'CANCELLED')
                          ORDER BY created_at DESC
                          LIMIT 1
                         """,
                 ownerId,
                 savedJobId,
-                requestFingerprint,
-                atOffset(Instant.now()));
+                requestFingerprint);
     }
 
     public Optional<GenerationOperation>
@@ -181,7 +184,9 @@ public class GenerationOperationRepository {
                            AND saved_job_id = ?
                            AND request_fingerprint = ?
                            AND state = 'RECOVERY_REQUIRED'
-                           AND failure_code = 'APPROVAL_REQUEST_REJECTED'
+                           AND failure_code IN (
+                               'APPLICATION_LINK_RECOVERY_REQUIRED',
+                               'APPROVAL_REQUEST_REJECTED')
                            AND deadline_at > ?
                          ORDER BY created_at DESC
                          LIMIT 1
@@ -241,6 +246,81 @@ public class GenerationOperationRepository {
         }
         return findByOwnerAndId(operation.id(), operation.ownerId())
                 .orElseThrow();
+    }
+
+    public GenerationOperation acceptApproval(
+            GenerationOperation operation,
+            Map<String, Object> data) {
+        Object approvalRequest = data.get("approvalRequest");
+        if (approvalRequest == null) {
+            throw new GenerationConflictException(
+                    "Approval request is required before generation can resume.");
+        }
+
+        GenerationOperation current = operation;
+        Map<String, Object> candidateData = new LinkedHashMap<>(data);
+        for (int attempt = 0;
+                attempt < APPROVAL_ACCEPT_ATTEMPTS;
+                attempt++) {
+            Object persistedRequest =
+                    current.data().get("approvalRequest");
+            if (persistedRequest != null) {
+                if (Objects.equals(persistedRequest, approvalRequest)) {
+                    return current;
+                }
+                throw new GenerationConflictException(
+                        "A different approval request was already accepted.");
+            }
+            if (current.state()
+                    != GenerationOperationState.AWAITING_APPROVAL) {
+                throw new GenerationConflictException(
+                        "Generation operation is not awaiting approval.");
+            }
+
+            Instant now = Instant.now();
+            int updated = jdbc.update("""
+                    UPDATE generation_operations
+                       SET data_json = ?, failure_code = NULL,
+                           failure_message = NULL, updated_at = ?,
+                           version = version + 1
+                     WHERE id = ? AND owner_id = ?
+                       AND state = 'AWAITING_APPROVAL'
+                       AND version = ?
+                    """,
+                    writeData(candidateData),
+                    atOffset(now),
+                    current.id(),
+                    current.ownerId(),
+                    current.version());
+            current = findByOwnerAndId(
+                            current.id(), current.ownerId())
+                    .orElseThrow();
+            if (updated == 1) {
+                return current;
+            }
+
+            Object concurrentRequest =
+                    current.data().get("approvalRequest");
+            if (concurrentRequest != null) {
+                if (Objects.equals(
+                        concurrentRequest, approvalRequest)) {
+                    return current;
+                }
+                throw new GenerationConflictException(
+                        "A different approval request was already accepted.");
+            }
+            if (current.state()
+                    != GenerationOperationState.AWAITING_APPROVAL) {
+                throw new GenerationConflictException(
+                        "Generation operation changed while approval "
+                                + "was being accepted.");
+            }
+            candidateData = new LinkedHashMap<>(current.data());
+            candidateData.put("approvalRequest", approvalRequest);
+        }
+        throw new GenerationConflictException(
+                "Generation operation changed while approval "
+                        + "was being accepted. Retry the request.");
     }
 
     public void release(UUID id, String ownerId, UUID leaseToken) {
