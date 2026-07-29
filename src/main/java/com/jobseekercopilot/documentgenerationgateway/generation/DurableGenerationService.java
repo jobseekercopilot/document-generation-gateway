@@ -1241,7 +1241,10 @@ public class DurableGenerationService {
             String disposition = requiredText(claim, "disposition");
             List<?> evidenceIds = list(claim.get("evidenceIds"));
             List<?> contentPaths = list(claim.get("contentPaths"));
-            String reviewText = text(claim.get("reviewText"));
+            Object rawReviewText = claim.get("reviewText");
+            String reviewText = rawReviewText instanceof String review
+                    ? review
+                    : null;
             if (!claimId.matches("CLAIM-[0-9]{3,4}")
                     || !List.of(
                                     "SUPPORTED",

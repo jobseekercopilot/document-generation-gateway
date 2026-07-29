@@ -524,6 +524,43 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void acceptsAnExplicitlyBlankOptionalClaimReview() {
+        doAnswer(invocation -> {
+                    Map<String, Object> response = new LinkedHashMap<>(
+                            generated(invocation.getArgument(1)));
+                    Map<String, Object> ledger = new LinkedHashMap<>(
+                            (Map<String, Object>) response.get(
+                                    "claimLedger"));
+                    List<Map<String, Object>> claims = new ArrayList<>(
+                            (List<Map<String, Object>>) ledger.get(
+                                    "claims"));
+                    Map<String, Object> claim = new LinkedHashMap<>(
+                            claims.get(0));
+                    claim.put("reviewText", "");
+                    claims.set(0, claim);
+                    ledger.put("claims", claims);
+                    response.put("claimLedger", ledger);
+                    return response;
+                })
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var accepted = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "blank-claim-review-1",
+                selectionRequest());
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                accepted.state());
+        verify(downstream, times(2)).createDocument(
+                anyString(), anyString(), anyMap());
+    }
+
+    @Test
     void timedOutExportResumesWithTheSameReplayKey() {
         var awaiting = service.start(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "export-failure-1",
