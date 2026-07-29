@@ -169,6 +169,29 @@ public class GenerationOperationRepository {
                 atOffset(Instant.now()));
     }
 
+    public Optional<GenerationOperation>
+            findLatestRecoverableApplicationConflict(
+                    String ownerId,
+                    UUID savedJobId,
+                    String requestFingerprint) {
+        return one(
+                SELECT_COLUMNS
+                        + """
+                         WHERE owner_id = ?
+                           AND saved_job_id = ?
+                           AND request_fingerprint = ?
+                           AND state = 'RECOVERY_REQUIRED'
+                           AND failure_code = 'APPROVAL_REQUEST_REJECTED'
+                           AND deadline_at > ?
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                        """,
+                ownerId,
+                savedJobId,
+                requestFingerprint,
+                atOffset(Instant.now()));
+    }
+
     public boolean tryAcquire(
             UUID id,
             String ownerId,

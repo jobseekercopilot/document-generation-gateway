@@ -176,6 +176,82 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void replayRecoversDuplicateCanonicalApplicationWithoutRegeneration() {
+        var generated = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "duplicate-application-1",
+                selectionRequest());
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.CONFLICT,
+                "Conflict",
+                org.springframework.http.HttpHeaders.EMPTY,
+                """
+                {"status":409,"message":"An application for this canonical job is already tracked for the owner."}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+
+        var recoveryRequired = service.approve(
+                OWNER,
+                generated.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                recoveryRequired.state());
+        assertEquals(
+                "APPROVAL_REQUEST_REJECTED",
+                recoveryRequired.failureCode());
+
+        when(downstream.applications(OWNER)).thenReturn(List.of(
+                Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED")));
+        when(downstream.updateApplicationDocument(
+                anyString(), any(), anyString(), any()))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED"));
+
+        var recovered = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "duplicate-application-retry",
+                selectionRequest());
+
+        assertEquals(
+                generated.operationId(),
+                recovered.operationId());
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                recovered.state());
+        assertEquals(APPLICATION_ID, recovered.applicationId());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1))
+                .commit(OWNER, RESERVATION_ID, 600);
+        verify(downstream).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID);
+        verify(downstream).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID);
+    }
+
+    @Test
     void sendsOnlyPurposeSpecificImmutableEvidenceSnapshotsToGeneration() {
         service.start(
                 OWNER,

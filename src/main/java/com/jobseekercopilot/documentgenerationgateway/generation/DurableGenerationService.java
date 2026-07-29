@@ -99,6 +99,12 @@ public class DurableGenerationService {
                         ownerId,
                         savedJobId,
                         requestFingerprint)
+                .or(() -> repository
+                        .findLatestRecoverableApplicationConflict(
+                                ownerId,
+                                savedJobId,
+                                requestFingerprint)
+                        .filter(this::recoverableApplicationConflict))
                 .orElseGet(() -> repository.createOrReplay(
                         ownerId,
                         idempotencyKey,
@@ -106,7 +112,8 @@ public class DurableGenerationService {
                         requestFingerprint,
                         initialData,
                         deadline));
-        if (operation.state().terminal()
+        boolean recovery = recoverableApplicationConflict(operation);
+        if ((operation.state().terminal() && !recovery)
                 || operation.state() == GenerationOperationState.AWAITING_APPROVAL) {
             return response(operation);
         }
@@ -118,8 +125,19 @@ public class DurableGenerationService {
         }
         try {
             operation = required(operation.id(), ownerId);
-            operation = advanceToApproval(
-                    operation, leaseToken, authorization);
+            if (recoverableApplicationConflict(operation)) {
+                operation = checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.EXPORTED,
+                        operation.data(),
+                        null,
+                        null);
+                operation = advanceApproval(operation, leaseToken);
+            } else {
+                operation = advanceToApproval(
+                        operation, leaseToken, authorization);
+            }
             return response(operation);
         } finally {
             repository.release(
@@ -794,12 +812,23 @@ public class DurableGenerationService {
                         "coverLetterDocumentId"));
         request.put("provenance", "GENERATED");
         request.put("initialStatus", "DOCUMENTS_GENERATED");
-        Map<String, Object> application = bounded(
-                operation,
-                () -> downstream.createApplication(
-                        operation.ownerId(),
-                        operation.id() + ":application",
-                        request));
+        Map<String, Object> application;
+        try {
+            application = bounded(
+                    operation,
+                    () -> downstream.createApplication(
+                            operation.ownerId(),
+                            operation.id() + ":application",
+                            request));
+        } catch (HttpStatusCodeException conflict) {
+            if (conflict.getStatusCode() != HttpStatus.CONFLICT) {
+                throw conflict;
+            }
+            application = linkExistingApplication(
+                    operation,
+                    requiredText(request, "canonicalJobId"),
+                    conflict);
+        }
         Map<String, Object> data = data(operation);
         data.put("applicationId",
                 requiredUuid(application, "id").toString());
@@ -811,6 +840,60 @@ public class DurableGenerationService {
                 data,
                 null,
                 null);
+    }
+
+    private Map<String, Object> linkExistingApplication(
+            GenerationOperation operation,
+            String canonicalJobId,
+            HttpStatusCodeException conflict) {
+        Map<String, Object> application = bounded(
+                operation,
+                () -> downstream.applications(operation.ownerId()))
+                .stream()
+                .filter(candidate -> canonicalJobId.equals(firstText(
+                        candidate.get("canonicalJobId"),
+                        candidate.get("jobId"))))
+                .findFirst()
+                .orElseThrow(() -> conflict);
+        UUID applicationId = requiredUuid(application, "id");
+        bounded(
+                operation,
+                () -> downstream.updateApplicationDocument(
+                        operation.ownerId(),
+                        applicationId,
+                        "CV",
+                        requiredUuid(
+                                operation.data(),
+                                "cvDocumentId")));
+        return bounded(
+                operation,
+                () -> downstream.updateApplicationDocument(
+                        operation.ownerId(),
+                        applicationId,
+                        "COVER_LETTER",
+                        requiredUuid(
+                                operation.data(),
+                                "coverLetterDocumentId")));
+    }
+
+    private boolean recoverableApplicationConflict(
+            GenerationOperation operation) {
+        String failure = Objects.toString(
+                operation.failureMessage(), "")
+                .toLowerCase(Locale.ROOT);
+        return operation.state()
+                        == GenerationOperationState.RECOVERY_REQUIRED
+                && "APPROVAL_REQUEST_REJECTED".equals(
+                        operation.failureCode())
+                && failure.contains("\"status\":409")
+                && failure.contains("canonical job")
+                && operation.data().containsKey("cvDownloads")
+                && operation.data().containsKey(
+                        "coverLetterDownloads")
+                && operation.data().containsKey("cvDocumentId")
+                && operation.data().containsKey(
+                        "coverLetterDocumentId")
+                && !operation.data().containsKey("applicationId");
     }
 
     private Map<String, Object> jobSnapshot(

@@ -1,6 +1,7 @@
 package com.jobseekercopilot.documentgenerationgateway.generation;
 
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -45,4 +46,12 @@ public interface GenerationDownstreamClient {
             String ownerId,
             String idempotencyKey,
             Map<String, Object> request);
+
+    List<Map<String, Object>> applications(String ownerId);
+
+    Map<String, Object> updateApplicationDocument(
+            String ownerId,
+            UUID applicationId,
+            String documentType,
+            UUID documentId);
 }
