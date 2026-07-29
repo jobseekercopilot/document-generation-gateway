@@ -31,10 +31,10 @@ document-generation:
     payment-service-token: ${DOCUMENT_GENERATION_GATEWAY_TO_PAYMENT_SERVICE_TOKEN:}
   operation:
     deadline: ${DOCUMENT_GENERATION_OPERATION_DEADLINE:PT10M}
-    lease: ${DOCUMENT_GENERATION_OPERATION_LEASE:PT30S}
+    lease: ${DOCUMENT_GENERATION_OPERATION_LEASE:PT3M}
   downstream:
     connect-timeout: ${DOCUMENT_GENERATION_CONNECT_TIMEOUT:PT3S}
-    read-timeout: ${DOCUMENT_GENERATION_READ_TIMEOUT:PT30S}
+    read-timeout: ${DOCUMENT_GENERATION_READ_TIMEOUT:PT2M}
 
 services:
   user-profile-service:

@@ -57,13 +57,21 @@ public class DurableGenerationService {
             ObjectMapper objectMapper,
             OperationDeadlineGuard deadlineGuard,
             @Value("${document-generation.operation.deadline}") Duration deadline,
-            @Value("${document-generation.operation.lease}") Duration leaseDuration) {
+            @Value("${document-generation.operation.lease}") Duration leaseDuration,
+            @Value("${document-generation.downstream.read-timeout}") Duration readTimeout) {
         this.repository = repository;
         this.downstream = downstream;
         this.objectMapper = objectMapper;
         this.deadlineGuard = deadlineGuard;
         this.deadline = requirePositive(deadline, "operation deadline");
         this.leaseDuration = requirePositive(leaseDuration, "operation lease");
+        Duration boundedReadTimeout =
+                requirePositive(readTimeout, "downstream read timeout");
+        if (this.leaseDuration.compareTo(boundedReadTimeout) <= 0) {
+            throw new IllegalStateException(
+                    "Document generation operation lease must be longer than "
+                            + "the downstream read timeout.");
+        }
     }
 
     public GenerationOperationResponse start(

@@ -85,6 +85,20 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void rejectsLeaseThatCannotCoverTheDownstreamReadTimeout() {
+        assertThrows(
+                IllegalStateException.class,
+                () -> new DurableGenerationService(
+                        repository,
+                        downstream,
+                        objectMapper,
+                        deadlineGuard,
+                        Duration.ofMinutes(10),
+                        Duration.ofSeconds(30),
+                        Duration.ofSeconds(30)));
+    }
+
+    @Test
     void completesOneReplaySafeOperationThenApprovesExactDrafts() {
         var first = service.start(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1",
@@ -592,7 +606,8 @@ class DurableGenerationServiceTest {
                 objectMapper,
                 new OperationDeadlineGuard(clock),
                 Duration.ofMinutes(1),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(1),
+                Duration.ofMillis(500));
         when(downstream.savedJob(
                 SAVED_JOB_ID, AUTHORIZATION))
                 .thenAnswer(invocation -> {
@@ -624,7 +639,8 @@ class DurableGenerationServiceTest {
                 objectMapper,
                 new OperationDeadlineGuard(clock),
                 Duration.ofMinutes(1),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(1),
+                Duration.ofMillis(500));
         doAnswer(invocation -> {
                     clock.advance(Duration.ofMinutes(2));
                     return generated(invocation.getArgument(1));
@@ -660,7 +676,8 @@ class DurableGenerationServiceTest {
                 objectMapper,
                 new OperationDeadlineGuard(clock),
                 Duration.ofMinutes(1),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(1),
+                Duration.ofMillis(500));
         doAnswer(invocation -> {
                     clock.advance(Duration.ofMinutes(2));
                     return Map.of(

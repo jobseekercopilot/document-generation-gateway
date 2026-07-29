@@ -82,9 +82,15 @@ DOCUMENT_GENERATION_DATABASE_PASSWORD
 DOCUMENT_GENERATION_GATEWAY_TO_PAYMENT_SERVICE_TOKEN
 PAYMENT_SERVICE_URL
 DOCUMENT_GENERATION_OPERATION_DEADLINE
+DOCUMENT_GENERATION_OPERATION_LEASE
 DOCUMENT_GENERATION_CONNECT_TIMEOUT
 DOCUMENT_GENERATION_READ_TIMEOUT
 ```
+
+`DOCUMENT_GENERATION_OPERATION_LEASE` must be longer than
+`DOCUMENT_GENERATION_READ_TIMEOUT`. The production defaults are three minutes
+and two minutes respectively, allowing a bounded provider call to finish while
+preventing concurrent replay of the same paid operation.
 
 The Payment token is a distinct workload identity and is accepted only for
 owner-scoped reservation create/read/commit/release. Infrastructure must inject
