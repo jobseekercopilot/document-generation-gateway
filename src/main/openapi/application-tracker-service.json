@@ -2,14 +2,14 @@
   "openapi" : "3.0.1",
   "info" : {
     "title" : "Jobseeker Copilot - Application Tracker API",
-    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions frozen when an application first progresses.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
+    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions frozen when an application first progresses.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
     "contact" : {
       "name" : "Jobseeker Copilot"
     },
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "3.3.0"
+    "version" : "3.5.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8088",
@@ -345,16 +345,6 @@
           "required" : true
         },
         "responses" : {
-          "200" : {
-            "description" : "Status updated successfully",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
-                }
-              }
-            }
-          },
           "400" : {
             "description" : "Invalid status value",
             "content" : {
@@ -371,6 +361,16 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Status updated successfully",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
                 }
               }
             }
@@ -925,6 +925,59 @@
         } ]
       }
     },
+    "/api/v1/applications/{id}/document-reference-reconciliation" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get durable document-reference reconciliation state",
+        "description" : "Reports whether current and frozen application references are healthy, safely repaired, invalid or temporarily unverifiable",
+        "operationId" : "getDocumentReferenceReconciliation",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Owner-scoped reconciliation state returned",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReferenceReconciliationResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
     "/api/v1/applications/user/{userId}" : {
       "get" : {
         "tags" : [ "Application Records" ],
@@ -950,15 +1003,12 @@
               }
             }
           },
-          "200" : {
-            "description" : "Owner-scoped application records",
+          "401" : {
+            "description" : "Missing, invalid or ambiguous authentication",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "type" : "array",
-                  "items" : {
-                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
-                  }
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -973,12 +1023,15 @@
               }
             }
           },
-          "401" : {
-            "description" : "Missing, invalid or ambiguous authentication",
+          "200" : {
+            "description" : "Owner-scoped application records",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                  }
                 }
               }
             }
@@ -1405,6 +1458,46 @@
         },
         "description" : "Response containing application record details"
       },
+      "DocumentEvidenceProvenance" : {
+        "type" : "object",
+        "properties" : {
+          "profileRevisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "profileContentDigest" : {
+            "type" : "string"
+          },
+          "evidenceSnapshotId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "evidenceSnapshotDigest" : {
+            "type" : "string"
+          },
+          "evidenceRevisions" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/EvidenceRevisionReference"
+            }
+          },
+          "sectionOrder" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string",
+              "enum" : [ "EMPLOYMENT", "EDUCATION", "CERTIFICATIONS", "PROJECTS", "SKILLS", "ACHIEVEMENTS", "VOLUNTEERING", "PUBLICATIONS", "OTHER" ]
+            }
+          },
+          "claimLedger" : {
+            "$ref" : "#/components/schemas/ValidatedClaimLedger"
+          },
+          "generatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Immutable profile, evidence-snapshot and claim provenance\nretained with an exact document version.\n"
+      },
       "DocumentVersionReference" : {
         "type" : "object",
         "properties" : {
@@ -1429,9 +1522,68 @@
           },
           "contentSha256" : {
             "type" : "string"
+          },
+          "evidenceProvenance" : {
+            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
+          },
+          "groundingState" : {
+            "type" : "string",
+            "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
+          },
+          "parentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "parentDocumentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         },
         "description" : "Canonical immutable Document Store version descriptor"
+      },
+      "EvidenceRevisionReference" : {
+        "type" : "object",
+        "properties" : {
+          "entryId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionNumber" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "category" : {
+            "type" : "string",
+            "enum" : [ "EMPLOYMENT", "EDUCATION", "CERTIFICATIONS", "PROJECTS", "SKILLS", "ACHIEVEMENTS", "VOLUNTEERING", "PUBLICATIONS", "OTHER" ]
+          },
+          "contentDigest" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Exact immutable evidence revision selected for a document"
+      },
+      "ValidatedClaimLedger" : {
+        "type" : "object",
+        "properties" : {
+          "ledgerId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "ledgerSha256" : {
+            "type" : "string"
+          },
+          "policyVersion" : {
+            "type" : "string"
+          },
+          "parserVersion" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Non-sensitive identity and digest of the exact claim ledger\naccepted by generation validation.\n"
       },
       "WithdrawGeneratedApplicationResponse" : {
         "type" : "object",
@@ -1636,7 +1788,7 @@
           },
           "eventType" : {
             "type" : "string",
-            "enum" : [ "LEGACY_SNAPSHOT", "APPLICATION_CREATED", "STATUS_CHANGED", "DOCUMENT_REFERENCE_CHANGED", "GENERATED_APPLICATION_WITHDRAWN", "APPLICATION_DELETED" ]
+            "enum" : [ "LEGACY_SNAPSHOT", "APPLICATION_CREATED", "STATUS_CHANGED", "DOCUMENT_REFERENCE_CHANGED", "DOCUMENT_REFERENCES_RECONCILED", "GENERATED_APPLICATION_WITHDRAWN", "APPLICATION_DELETED" ]
           },
           "fromStatus" : {
             "type" : "string",
@@ -1655,7 +1807,7 @@
           },
           "source" : {
             "type" : "string",
-            "enum" : [ "USER", "SERVICE", "SYSTEM_DATA", "MIGRATION" ]
+            "enum" : [ "USER", "SERVICE", "SYSTEM", "SYSTEM_DATA", "MIGRATION" ]
           },
           "occurredAt" : {
             "type" : "string",
@@ -1717,6 +1869,50 @@
           }
         },
         "description" : "Owner-scoped ordered page of immutable application events"
+      },
+      "DocumentReferenceReconciliationResponse" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "PENDING", "HEALTHY", "REPAIRED", "INVALID", "UNAVAILABLE" ]
+          },
+          "issueCodes" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "checkedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastHealthyAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastRepairedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "attemptCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "repairCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "applicationRecordVersion" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        },
+        "description" : "Durable application/document-reference reconciliation state"
       },
       "SecurityErrorResponse" : {
         "required" : [ "code", "message" ],

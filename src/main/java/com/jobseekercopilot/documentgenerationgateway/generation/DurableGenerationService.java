@@ -496,6 +496,7 @@ public class DurableGenerationService {
             }
             Map<String, Object> data = data(operation);
             data.put("generation", generated);
+            data.put("generationCompletedAt", Instant.now().toString());
             data.put("actualTokens", actualTokens);
             return checkpoint(
                     operation,
@@ -558,6 +559,16 @@ public class DurableGenerationService {
         Map<String, Object> generationMetadata =
                 map(generated.get("generationMetadata"),
                         "generation metadata");
+        validateClaimLedger(
+                map(generated.get("claimLedger"), "claim ledger"));
+        Map<String, Object> generationRequest =
+                map(operation.data().get("generationRequest"),
+                        "generation request");
+        Map<String, Object> evidenceSnapshots =
+                map(generationRequest.get("evidenceSnapshots"),
+                        "evidence snapshots");
+        String generatedAt =
+                requiredText(operation.data(), "generationCompletedAt");
 
         Map<String, Object> cv = bounded(
                 operation,
@@ -570,7 +581,12 @@ public class DurableGenerationService {
                                 "CV",
                                 requiredText(generated, "cvTitle"),
                                 requiredText(generated, "cvContent"),
-                                generationMetadata)));
+                                generationMetadata,
+                                documentEvidenceProvenance(
+                                        generated,
+                                        map(evidenceSnapshots.get("cv"),
+                                                "CV evidence snapshot"),
+                                        generatedAt))));
         Map<String, Object> coverLetter = bounded(
                 operation,
                 () -> downstream.createDocument(
@@ -582,7 +598,13 @@ public class DurableGenerationService {
                                 "COVER_LETTER",
                                 requiredText(generated, "coverLetterTitle"),
                                 requiredText(generated, "coverLetterContent"),
-                                generationMetadata)));
+                                generationMetadata,
+                                documentEvidenceProvenance(
+                                        generated,
+                                        map(evidenceSnapshots.get(
+                                                        "coverLetter"),
+                                                "cover-letter evidence snapshot"),
+                                        generatedAt))));
         Map<String, Object> data = data(operation);
         data.put("cvDocumentId",
                 requiredUuid(cv, "id").toString());
@@ -1122,7 +1144,8 @@ public class DurableGenerationService {
             String documentType,
             String title,
             String content,
-            Map<String, Object> generationMetadata) {
+            Map<String, Object> generationMetadata,
+            Map<String, Object> evidenceProvenance) {
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("userId", ownerId);
         request.put("jobId", jobId);
@@ -1131,8 +1154,89 @@ public class DurableGenerationService {
         request.put("content", content);
         request.put("sourceType", "GENERATED");
         request.put("generationMetadata", generationMetadata);
+        request.put("evidenceProvenance", evidenceProvenance);
         request.put("createdBy", "document-generation-gateway");
         return request;
+    }
+
+    private Map<String, Object> documentEvidenceProvenance(
+            Map<String, Object> generated,
+            Map<String, Object> snapshot,
+            String generatedAt) {
+        List<Map<String, Object>> evidenceRevisions = list(
+                        snapshot.get("selections"))
+                .stream()
+                .map(this::optionalMap)
+                .map(selected -> Map.<String, Object>of(
+                        "entryId", requiredUuid(
+                                selected, "entryId"),
+                        "revisionId", requiredUuid(
+                                selected, "revisionId"),
+                        "revisionNumber", number(
+                                selected, "revisionNumber").intValue(),
+                        "category", requiredText(
+                                selected, "category"),
+                        "contentDigest", requiredText(
+                                selected, "contentDigest")))
+                .toList();
+        Map<String, Object> provenance = new LinkedHashMap<>();
+        provenance.put(
+                "profileRevisionId",
+                requiredUuid(snapshot, "profileRevisionId"));
+        provenance.put(
+                "profileContentDigest",
+                requiredText(snapshot, "profileContentDigest"));
+        provenance.put(
+                "evidenceSnapshotId",
+                requiredUuid(snapshot, "snapshotId"));
+        provenance.put(
+                "evidenceSnapshotDigest",
+                requiredText(snapshot, "snapshotDigest"));
+        provenance.put("evidenceRevisions", evidenceRevisions);
+        provenance.put(
+                "sectionOrder",
+                list(snapshot.get("sectionOrder")).stream()
+                        .map(this::text)
+                        .toList());
+        provenance.put(
+                "claimLedger",
+                map(generated.get("claimLedger"), "claim ledger"));
+        provenance.put("generatedAt", generatedAt);
+        return provenance;
+    }
+
+    private void validateClaimLedger(Map<String, Object> ledger) {
+        requiredUuid(ledger, "ledgerId");
+        if (!CONTENT_SHA256.matcher(
+                requiredText(ledger, "ledgerSha256")).matches()
+                || text(ledger.get("policyVersion")) == null
+                || text(ledger.get("parserVersion")) == null) {
+            throw new IllegalStateException(
+                    "CV Service returned invalid claim-ledger provenance.");
+        }
+        List<?> claims = list(ledger.get("claims"));
+        if (claims.isEmpty() || claims.size() > 40) {
+            throw new IllegalStateException(
+                    "CV Service returned an invalid claim ledger.");
+        }
+        for (Object value : claims) {
+            Map<String, Object> claim = optionalMap(value);
+            String claimId = requiredText(claim, "claimId");
+            String disposition = requiredText(claim, "disposition");
+            if (!claimId.matches("CLAIM-[0-9]{3,4}")
+                    || !List.of(
+                                    "SUPPORTED",
+                                    "REWORDED",
+                                    "CONFIRMATION_REQUIRED",
+                                    "REJECTED")
+                            .contains(disposition)
+                    || !claim.containsKey("evidenceIds")
+                    || !claim.containsKey("contentPaths")
+                    || claim.get("reviewText") == null) {
+                throw new IllegalStateException(
+                        "CV Service returned an invalid claim ledger.");
+            }
+        }
     }
 
     private void verifyApprovalRequest(

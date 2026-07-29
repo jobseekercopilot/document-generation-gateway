@@ -46,14 +46,15 @@ completion is still pending. Tracker alone commits the application reference.
 
 The User Profile, CV/Cover Letter and Document Export clients resolve
 as immutable, producer-owned private Maven packages
-`1.3.0-rev.85ac64be8c54`, `3.3.0-rev.027db472b3bf` and
+`1.3.0-rev.85ac64be8c54`, `3.4.0-rev.fed6400b706b` and
 `2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
 the consumer build. The new durable flow uses focused handwritten adapters for
 Job `2.0.0` and Payment `3.0.0`, plus producer-owned clients for User Profile
-`1.3.0` and CV/Cover Letter `3.3.0`. The raw
+`1.3.0` and CV/Cover Letter `3.4.0`. The raw
 Authentication, Document Store, Application Tracker and replacement-upload
 adapters are also checked against their pinned producer contracts. The durable
-path consumes Store `2.2.0` and Export `3.0.0` through focused handwritten
+path consumes Store `2.3.0`, Application Tracker `3.5.0` and Export `3.0.0`
+through focused handwritten
 adapters, while replacement flows retain the immutable Export `2.0.0` client.
 Generated sources and binaries are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).

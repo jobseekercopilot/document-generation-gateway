@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -196,6 +197,51 @@ class DurableGenerationServiceTest {
                 COVER_LETTER_EVIDENCE_ID.toString(),
                 ((Map<?, ?>) ((List<?>) coverLetter.get("selections")).get(0))
                         .get("entryId"));
+
+        ArgumentCaptor<Map> documents =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream, times(2)).createDocument(
+                org.mockito.ArgumentMatchers.eq(OWNER),
+                anyString(),
+                documents.capture());
+        Map<?, ?> cvDocument = documents.getAllValues().stream()
+                .filter(value -> "CV".equals(value.get("documentType")))
+                .findFirst()
+                .orElseThrow();
+        Map<?, ?> coverDocument = documents.getAllValues().stream()
+                .filter(value -> "COVER_LETTER".equals(
+                        value.get("documentType")))
+                .findFirst()
+                .orElseThrow();
+        Map<?, ?> cvProvenance =
+                (Map<?, ?>) cvDocument.get("evidenceProvenance");
+        Map<?, ?> coverProvenance =
+                (Map<?, ?>) coverDocument.get("evidenceProvenance");
+        assertEquals(
+                "90000000-0000-4000-8000-000000000001",
+                cvProvenance.get("evidenceSnapshotId").toString());
+        assertEquals(
+                "90000000-0000-4000-8000-000000000002",
+                coverProvenance.get("evidenceSnapshotId").toString());
+        assertEquals(
+                List.of("PROJECT"),
+                cvProvenance.get("sectionOrder"));
+        assertEquals(
+                List.of("VOLUNTEERING"),
+                coverProvenance.get("sectionOrder"));
+        assertEquals(
+                "70000000-0000-4000-8000-000000000001",
+                ((Map<?, ?>) ((List<?>) cvProvenance.get(
+                        "evidenceRevisions")).get(0))
+                        .get("revisionId")
+                        .toString());
+        assertEquals(
+                "c".repeat(64),
+                ((Map<?, ?>) cvProvenance.get("claimLedger"))
+                        .get("ledgerSha256"));
+        assertEquals(
+                cvProvenance.get("generatedAt"),
+                coverProvenance.get("generatedAt"));
     }
 
     @Test
@@ -361,11 +407,15 @@ class DurableGenerationServiceTest {
     void replaySafeStoreFailureResumesWithTheSameKeys() {
         AtomicInteger coverLetterAttempts = new AtomicInteger();
         List<String> documentKeys = new ArrayList<>();
+        List<String> generatedAtValues = new ArrayList<>();
         doAnswer(invocation -> {
                     String key = invocation.getArgument(1);
                     Map<String, Object> request =
                             invocation.getArgument(2);
                     documentKeys.add(key);
+                    generatedAtValues.add(((Map<?, ?>) request.get(
+                            "evidenceProvenance")).get(
+                                    "generatedAt").toString());
                     if ("COVER_LETTER".equals(
                             request.get("documentType"))
                             && coverLetterAttempts
@@ -403,6 +453,7 @@ class DurableGenerationServiceTest {
                         resumed.operationId()
                                 + ":cover-letter-document"),
                 documentKeys);
+        assertEquals(1, new HashSet<>(generatedAtValues).size());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
@@ -781,6 +832,31 @@ class DurableGenerationServiceTest {
                         "inputTokens", 400,
                         "outputTokens", 200,
                         "totalTokens", 600),
+                "claimLedger", Map.of(
+                        "ledgerId",
+                        "a0000000-0000-4000-8000-000000000001",
+                        "ledgerSha256", "c".repeat(64),
+                        "policyVersion", "2.0.0",
+                        "parserVersion", "3.0.0",
+                        "claims", List.of(
+                                Map.of(
+                                        "claimId", "CLAIM-001",
+                                        "disposition", "SUPPORTED",
+                                        "evidenceIds", List.of(
+                                                "80000000-0000-4000-8000-000000000001"),
+                                        "contentPaths", List.of(
+                                                "cv.experience[0]"),
+                                        "reviewText",
+                                        "Grounded CV claim"),
+                                Map.of(
+                                        "claimId", "CLAIM-002",
+                                        "disposition", "REWORDED",
+                                        "evidenceIds", List.of(
+                                                "80000000-0000-4000-8000-000000000002"),
+                                        "contentPaths", List.of(
+                                                "coverLetter.paragraphs[1]"),
+                                        "reviewText",
+                                        "Grounded cover-letter claim"))),
                 "audit", Map.of("modelId", "fixture"));
     }
 
