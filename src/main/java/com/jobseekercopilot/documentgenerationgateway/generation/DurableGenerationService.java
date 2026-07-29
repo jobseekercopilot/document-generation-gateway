@@ -37,6 +37,9 @@ import org.springframework.web.client.RestClientException;
 
 @Service
 public class DurableGenerationService {
+    private static final int MAX_LEDGER_CLAIMS = 40;
+    private static final int MAX_CLAIM_REFERENCES = 30;
+    private static final int MAX_CLAIM_REVIEW_TEXT = 500;
     private static final Pattern IDEMPOTENCY_KEY =
             Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}");
     private static final Pattern CONTENT_VERSION =
@@ -88,16 +91,21 @@ public class DurableGenerationService {
         initialData.put(
                 "evidenceSelectionRequest",
                 objectMapper.convertValue(request, LinkedHashMap.class));
-        GenerationOperation operation = repository.createOrReplay(
-                ownerId,
-                idempotencyKey,
-                savedJobId,
-                sha256("generation-v2:"
-                        + savedJobId
-                        + ":"
-                        + sha256Json(request)),
-                initialData,
-                deadline);
+        String requestFingerprint = sha256("generation-v2:"
+                + savedJobId
+                + ":"
+                + sha256Json(request));
+        GenerationOperation operation = repository.findLatestReplaySafe(
+                        ownerId,
+                        savedJobId,
+                        requestFingerprint)
+                .orElseGet(() -> repository.createOrReplay(
+                        ownerId,
+                        idempotencyKey,
+                        savedJobId,
+                        requestFingerprint,
+                        initialData,
+                        deadline));
         if (operation.state().terminal()
                 || operation.state() == GenerationOperationState.AWAITING_APPROVAL) {
             return response(operation);
@@ -1223,7 +1231,7 @@ public class DurableGenerationService {
                     "CV Service returned invalid claim-ledger provenance.");
         }
         List<?> claims = list(ledger.get("claims"));
-        if (claims.isEmpty() || claims.size() > 40) {
+        if (claims.isEmpty() || claims.size() > MAX_LEDGER_CLAIMS) {
             throw new IllegalStateException(
                     "CV Service returned an invalid claim ledger.");
         }
@@ -1231,6 +1239,9 @@ public class DurableGenerationService {
             Map<String, Object> claim = optionalMap(value);
             String claimId = requiredText(claim, "claimId");
             String disposition = requiredText(claim, "disposition");
+            List<?> evidenceIds = list(claim.get("evidenceIds"));
+            List<?> contentPaths = list(claim.get("contentPaths"));
+            String reviewText = text(claim.get("reviewText"));
             if (!claimId.matches("CLAIM-[0-9]{3,4}")
                     || !List.of(
                                     "SUPPORTED",
@@ -1238,9 +1249,10 @@ public class DurableGenerationService {
                                     "CONFIRMATION_REQUIRED",
                                     "REJECTED")
                             .contains(disposition)
-                    || !claim.containsKey("evidenceIds")
-                    || !claim.containsKey("contentPaths")
-                    || claim.get("reviewText") == null) {
+                    || evidenceIds.size() > MAX_CLAIM_REFERENCES
+                    || contentPaths.size() > MAX_CLAIM_REFERENCES
+                    || reviewText == null
+                    || reviewText.length() > MAX_CLAIM_REVIEW_TEXT) {
                 throw new IllegalStateException(
                         "CV Service returned an invalid claim ledger.");
             }

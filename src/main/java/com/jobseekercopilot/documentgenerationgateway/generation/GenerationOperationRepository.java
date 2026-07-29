@@ -140,6 +140,35 @@ public class GenerationOperationRepository {
                 savedJobId);
     }
 
+    public Optional<GenerationOperation> findLatestReplaySafe(
+            String ownerId,
+            UUID savedJobId,
+            String requestFingerprint) {
+        return one(
+                SELECT_COLUMNS
+                        + """
+                         WHERE owner_id = ?
+                           AND saved_job_id = ?
+                           AND request_fingerprint = ?
+                           AND state IN (
+                               'CREATED',
+                               'SNAPSHOTS_RESOLVED',
+                               'ESTIMATED',
+                               'CREDIT_RESERVED',
+                               'DRAFT_GENERATED',
+                               'CREDIT_COMMITTED',
+                               'DRAFTS_STORED',
+                               'AWAITING_APPROVAL')
+                           AND deadline_at > ?
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                        """,
+                ownerId,
+                savedJobId,
+                requestFingerprint,
+                atOffset(Instant.now()));
+    }
+
     public boolean tryAcquire(
             UUID id,
             String ownerId,

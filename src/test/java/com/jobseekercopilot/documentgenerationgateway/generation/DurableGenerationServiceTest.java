@@ -33,6 +33,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -453,8 +454,9 @@ class DurableGenerationServiceTest {
                 interrupted.failureCode());
 
         var resumed = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1",
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-2",
                 selectionRequest());
+        assertEquals(interrupted.operationId(), resumed.operationId());
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
                 resumed.state());
@@ -472,6 +474,53 @@ class DurableGenerationServiceTest {
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
                 .commit(OWNER, RESERVATION_ID, 600);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rejectsAnOversizedClaimBeforeCallingTheDocumentStore() {
+        doAnswer(invocation -> {
+                    Map<String, Object> response = new LinkedHashMap<>(
+                            generated(invocation.getArgument(1)));
+                    Map<String, Object> ledger = new LinkedHashMap<>(
+                            (Map<String, Object>) response.get(
+                                    "claimLedger"));
+                    List<Map<String, Object>> claims = new ArrayList<>(
+                            (List<Map<String, Object>>) ledger.get(
+                                    "claims"));
+                    Map<String, Object> oversized = new LinkedHashMap<>(
+                            claims.get(0));
+                    oversized.put(
+                            "contentPaths",
+                            java.util.stream.IntStream.range(0, 31)
+                                    .mapToObj(index ->
+                                            "/cv/coreSkills/"
+                                                    + index
+                                                    + "/name")
+                                    .toList());
+                    claims.set(0, oversized);
+                    ledger.put("claims", claims);
+                    response.put("claimLedger", ledger);
+                    return response;
+                })
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var rejected = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "oversized-claim-1",
+                selectionRequest());
+
+        assertEquals(
+                GenerationOperationState.FAILED,
+                rejected.state());
+        assertEquals(
+                "INVALID_DOWNSTREAM_RESPONSE",
+                rejected.failureCode());
+        verify(downstream, never()).createDocument(
+                anyString(), anyString(), anyMap());
     }
 
     @Test
