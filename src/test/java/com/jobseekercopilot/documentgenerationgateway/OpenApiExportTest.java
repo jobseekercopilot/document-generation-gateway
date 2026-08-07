@@ -66,6 +66,19 @@ class OpenApiExportTest {
         assertTrue(selections.path("requestBody").path("required").asBoolean());
         assertTrue(selections.path("parameters").findValuesAsText("name")
                 .contains("Idempotency-Key"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download"));
+        JsonNode downloadHeaders = contract.path("paths")
+                .path("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download")
+                .path("get")
+                .path("responses")
+                .path("200")
+                .path("headers");
+        assertTrue(downloadHeaders.has("Content-Disposition"));
+        assertTrue(downloadHeaders.has("Content-Length"));
+        assertTrue(downloadHeaders.has("X-Content-Type-Options"));
+        assertTrue(downloadHeaders.has("Cache-Control"));
+        assertTrue(downloadHeaders.has("Pragma"));
         JsonNode start = contract.path("paths")
                 .path("/api/v1/document-generation/saved-jobs/{savedJobId}/operations")
                 .path("post");

@@ -17,6 +17,8 @@ import org.springframework.web.client.RestTemplate;
 public class DocumentFileDownloadService {
     private static final String SERVICE_TOKEN_HEADER = "X-Service-Token";
     private static final String DOCUMENT_OWNER_HEADER = "X-Document-Owner";
+    private static final String CONTENT_TYPE_OPTIONS_HEADER =
+            "X-Content-Type-Options";
 
     private final RestTemplate restTemplate;
     private final String documentStoreBaseUrl;
@@ -40,6 +42,23 @@ public class DocumentFileDownloadService {
     }
 
     public ResponseEntity<byte[]> download(UUID fileId, String ownerId) {
+        return downloadFromStore(
+                "/api/v1/document-files/{fileId}/download",
+                ownerId,
+                fileId);
+    }
+
+    public ResponseEntity<byte[]> downloadExactArtifact(
+            UUID documentId, UUID artifactId, String ownerId) {
+        return downloadFromStore(
+                "/api/v1/documents/{documentId}/artifacts/{artifactId}/download",
+                ownerId,
+                documentId,
+                artifactId);
+    }
+
+    private ResponseEntity<byte[]> downloadFromStore(
+            String path, String ownerId, Object... pathVariables) {
         if (ownerId == null || ownerId.isBlank()) {
             throw new IllegalArgumentException("Authenticated document owner is required.");
         }
@@ -48,19 +67,19 @@ public class DocumentFileDownloadService {
         headers.set(DOCUMENT_OWNER_HEADER, ownerId);
         try {
             ResponseEntity<byte[]> upstream = restTemplate.exchange(
-                    documentStoreBaseUrl + "/api/v1/document-files/{fileId}/download",
+                    documentStoreBaseUrl + path,
                     HttpMethod.GET,
                     new HttpEntity<>(headers),
                     byte[].class,
-                    fileId);
+                    pathVariables);
 
             return ResponseEntity.status(upstream.getStatusCode())
                     .headers(proxiedHeaders(upstream.getHeaders()))
                     .body(upstream.getBody());
         } catch (HttpStatusCodeException exception) {
             return ResponseEntity.status(exception.getStatusCode())
-                    .headers(proxiedHeaders(exception.getResponseHeaders()))
-                    .body(exception.getResponseBodyAsByteArray());
+                    .headers(proxiedErrorHeaders(exception.getResponseHeaders()))
+                    .build();
         }
     }
 
@@ -70,6 +89,19 @@ public class DocumentFileDownloadService {
             copyHeader(source, target, HttpHeaders.CONTENT_TYPE);
             copyHeader(source, target, HttpHeaders.CONTENT_DISPOSITION);
             copyHeader(source, target, HttpHeaders.CONTENT_LENGTH);
+            copyHeader(source, target, CONTENT_TYPE_OPTIONS_HEADER);
+            copyHeader(source, target, HttpHeaders.CACHE_CONTROL);
+            copyHeader(source, target, HttpHeaders.PRAGMA);
+        }
+        return target;
+    }
+
+    private HttpHeaders proxiedErrorHeaders(HttpHeaders source) {
+        HttpHeaders target = new HttpHeaders();
+        if (source != null) {
+            copyHeader(source, target, CONTENT_TYPE_OPTIONS_HEADER);
+            copyHeader(source, target, HttpHeaders.CACHE_CONTROL);
+            copyHeader(source, target, HttpHeaders.PRAGMA);
         }
         return target;
     }
