@@ -61,9 +61,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    f29333657fa0f6e64947e9dbebfdc7e117f8fc2b \
+    3995b0831cfedb4e393a38a3eb6168328af395ed \
     contracts/openapi.json \
-    92a1043b82ab17ac2d3023eda460d81294f3d7b206c262bf22172acb0c628104
+    7f94b71fd622c8fa6e273601b4c4190cfbe4f9e232c5b9bde7dd9577ac109957
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -328,7 +328,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "4.2.0") and
+    (.info.version == "4.3.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
@@ -353,7 +353,9 @@ jq -e '
       .paths["/api/v1/applications/{id}/document-replacements/{operationId}/recovery-required"].patch]
         | all(.security | any(has("serviceToken")))) and
     (.paths["/api/v1/applications/{id}/status"].patch.parameters
-        | any(.name == "X-Application-Owner" and .in == "header")) and
+        | any(.name == "X-Application-Owner" and .in == "header") and
+          any(.name == "Idempotency-Key" and .in == "header" and
+              .schema.maxLength == 128)) and
     (.paths["/api/v1/applications/{id}/document-selections"].put.parameters
         | any(.name == "Idempotency-Key" and .in == "header" and
               .required == true and .schema.maxLength == 128)) and
@@ -377,7 +379,14 @@ jq -e '
         | has("id") and has("userId") and has("jobId") and
           has("cvDocumentId") and has("coverLetterDocumentId") and
           has("cvDocumentReference") and
-          has("applicationUsedCvDocumentReference") and has("status")) and
+          has("applicationUsedCvDocumentReference") and
+          has("applicationUsedCoverLetterDocumentReference") and
+          has("applicationUsedCvState") and
+          has("applicationUsedCoverLetterState") and
+          has("applicationUsedAt") and has("appliedAt") and has("status")) and
+    (.components.schemas.ApplicationRecordResponse.properties.applicationUsedCvState.enum
+        | index("UNKNOWN") != null and index("SELECTED") != null and
+          index("OMITTED") != null) and
     (.components.schemas.DocumentVersionReference.properties
         | has("contentSha256") and has("evidenceProvenance") and
           has("groundingState"))

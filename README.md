@@ -30,6 +30,11 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `2.3.0` consumes Application Tracker `4.3.0` and carries its explicit
+frozen `SELECTED`, `OMITTED` and legacy `UNKNOWN` slot states, exact frozen
+references and one freeze/application time through safe Gateway response
+models. APPLIED remains a bearer-owned lifecycle command; the Gateway's
+generation producer identity is still limited to document preparation.
 Version `2.2.0` adds one authenticated, explicit, expected-version and
 idempotency-protected application selection command for CV, cover letter and
 intentional omission. Durable generation recovery uses the same atomic Tracker
@@ -63,7 +68,7 @@ Job `2.0.0` and Payment `3.0.0`, plus producer-owned clients for User Profile
 `1.3.0` and CV/Cover Letter `3.4.0`. The raw
 Authentication, Document Store, Application Tracker and replacement-upload
 adapters are also checked against their pinned producer contracts. The durable
-path consumes Store `2.3.0`, Application Tracker `3.5.0` and Export `3.0.0`
+path consumes Store `2.3.0`, Application Tracker `4.3.0` and Export `3.0.0`
 through focused handwritten
 adapters, while replacement flows retain the immutable Export `2.0.0` client.
 Generated sources and binaries are build output and are not committed. See

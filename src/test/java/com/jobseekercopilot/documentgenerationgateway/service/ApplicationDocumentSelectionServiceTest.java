@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.dto.ApplicationDocumentSelectionSlotRequest;
 import com.jobseekercopilot.documentgenerationgateway.dto.ApplicationDocumentSelectionState;
 import com.jobseekercopilot.documentgenerationgateway.dto.ApplicationDocumentSelectionsResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.ApplicationFrozenDocumentSelectionState;
 import com.jobseekercopilot.documentgenerationgateway.dto.SaveApplicationDocumentSelectionsRequest;
 import com.jobseekercopilot.documentgenerationgateway.exception.ApplicationSelectionDownstreamException;
 import java.nio.charset.StandardCharsets;
@@ -100,9 +101,13 @@ class ApplicationDocumentSelectionServiceTest {
                   "message":"stale",
                   "currentApplication":{
                     "id":"%s",
-                    "status":"SAVED",
+                    "status":"APPLIED",
                     "version":9,
                     "cvDocumentId":"%s",
+                    "applicationUsedCvState":"SELECTED",
+                    "applicationUsedCoverLetterState":"OMITTED",
+                    "applicationUsedAt":"2026-08-07T06:00:00",
+                    "appliedAt":"2026-08-07T06:00:00",
                     "contentSha256":"must-not-propagate"
                   }
                 }
@@ -131,6 +136,16 @@ class ApplicationDocumentSelectionServiceTest {
         assertEquals(9, exception.currentApplication().version());
         assertEquals(cv, exception.currentApplication().cvDocumentId());
         assertNull(exception.currentApplication().coverLetterDocumentId());
+        assertEquals(
+                ApplicationFrozenDocumentSelectionState.SELECTED,
+                exception.currentApplication().applicationUsedCvState());
+        assertEquals(
+                ApplicationFrozenDocumentSelectionState.OMITTED,
+                exception.currentApplication()
+                        .applicationUsedCoverLetterState());
+        assertEquals(
+                exception.currentApplication().applicationUsedAt(),
+                exception.currentApplication().appliedAt());
     }
 
     @Test
@@ -164,7 +179,7 @@ class ApplicationDocumentSelectionServiceTest {
             RestTemplate restTemplate) {
         return new ApplicationDocumentSelectionService(
                 restTemplate,
-                new ObjectMapper(),
+                new ObjectMapper().findAndRegisterModules(),
                 "http://tracker",
                 "tracker-token");
     }
@@ -196,6 +211,12 @@ class ApplicationDocumentSelectionServiceTest {
                 version,
                 cv,
                 letter,
+                null,
+                null,
+                null,
+                ApplicationFrozenDocumentSelectionState.UNKNOWN,
+                null,
+                ApplicationFrozenDocumentSelectionState.UNKNOWN,
                 null,
                 null);
     }

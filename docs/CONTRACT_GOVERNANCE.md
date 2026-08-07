@@ -21,7 +21,7 @@ replaced with new dead output.
 | `jobseekercopilot/payment-service` | `0430cd09fd390a09d5445672504560ffde64cbe4` | `contracts/openapi.json` | `3.0.0` | `08312957171b34df832b5b3e62ffba93d68007981ac7c284e8b0bff7de22295a` | Dedicated Gateway identity may use only owner-scoped reservation lifecycle routes |
 | `jobseekercopilot/document-export-service` | `b71014fe72d5b3660a95e55facd3d627078d892f` | `contracts/openapi.json` | `3.0.0` | `17d37926cc6c9dedacb526e018577cb3c1aaf976fdcda24a588d541f9ec4f042` | Handwritten ordinary export and replacement adapters use stable replay keys; the old generated client remains only for the legacy route |
 | `jobseekercopilot/document-store-service` | `2c4e34c8f7466fd2685c1687e2d58a5dd1963180` | `contracts/openapi.json` | `2.3.0` | `ea289a4ce7bc3488d5dcec8e00cb2faec9cf88d10ec30d209de1225b89a16fd3` | Exact immutable profile, evidence-snapshot, claim-ledger, grounding and parent-version provenance |
-| `jobseekercopilot/application-tracker-service` | `b6a2a54adb18ef7dc9d9e0c25c34addc62ec0aaa` | `contracts/openapi.json` | `3.5.0` | `5c5b032793fbe46deafffca2015b0725997d2afa7d12a61899bf106bef150ec2` | Current and application-used document references preserve non-sensitive evidence provenance |
+| `jobseekercopilot/application-tracker-service` | `3995b0831cfedb4e393a38a3eb6168328af395ed` | `contracts/openapi.json` | `4.3.0` | `7f94b71fd622c8fa6e273601b4c4190cfbe4f9e232c5b9bde7dd9577ac109957` | Atomic optional selections and APPLIED freeze preserve exact references, explicit omissions and legacy unknown state |
 
 The `.SOURCE` files record the reviewed producer revisions and `SHA256SUMS`
 protects the exact contract bytes used for compatibility policy. Generated

@@ -2,14 +2,14 @@
   "openapi" : "3.0.1",
   "info" : {
     "title" : "Jobseeker Copilot - Application Tracker API",
-    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions frozen when an application first progresses.\nAtomic document-selection commands require explicit SELECTED or OMITTED\nstate for both optional slots, an expected record version and a durable\nowner-scoped idempotency key.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
+    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions and explicit omissions frozen only when an application\nfirst enters APPLIED.\nAtomic document-selection commands require explicit SELECTED or OMITTED\nstate for both optional slots, an expected record version and a durable\nowner-scoped idempotency key.\nApplying requires expectedVersion and Idempotency-Key, re-verifies\nevery selected exact version, and commits both frozen slot states,\ntimestamps and content-free events atomically.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
     "contact" : {
       "name" : "Jobseeker Copilot"
     },
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "4.2.0"
+    "version" : "4.3.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8088",
@@ -67,8 +67,8 @@
           "required" : true
         },
         "responses" : {
-          "503" : {
-            "description" : "Document reference validation unavailable",
+          "404" : {
+            "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -77,8 +77,8 @@
               }
             }
           },
-          "400" : {
-            "description" : "Invalid command, status or document reference",
+          "503" : {
+            "description" : "Document reference validation unavailable",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -101,22 +101,22 @@
               }
             }
           },
-          "404" : {
-            "description" : "Application record not found",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "200" : {
             "description" : "Selection saved or exact command replayed",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid command, status or document reference",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -432,7 +432,7 @@
       "patch" : {
         "tags" : [ "Application Records" ],
         "summary" : "Update application status",
-        "description" : "Bearer users follow the public lifecycle matrix. Approved producers are restricted to SAVED-to-DOCUMENTS_GENERATED and idempotent recovery of that completed bridge.",
+        "description" : "Bearer users follow the public lifecycle matrix. APPLIED requires expectedVersion and Idempotency-Key and atomically freezes exact selections and omissions. Approved producers are restricted to SAVED-to-DOCUMENTS_GENERATED and idempotent recovery of that completed bridge.",
         "operationId" : "updateStatus",
         "parameters" : [ {
           "name" : "id",
@@ -442,6 +442,17 @@
           "schema" : {
             "type" : "string",
             "format" : "uuid"
+          }
+        }, {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "description" : "Required owner-scoped retry key when status is APPLIED",
+          "required" : false,
+          "schema" : {
+            "maxLength" : 128,
+            "minLength" : 1,
+            "pattern" : "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "type" : "string"
           }
         }, {
           "name" : "X-Application-Owner",
@@ -463,22 +474,12 @@
           "required" : true
         },
         "responses" : {
-          "401" : {
-            "description" : "Missing or invalid authentication",
+          "200" : {
+            "description" : "Status updated successfully",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
-                }
-              }
-            }
-          },
-          "403" : {
-            "description" : "Authenticated identity is not permitted to perform the requested transition",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
                 }
               }
             }
@@ -493,16 +494,6 @@
               }
             }
           },
-          "200" : {
-            "description" : "Status updated successfully",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
-                }
-              }
-            }
-          },
           "400" : {
             "description" : "Invalid status value",
             "content" : {
@@ -513,12 +504,32 @@
               }
             }
           },
+          "403" : {
+            "description" : "Authenticated identity is not permitted to perform the requested transition",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
           "409" : {
             "description" : "Invalid lifecycle transition or stale/concurrent record version",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid authentication",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -1135,8 +1146,8 @@
           }
         } ],
         "responses" : {
-          "403" : {
-            "description" : "Authenticated identity lacks reader permission",
+          "401" : {
+            "description" : "Missing, invalid or ambiguous authentication",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1145,8 +1156,8 @@
               }
             }
           },
-          "401" : {
-            "description" : "Missing, invalid or ambiguous authentication",
+          "403" : {
+            "description" : "Authenticated identity lacks reader permission",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1375,8 +1386,18 @@
           "applicationUsedCvDocumentReference" : {
             "$ref" : "#/components/schemas/DocumentVersionReference"
           },
+          "applicationUsedCvState" : {
+            "type" : "string",
+            "description" : "Whether the frozen CV slot is selected, explicitly omitted or unknown legacy state",
+            "enum" : [ "UNKNOWN", "SELECTED", "OMITTED" ]
+          },
           "applicationUsedCoverLetterDocumentReference" : {
             "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "applicationUsedCoverLetterState" : {
+            "type" : "string",
+            "description" : "Whether the frozen cover-letter slot is selected, explicitly omitted or unknown legacy state",
+            "enum" : [ "UNKNOWN", "SELECTED", "OMITTED" ]
           },
           "applicationUsedAt" : {
             "type" : "string",
@@ -2000,7 +2021,7 @@
           },
           "eventType" : {
             "type" : "string",
-            "enum" : [ "LEGACY_SNAPSHOT", "APPLICATION_CREATED", "STATUS_CHANGED", "DOCUMENT_REFERENCE_CHANGED", "DOCUMENT_REFERENCES_RECONCILED", "GENERATED_APPLICATION_WITHDRAWN", "APPLICATION_DELETED" ]
+            "enum" : [ "LEGACY_SNAPSHOT", "APPLICATION_CREATED", "STATUS_CHANGED", "DOCUMENT_REFERENCE_CHANGED", "DOCUMENT_REFERENCES_RECONCILED", "APPLICATION_DOCUMENTS_FROZEN", "GENERATED_APPLICATION_WITHDRAWN", "APPLICATION_DELETED" ]
           },
           "fromStatus" : {
             "type" : "string",
