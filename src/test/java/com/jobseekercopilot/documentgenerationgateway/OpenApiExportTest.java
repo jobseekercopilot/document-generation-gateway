@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.2.0", contract.path("info").path("version").asText());
+        assertEquals("2.3.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -79,6 +79,24 @@ class OpenApiExportTest {
                         .path("$ref")
                         .asText());
         JsonNode schemas = contract.path("components").path("schemas");
+        JsonNode selectionResponse = schemas
+                .path("ApplicationDocumentSelectionsResponse")
+                .path("properties");
+        assertTrue(selectionResponse.has("applicationUsedCvDocumentReference"));
+        assertTrue(selectionResponse.has(
+                "applicationUsedCoverLetterDocumentReference"));
+        assertEquals(
+                "[\"UNKNOWN\",\"SELECTED\",\"OMITTED\"]",
+                selectionResponse.path("applicationUsedCvState")
+                        .path("enum")
+                        .toString());
+        assertEquals(
+                "[\"UNKNOWN\",\"SELECTED\",\"OMITTED\"]",
+                selectionResponse.path("applicationUsedCoverLetterState")
+                        .path("enum")
+                        .toString());
+        assertTrue(selectionResponse.has("applicationUsedAt"));
+        assertTrue(selectionResponse.has("appliedAt"));
         assertEquals(
                 java.util.Set.of(
                         "cvSelection",
