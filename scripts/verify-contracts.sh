@@ -85,9 +85,9 @@ verify_source \
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    53ea56f11af8b256e9c233e634bcc3698ff8d220 \
+    3abf92b67ac169997f7b7b42c3610586dd622a50 \
     contracts/openapi.json \
-    272ea9b680e50a32c822dcf2e7393577bd6da20c7323726db93b62810015bf44
+    b701f8aa4c3601da76b2efbea29c785445f1ca05af947987b507c69e5de9d8f9
 verify_source \
     job-service \
     jobseekercopilot/job-service \
@@ -246,13 +246,15 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.0.0") and
+    (.info.version == "3.1.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
     (.paths["/api/v1/documents/{documentId}/approve"].patch.operationId
         == "approveDocumentVersion") and
     (.paths["/api/v1/document-files/{id}/download"].get.operationId
         == "downloadDocumentFile") and
+    (.paths["/api/v1/documents/{generatedDocumentId}/artifacts/{artifactId}/download"].get.operationId
+        == "downloadDocumentArtifact") and
     (.paths["/api/v1/documents/families"].get.operationId
         == "listDocumentFamilies") and
     (.paths["/api/v1/documents/families/{documentFamilyId}"].get.operationId
@@ -283,6 +285,9 @@ jq -e '
             .in == "header" and
             .required == true and
             .schema.type == "string")) and
+    (.paths["/api/v1/documents/{generatedDocumentId}/artifacts/{artifactId}/download"].get.responses["200"].headers
+        | has("Content-Disposition") and has("Content-Length") and
+          has("X-Content-Type-Options") and has("Cache-Control") and has("Pragma")) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and

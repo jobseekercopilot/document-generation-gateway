@@ -5,6 +5,7 @@ import com.jobseekercopilot.documentgenerationgateway.dto.DocumentFamilyHistoryR
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentFamilyPageResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.SelectFamilyCurrentRequest;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFamilyHistoryService;
+import com.jobseekercopilot.documentgenerationgateway.service.OwnerDocumentRateLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
@@ -25,9 +26,13 @@ import org.springframework.web.bind.annotation.RestController;
 @SecurityRequirement(name = "bearerAuth")
 public class DocumentFamilyHistoryController {
     private final DocumentFamilyHistoryService service;
+    private final OwnerDocumentRateLimiter documentRateLimiter;
 
-    public DocumentFamilyHistoryController(DocumentFamilyHistoryService service) {
+    public DocumentFamilyHistoryController(
+            DocumentFamilyHistoryService service,
+            OwnerDocumentRateLimiter documentRateLimiter) {
         this.service = service;
+        this.documentRateLimiter = documentRateLimiter;
     }
 
     @GetMapping
@@ -36,8 +41,9 @@ public class DocumentFamilyHistoryController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             Authentication authentication) {
-        return ResponseEntity.ok(service.list(
-                owner(authentication), page, size));
+        String ownerId = owner(authentication);
+        documentRateLimiter.metadata(ownerId);
+        return ResponseEntity.ok(service.list(ownerId, page, size));
     }
 
     @GetMapping("/{documentFamilyId}")
@@ -45,8 +51,9 @@ public class DocumentFamilyHistoryController {
     public ResponseEntity<DocumentFamilyHistoryResponse> history(
             @PathVariable UUID documentFamilyId,
             Authentication authentication) {
-        return ResponseEntity.ok(service.history(
-                owner(authentication), documentFamilyId));
+        String ownerId = owner(authentication);
+        documentRateLimiter.metadata(ownerId);
+        return ResponseEntity.ok(service.history(ownerId, documentFamilyId));
     }
 
     @PatchMapping("/{documentFamilyId}/current")
@@ -56,8 +63,10 @@ public class DocumentFamilyHistoryController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody SelectFamilyCurrentRequest request,
             Authentication authentication) {
+        String ownerId = owner(authentication);
+        documentRateLimiter.metadata(ownerId);
         return ResponseEntity.ok(service.selectCurrent(
-                owner(authentication), documentFamilyId, idempotencyKey, request));
+                ownerId, documentFamilyId, idempotencyKey, request));
     }
 
     private String owner(Authentication authentication) {

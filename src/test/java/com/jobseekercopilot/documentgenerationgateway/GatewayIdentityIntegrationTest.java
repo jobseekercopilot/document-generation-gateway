@@ -107,6 +107,32 @@ class GatewayIdentityIntegrationTest {
     }
 
     @Test
+    void validatedSubjectAndExactRelationshipAreBoundToHistoricDownload()
+            throws Exception {
+        String token = JWKS.validToken("alice");
+        UUID documentId = UUID.randomUUID();
+        UUID artifactId = UUID.randomUUID();
+        org.mockito.Mockito.when(downloadService.downloadExactArtifact(
+                        ArgumentMatchers.any(),
+                        ArgumentMatchers.any(),
+                        ArgumentMatchers.anyString()))
+                .thenReturn(ResponseEntity.ok(new byte[0]));
+
+        mockMvc.perform(get(
+                        "/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download",
+                        documentId,
+                        artifactId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Document-Owner", "victim"))
+                .andExpect(status().isOk());
+
+        verify(downloadService).downloadExactArtifact(
+                ArgumentMatchers.eq(documentId),
+                ArgumentMatchers.eq(artifactId),
+                ArgumentMatchers.eq("alice"));
+    }
+
+    @Test
     void validatedSubjectAndBearerAreBoundToDurableGeneration()
             throws Exception {
         UUID savedJobId = UUID.randomUUID();

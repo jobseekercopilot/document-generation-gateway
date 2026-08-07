@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.1.0", contract.path("info").path("version").asText());
+        assertEquals("2.2.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -60,6 +60,19 @@ class OpenApiExportTest {
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}"));
         assertTrue(contract.path("paths")
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}/current"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download"));
+        JsonNode downloadHeaders = contract.path("paths")
+                .path("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download")
+                .path("get")
+                .path("responses")
+                .path("200")
+                .path("headers");
+        assertTrue(downloadHeaders.has("Content-Disposition"));
+        assertTrue(downloadHeaders.has("Content-Length"));
+        assertTrue(downloadHeaders.has("X-Content-Type-Options"));
+        assertTrue(downloadHeaders.has("Cache-Control"));
+        assertTrue(downloadHeaders.has("Pragma"));
         JsonNode start = contract.path("paths")
                 .path("/api/v1/document-generation/saved-jobs/{savedJobId}/operations")
                 .path("post");

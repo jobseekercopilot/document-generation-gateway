@@ -10,9 +10,24 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.http.HttpHeaders;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    @ExceptionHandler(OwnerDocumentRateLimitExceededException.class)
+    ResponseEntity<Map<String, String>> documentRateLimited(
+            OwnerDocumentRateLimitExceededException exception) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(
+                        HttpHeaders.RETRY_AFTER,
+                        Long.toString(exception.retryAfterSeconds()))
+                .body(Map.of(
+                        "error",
+                        "DOCUMENT_RATE_LIMIT_EXCEEDED",
+                        "message",
+                        "Too many document requests; retry shortly."));
+    }
+
     @ExceptionHandler(GenerationNotFoundException.class)
     ResponseEntity<Map<String, String>> operationNotFound(
             GenerationNotFoundException exception) {
