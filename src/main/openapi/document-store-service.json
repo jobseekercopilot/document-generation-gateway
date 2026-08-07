@@ -9,7 +9,7 @@
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "2.3.0"
+    "version" : "3.0.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8089",
@@ -193,16 +193,6 @@
           }
         },
         "responses" : {
-          "413" : {
-            "description" : "Upload exceeds a configured safety limit",
-            "content" : {
-              "*/*" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "404" : {
             "description" : "Generated document not found",
             "content" : {
@@ -219,6 +209,16 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          },
+          "413" : {
+            "description" : "Upload exceeds a configured safety limit",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -513,7 +513,8 @@
     "/api/v1/documents/{documentId}/current" : {
       "patch" : {
         "tags" : [ "Generated Documents" ],
-        "summary" : "Select an approved version as the current family version",
+        "summary" : "Legacy select-current command",
+        "description" : "Use /families/{documentFamilyId}/current for concurrency and idempotency protection.",
         "operationId" : "selectCurrentDocumentVersion",
         "parameters" : [ {
           "name" : "documentId",
@@ -543,6 +544,7 @@
             }
           }
         },
+        "deprecated" : true,
         "security" : [ {
           "bearerAuth" : [ ]
         }, {
@@ -593,7 +595,8 @@
     "/api/v1/documents/{documentId}/approve" : {
       "patch" : {
         "tags" : [ "Generated Documents" ],
-        "summary" : "Explicitly approve a draft and select it as current",
+        "summary" : "Explicitly approve a draft",
+        "description" : "Approval changes lifecycle only and never changes the family current pointer",
         "operationId" : "approveDocumentVersion",
         "parameters" : [ {
           "name" : "documentId",
@@ -618,6 +621,64 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/GeneratedDocumentResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/families/{documentFamilyId}/current" : {
+      "patch" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Explicitly select a document-family current version",
+        "description" : "Moves only the family pointer using an exact expected pointer and a replay-safe command key",
+        "operationId" : "selectFamilyCurrent",
+        "parameters" : [ {
+          "name" : "documentFamilyId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SelectFamilyCurrentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFamilyCurrentResponse"
                 }
               }
             }
@@ -1172,6 +1233,98 @@
         } ]
       }
     },
+    "/api/v1/documents/families" : {
+      "get" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Page owner-scoped document families",
+        "description" : "Returns content-free family summaries with trusted server-owned versions and explicit current state",
+        "operationId" : "listDocumentFamilies",
+        "parameters" : [ {
+          "name" : "page",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        }, {
+          "name" : "size",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 20
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFamilyPageResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/documents/families/{documentFamilyId}" : {
+      "get" : {
+        "tags" : [ "Generated Documents" ],
+        "summary" : "Get complete document-family history",
+        "description" : "Returns newest-first content-free versions and exact safe artifact manifests",
+        "operationId" : "getDocumentFamilyHistory",
+        "parameters" : [ {
+          "name" : "documentFamilyId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFamilyHistoryResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
     "/api/v1/document-files/{id}" : {
       "get" : {
         "tags" : [ "Document Files" ],
@@ -1262,6 +1415,16 @@
               }
             }
           },
+          "503" : {
+            "description" : "Stored file failed integrity or safety validation",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "200" : {
             "description" : "Exported file bytes",
             "content" : {
@@ -1272,16 +1435,6 @@
                     "type" : "string",
                     "format" : "byte"
                   }
-                }
-              }
-            }
-          },
-          "503" : {
-            "description" : "Stored file failed integrity or safety validation",
-            "content" : {
-              "*/*" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2242,6 +2395,52 @@
           }
         }
       },
+      "SelectFamilyCurrentRequest" : {
+        "required" : [ "documentId", "expectedCurrentState" ],
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "expectedCurrentState" : {
+            "type" : "string",
+            "enum" : [ "NONE", "SELECTED" ]
+          },
+          "expectedCurrentDocumentId" : {
+            "type" : "string",
+            "description" : "Required only when expectedCurrentState is SELECTED",
+            "format" : "uuid"
+          }
+        },
+        "description" : "Concurrency-protected request to move only a document family's current pointer"
+      },
+      "DocumentFamilyCurrentResponse" : {
+        "type" : "object",
+        "properties" : {
+          "commandId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "documentFamilyId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "currentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "currentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "changedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Replay-stable result of an explicit family current-pointer command"
+      },
       "DocumentReferenceResponse" : {
         "type" : "object",
         "properties" : {
@@ -2332,6 +2531,226 @@
             "format" : "date-time"
           }
         }
+      },
+      "DocumentFamilyPageResponse" : {
+        "type" : "object",
+        "properties" : {
+          "items" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/DocumentFamilySummary"
+            }
+          },
+          "page" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "size" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "totalElements" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "totalPages" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        },
+        "description" : "One bounded page of owner-scoped document families"
+      },
+      "DocumentFamilySummary" : {
+        "type" : "object",
+        "properties" : {
+          "documentFamilyId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "jobId" : {
+            "type" : "string"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "latestDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "latestVersion" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "latestSource" : {
+            "type" : "string",
+            "enum" : [ "GENERATED", "UPLOADED" ]
+          },
+          "latestLifecycle" : {
+            "type" : "string",
+            "enum" : [ "DRAFT", "APPROVED" ]
+          },
+          "latestRetention" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+          },
+          "currentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "currentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "versionCount" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Content-free owner-scoped summary of one document family"
+      },
+      "DocumentArtifactManifestItem" : {
+        "type" : "object",
+        "properties" : {
+          "artifactId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "role" : {
+            "type" : "string",
+            "enum" : [ "ORIGINAL", "DERIVED" ]
+          },
+          "format" : {
+            "type" : "string",
+            "enum" : [ "DOCX", "PDF" ]
+          },
+          "source" : {
+            "type" : "string",
+            "enum" : [ "GENERATED", "USER_UPLOADED" ]
+          },
+          "availability" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "UNAVAILABLE" ]
+          },
+          "size" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "storedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Safe metadata for one exact retained representation of a document version"
+      },
+      "DocumentFamilyHistoryResponse" : {
+        "type" : "object",
+        "properties" : {
+          "documentFamilyId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "jobId" : {
+            "type" : "string"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "currentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "currentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "versions" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/DocumentVersionHistoryItem"
+            }
+          }
+        },
+        "description" : "Owner-scoped newest-first history for one document family"
+      },
+      "DocumentVersionHistoryItem" : {
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "version" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "source" : {
+            "type" : "string",
+            "enum" : [ "GENERATED", "UPLOADED" ]
+          },
+          "lifecycle" : {
+            "type" : "string",
+            "enum" : [ "DRAFT", "APPROVED" ]
+          },
+          "retention" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+          },
+          "current" : {
+            "type" : "boolean"
+          },
+          "approvedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "archivedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "deletedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "purgeEligibleAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "artifacts" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/DocumentArtifactManifestItem"
+            }
+          }
+        },
+        "description" : "Content-free metadata for one immutable server-numbered document version"
       }
     },
     "securitySchemes" : {
