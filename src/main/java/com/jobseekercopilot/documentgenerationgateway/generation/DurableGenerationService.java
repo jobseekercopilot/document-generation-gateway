@@ -43,7 +43,7 @@ import org.springframework.web.client.RestClientException;
 public class DurableGenerationService {
     private static final Logger log =
             LoggerFactory.getLogger(DurableGenerationService.class);
-    private static final int MAX_LEDGER_CLAIMS = 40;
+    private static final int MAX_LEDGER_CLAIMS = 200;
     private static final int MAX_CLAIM_REFERENCES = 30;
     private static final int MAX_CLAIM_REVIEW_TEXT = 500;
     private static final Pattern IDEMPOTENCY_KEY =
