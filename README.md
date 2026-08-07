@@ -114,9 +114,10 @@ DOCUMENT_DOWNLOADS_PER_MINUTE
 ```
 
 The operation lease must be longer than the downstream read timeout. The
-defaults are a three-minute lease and a two-minute read timeout so a bounded
-model invocation can complete without another request taking ownership of the
-same paid operation.
+defaults are a three-minute lease and a two-minute-thirty-second read timeout.
+This leaves a bounded margin above the LLM Gateway's 120-second live provider
+deadline without allowing another request to take ownership of the same paid
+operation.
 
 Document family metadata/current commands and exact downloads are limited per
 authenticated owner in each Gateway instance. Defaults are 120 metadata

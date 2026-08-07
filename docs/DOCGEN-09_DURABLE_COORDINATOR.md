@@ -89,8 +89,9 @@ DOCUMENT_GENERATION_READ_TIMEOUT
 
 `DOCUMENT_GENERATION_OPERATION_LEASE` must be longer than
 `DOCUMENT_GENERATION_READ_TIMEOUT`. The production defaults are three minutes
-and two minutes respectively, allowing a bounded provider call to finish while
-preventing concurrent replay of the same paid operation.
+and two minutes thirty seconds respectively, leaving a bounded margin above
+the LLM Gateway's 120-second live provider deadline while preventing concurrent
+replay of the same paid operation.
 
 The Payment token is a distinct workload identity and is accepted only for
 owner-scoped reservation create/read/commit/release. Infrastructure must inject

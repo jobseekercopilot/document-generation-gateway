@@ -39,7 +39,7 @@ document-generation:
     deferred-capacity: ${DOCUMENT_GENERATION_EXECUTOR_DEFERRED_CAPACITY:64}
   downstream:
     connect-timeout: ${DOCUMENT_GENERATION_CONNECT_TIMEOUT:PT3S}
-    read-timeout: ${DOCUMENT_GENERATION_READ_TIMEOUT:PT2M}
+    read-timeout: ${DOCUMENT_GENERATION_READ_TIMEOUT:PT2M30S}
   rate-limit:
     document-metadata-per-minute: ${DOCUMENT_METADATA_REQUESTS_PER_MINUTE:120}
     document-downloads-per-minute: ${DOCUMENT_DOWNLOADS_PER_MINUTE:30}
