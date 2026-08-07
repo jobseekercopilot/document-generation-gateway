@@ -14,6 +14,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
@@ -1418,6 +1419,82 @@ class DurableGenerationServiceTest {
                 "GENERATION_REJECTED");
         verify(downstream, never()).commit(
                 anyString(), any(), anyLong());
+    }
+
+    @Test
+    void publishesAnAcceptedRetainedResponseWithoutAnotherProviderCall() {
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unprocessable Entity",
+                org.springframework.http.HttpHeaders.EMPTY,
+                new byte[0],
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+        var rejected = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "retained-response-recovery-1",
+                selectionRequest());
+        assertEquals(
+                GenerationOperationState.FAILED,
+                rejected.state());
+
+        UUID recoveryReservation = UUID.fromString(
+                "20000000-0000-0000-0000-000000000099");
+        Map<String, Object> replay = new LinkedHashMap<>();
+        replay.put("outcome", "ACCEPTED");
+        replay.put("providerInvocationCount", 0);
+        replay.put("diagnostic", null);
+        Map<String, Object> draft = new LinkedHashMap<>(
+                generated(rejected.operationId()));
+        draft.put("usage", Map.of(
+                "inputTokens", 30_945,
+                "outputTokens", 6_853,
+                "totalTokens", 37_798));
+        replay.put("draft", draft);
+        when(downstream.replayRejectedGeneration(
+                eq(OWNER), eq(rejected.operationId()), anyMap()))
+                .thenReturn(replay);
+        when(downstream.reserveRetainedResponseRecovery(
+                OWNER, rejected.operationId(), 37_798))
+                .thenReturn(Map.of(
+                        "reservationId",
+                        recoveryReservation.toString(),
+                        "status", "RESERVED"));
+
+        service.recoverRejectedGeneration(
+                OWNER, rejected.operationId());
+        var completed = service.get(
+                OWNER, rejected.operationId());
+
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                completed.state());
+        assertEquals(CV_DOCUMENT_ID, completed.cvDocumentId());
+        assertEquals(
+                COVER_LETTER_DOCUMENT_ID,
+                completed.coverLetterDocumentId());
+        assertEquals(APPLICATION_ID, completed.applicationId());
+        verify(downstream, times(1)).generate(
+                anyString(), any(), anyMap());
+        verify(downstream, times(1)).replayRejectedGeneration(
+                eq(OWNER), eq(rejected.operationId()), anyMap());
+        verify(downstream).commit(
+                OWNER, recoveryReservation, 37_798);
+        verify(downstream).approveDocument(
+                OWNER, CV_DOCUMENT_ID);
+        verify(downstream).approveDocument(
+                OWNER, COVER_LETTER_DOCUMENT_ID);
+
+        service.recoverRejectedGeneration(
+                OWNER, rejected.operationId());
+        verify(downstream, times(1)).replayRejectedGeneration(
+                eq(OWNER), eq(rejected.operationId()), anyMap());
+        verify(downstream, times(1))
+                .reserveRetainedResponseRecovery(
+                        OWNER, rejected.operationId(), 37_798);
     }
 
     @Test

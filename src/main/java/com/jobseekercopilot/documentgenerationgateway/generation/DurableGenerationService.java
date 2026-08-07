@@ -58,6 +58,10 @@ public class DurableGenerationService {
             Pattern.compile("(?<=[\\p{L}\\p{N}])\\.(?=\\s|$)");
     private static final Pattern SKILL_MATCH_WHITESPACE =
             Pattern.compile("\\s+");
+    private static final String RETAINED_RESPONSE_RECOVERY =
+            "retainedResponseRecovery";
+    private static final String RETAINED_RESPONSE_AUTO_APPROVAL =
+            "retainedResponseAutoApproval";
 
     private final GenerationOperationRepository repository;
     private final GenerationDownstreamClient downstream;
@@ -222,6 +226,121 @@ public class DurableGenerationService {
         GenerationOperationResponse accepted = response(operation);
         submitApproval(operation, ownerId);
         return accepted;
+    }
+
+    public GenerationOperationResponse recoverRejectedGeneration(
+            String ownerId,
+            UUID operationId) {
+        requireOwner(ownerId);
+        GenerationOperation operation = required(operationId, ownerId);
+        if (operation.data().containsKey(RETAINED_RESPONSE_RECOVERY)) {
+            if (!operation.state().terminal()) {
+                submitStart(operation, ownerId, null);
+            }
+            return response(operation);
+        }
+        requireRejectedGeneration(operation);
+
+        UUID leaseToken = UUID.randomUUID();
+        if (!repository.tryAcquire(
+                operation.id(), ownerId, leaseToken, leaseDuration)) {
+            throw new GenerationConflictException(
+                    "Generation operation is currently being processed.");
+        }
+
+        UUID recoveryReservationId = null;
+        boolean recoveryPersisted = false;
+        try {
+            operation = required(operation.id(), ownerId);
+            if (operation.data().containsKey(RETAINED_RESPONSE_RECOVERY)) {
+                return response(operation);
+            }
+            requireRejectedGeneration(operation);
+            Map<String, Object> replay =
+                    downstream.replayRejectedGeneration(
+                            ownerId,
+                            operation.id(),
+                            map(operation.data().get("generationRequest"),
+                                    "generation request"));
+            if (!"ACCEPTED".equals(requiredText(replay, "outcome"))
+                    || number(replay, "providerInvocationCount")
+                                    .longValue()
+                            != 0
+                    || replay.get("diagnostic") != null) {
+                throw new GenerationConflictException(
+                        "The retained response did not pass zero-provider recovery validation.");
+            }
+            Map<String, Object> generated =
+                    map(replay.get("draft"), "replayed generation draft");
+            if (!operation.id().equals(
+                    requiredUuid(generated, "operationId"))) {
+                throw new GenerationConflictException(
+                        "The retained response belongs to a different operation.");
+            }
+            long actualTokens = number(
+                    map(generated.get("usage"), "generation usage"),
+                    "totalTokens").longValue();
+            if (actualTokens < 1) {
+                throw new GenerationConflictException(
+                        "The retained response has invalid token usage.");
+            }
+
+            Map<String, Object> reservation =
+                    downstream.reserveRetainedResponseRecovery(
+                            ownerId, operation.id(), actualTokens);
+            recoveryReservationId =
+                    requiredUuid(reservation, "reservationId");
+            Map<String, Object> data = data(operation);
+            data.put("reservationId", recoveryReservationId.toString());
+            data.put("reservationEvidence", reservation);
+            data.put("generation", generated);
+            data.put("generationCompletedAt", Instant.now().toString());
+            data.put("actualTokens", actualTokens);
+            data.put(RETAINED_RESPONSE_RECOVERY, Map.of(
+                    "recoveredAt", Instant.now().toString(),
+                    "providerInvocationCount", 0,
+                    "source", "CV_REJECTED_GENERATION_STORE"));
+            data.put(RETAINED_RESPONSE_AUTO_APPROVAL, true);
+            operation = repository.recoverRejectedGeneration(
+                    operation,
+                    leaseToken,
+                    data,
+                    deadline);
+            recoveryPersisted = true;
+        } catch (RuntimeException failure) {
+            if (recoveryReservationId != null && !recoveryPersisted) {
+                try {
+                    downstream.release(
+                            ownerId,
+                            recoveryReservationId,
+                            "Retained response recovery did not start");
+                } catch (RuntimeException releaseFailure) {
+                    log.error(
+                            "retained response recovery reservation release failed operationId={} reservationId={}",
+                            operationId,
+                            recoveryReservationId);
+                }
+            }
+            throw failure;
+        } finally {
+            repository.release(operationId, ownerId, leaseToken);
+        }
+
+        GenerationOperationResponse accepted = response(operation);
+        submitStart(operation, ownerId, null);
+        return accepted;
+    }
+
+    private static void requireRejectedGeneration(
+            GenerationOperation operation) {
+        if (operation.state() != GenerationOperationState.FAILED
+                || !"GENERATION_REJECTED".equals(
+                        operation.failureCode())
+                || !(operation.data().get("generationRequest")
+                        instanceof Map<?, ?>)) {
+            throw new GenerationConflictException(
+                    "Only a rejected generation with a retained request can be recovered.");
+        }
     }
 
     private GenerationOperation validateIdempotentReplay(
@@ -483,13 +602,31 @@ public class DurableGenerationService {
                     case CREDIT_COMMITTED -> operation = storeDrafts(
                             operation, leaseToken);
                     case DRAFTS_STORED -> {
-                        return checkpoint(
+                        Map<String, Object> data = data(operation);
+                        if (Boolean.TRUE.equals(data.get(
+                                RETAINED_RESPONSE_AUTO_APPROVAL))) {
+                            data.put("approvalRequest", Map.of(
+                                    "cvDocumentId",
+                                    requiredUuid(data, "cvDocumentId")
+                                            .toString(),
+                                    "coverLetterDocumentId",
+                                    requiredUuid(
+                                            data,
+                                            "coverLetterDocumentId")
+                                            .toString()));
+                        }
+                        operation = checkpoint(
                                 operation,
                                 leaseToken,
                                 GenerationOperationState.AWAITING_APPROVAL,
-                                operation.data(),
+                                data,
                                 null,
                                 null);
+                        if (Boolean.TRUE.equals(data.get(
+                                RETAINED_RESPONSE_AUTO_APPROVAL))) {
+                            return advanceApproval(operation, leaseToken);
+                        }
+                        return operation;
                     }
                     default -> {
                         return operation;

@@ -39,6 +39,8 @@ class RestGenerationDownstreamClientTest {
             "cv-token-0000000000000000000000000001";
     private static final String EXPORT_TOKEN =
             "export-token-00000000000000000000000001";
+    private static final String OPERATOR_TOKEN =
+            "operator-token-000000000000000000000001";
 
     @Mock private RestTemplate restTemplate;
     @Mock private UserProfilesApi profilesApi;
@@ -67,7 +69,8 @@ class RestGenerationDownstreamClientTest {
                 "http://payment",
                 "http://store",
                 "http://export",
-                "http://tracker");
+                "http://tracker",
+                OPERATOR_TOKEN);
     }
 
     @Test
@@ -140,6 +143,34 @@ class RestGenerationDownstreamClientTest {
     }
 
     @Test
+    void recoveryReservationUsesASeparateStableOperationKey() {
+        UUID operationId = UUID.randomUUID();
+        when(restTemplate.exchange(
+                eq("http://payment/api/v1/payments/reservations"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "reservationId", UUID.randomUUID().toString())));
+
+        client.reserveRetainedResponseRecovery(
+                OWNER, operationId, 37_798);
+
+        HttpEntity<?> request = capturedPost(
+                "http://payment/api/v1/payments/reservations");
+        assertSingleHeader(request, "X-Service-Token", PAYMENT_TOKEN);
+        assertSingleHeader(request, "X-Payment-Owner", OWNER);
+        Map<?, ?> body = (Map<?, ?>) request.getBody();
+        assertEquals(
+                operationId + ":retained-response-recovery",
+                body.get("operationKey"));
+        assertEquals(
+                "GENERATION_OPERATION_RECOVERY",
+                body.get("referenceType"));
+        assertEquals(37_798L, body.get("estimatedTokens"));
+    }
+
+    @Test
     void generationBindsOwnerAndTheDurableOperationId() {
         UUID operationId = UUID.randomUUID();
         when(restTemplate.exchange(
@@ -164,6 +195,30 @@ class RestGenerationDownstreamClientTest {
                 "X-Generation-Operation-Id",
                 operationId.toString());
         assertNull(request.getHeaders().getFirst("X-Payment-Owner"));
+    }
+
+    @Test
+    void rejectedGenerationReplayUsesOnlyTheOperatorIdentityAndOwner() {
+        UUID operationId = UUID.randomUUID();
+        String url = "http://cv/internal/v1/cv-cover-letter/"
+                + "rejected-generations/" + operationId + "/replay";
+        when(restTemplate.exchange(
+                eq(url),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "outcome", "ACCEPTED")));
+
+        Map<String, Object> body = Map.of("inputSchemaVersion", "2.0");
+        client.replayRejectedGeneration(OWNER, operationId, body);
+
+        HttpEntity<?> request = capturedPost(url);
+        assertSingleHeader(
+                request, "X-Operator-Token", OPERATOR_TOKEN);
+        assertSingleHeader(request, "X-Document-Owner", OWNER);
+        assertNull(request.getHeaders().getFirst("X-Service-Token"));
+        assertEquals(body, request.getBody());
     }
 
     @Test

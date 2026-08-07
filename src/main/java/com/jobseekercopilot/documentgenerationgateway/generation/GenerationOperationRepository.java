@@ -338,6 +338,43 @@ public class GenerationOperationRepository {
                 .orElseThrow();
     }
 
+    public GenerationOperation recoverRejectedGeneration(
+            GenerationOperation operation,
+            UUID leaseToken,
+            Map<String, Object> data,
+            Duration renewedDeadline) {
+        Objects.requireNonNull(operation, "operation");
+        if (renewedDeadline == null
+                || renewedDeadline.isZero()
+                || renewedDeadline.isNegative()) {
+            throw new IllegalArgumentException(
+                    "Renewed generation deadline must be positive.");
+        }
+        Instant now = Instant.now();
+        int updated = jdbc.update("""
+                UPDATE generation_operations
+                   SET state = 'DRAFT_GENERATED', data_json = ?,
+                       failure_code = NULL, failure_message = NULL,
+                       deadline_at = ?, updated_at = ?, version = version + 1
+                 WHERE id = ? AND owner_id = ? AND lease_token = ?
+                   AND version = ? AND state = 'FAILED'
+                   AND failure_code = 'GENERATION_REJECTED'
+                """,
+                writeData(data),
+                atOffset(now.plus(renewedDeadline)),
+                atOffset(now),
+                operation.id(),
+                operation.ownerId(),
+                leaseToken,
+                operation.version());
+        if (updated != 1) {
+            throw new GenerationConflictException(
+                    "Rejected generation changed while recovery was being checkpointed.");
+        }
+        return findByOwnerAndId(operation.id(), operation.ownerId())
+                .orElseThrow();
+    }
+
     public GenerationOperation acceptApproval(
             GenerationOperation operation,
             Map<String, Object> data) {
