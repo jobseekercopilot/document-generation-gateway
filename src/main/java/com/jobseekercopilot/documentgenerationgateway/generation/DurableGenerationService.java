@@ -153,6 +153,10 @@ public class DurableGenerationService {
                                 ownerId,
                                 savedJobId,
                                 requestFingerprint)
+                        .or(() -> repository.findLatestDeadlineRecovery(
+                                ownerId,
+                                savedJobId,
+                                requestFingerprint))
                         .or(() -> repository
                                 .findLatestRecoverableApplicationConflict(
                                         ownerId,
@@ -166,6 +170,8 @@ public class DurableGenerationService {
                                 requestFingerprint,
                                 initialData,
                                 deadline)));
+        operation = repository.prepareRetryableReplay(
+                operation, deadline);
         boolean recovery = recoverableApplicationConflict(operation);
         if ((operation.state().terminal() && !recovery)
                 || operation.state() == GenerationOperationState.AWAITING_APPROVAL) {
@@ -1690,9 +1696,18 @@ public class DurableGenerationService {
                 operation,
                 leaseToken,
                 GenerationOperationState.RECOVERY_REQUIRED,
-                operation.data(),
+                deadlineRecoveryData(operation),
                 "OPERATION_DEADLINE_RECOVERY_REQUIRED",
                 "The operation deadline expired during a replay-safe side effect; recover using the persisted operation and stable downstream key.");
+    }
+
+    private Map<String, Object> deadlineRecoveryData(
+            GenerationOperation operation) {
+        Map<String, Object> recoveryData = data(operation);
+        recoveryData.put(
+                GenerationOperationRepository.DEADLINE_RECOVERY_STATE_KEY,
+                operation.state().name());
+        return recoveryData;
     }
 
     private GenerationOperation retryableFailure(

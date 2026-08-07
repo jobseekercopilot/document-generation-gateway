@@ -1,6 +1,7 @@
 package com.jobseekercopilot.documentgenerationgateway.generation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -273,6 +274,292 @@ class GenerationOperationRepositoryPostgresTest {
             releaseGeneration.countDown();
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void retryableReplayPreparationRespectsAnActiveLease() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-retry-preparation",
+                SAVED_JOB_ID,
+                "b".repeat(64),
+                Duration.ofMinutes(10));
+        UUID initialLease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, initialLease,
+                Duration.ofSeconds(30)));
+        GenerationOperation retryable = repository.checkpoint(
+                created,
+                initialLease,
+                GenerationOperationState.CREDIT_COMMITTED,
+                created.data(),
+                "DOWNSTREAM_RETRYABLE",
+                "Document storage is temporarily unavailable.");
+        repository.release(retryable.id(), OWNER, initialLease);
+        jdbc.update("""
+                UPDATE generation_operations
+                   SET deadline_at = ?
+                 WHERE id = ? AND owner_id = ?
+                """,
+                OffsetDateTime.ofInstant(
+                        Instant.now().minusSeconds(1),
+                        ZoneOffset.UTC),
+                retryable.id(),
+                OWNER);
+        retryable = repository.findByOwnerAndId(
+                        retryable.id(), OWNER)
+                .orElseThrow();
+
+        UUID competingLease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                retryable.id(), OWNER, competingLease,
+                Duration.ofSeconds(30)));
+        GenerationOperation leased = repository.findByOwnerAndId(
+                        retryable.id(), OWNER)
+                .orElseThrow();
+        GenerationOperation blocked = repository.prepareRetryableReplay(
+                leased, Duration.ofMinutes(10));
+
+        assertEquals(
+                "DOWNSTREAM_RETRYABLE", blocked.failureCode());
+        assertTrue(blocked.deadlineAt().isBefore(Instant.now()));
+        assertEquals(competingLease, blocked.leaseToken());
+        assertEquals(leased.version(), blocked.version());
+
+        repository.release(blocked.id(), OWNER, competingLease);
+        GenerationOperation available = repository.findByOwnerAndId(
+                        blocked.id(), OWNER)
+                .orElseThrow();
+        GenerationOperation prepared = repository.prepareRetryableReplay(
+                available, Duration.ofMinutes(10));
+
+        assertNull(prepared.failureCode());
+        assertNull(prepared.failureMessage());
+        assertNull(prepared.leaseToken());
+        assertNull(prepared.leaseUntil());
+        assertTrue(prepared.deadlineAt().isAfter(
+                Instant.now().plus(Duration.ofMinutes(9))));
+        assertEquals(available.version() + 1, prepared.version());
+    }
+
+    @Test
+    void deadlineRecoveryRestoresOnlyARecordedPostModelCheckpoint() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-deadline-recovery",
+                SAVED_JOB_ID,
+                "c".repeat(64),
+                Duration.ofMinutes(10));
+        UUID lease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, lease,
+                Duration.ofSeconds(30)));
+        GenerationOperation recovery = repository.checkpoint(
+                created,
+                lease,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                Map.of(
+                        GenerationOperationRepository
+                                .DEADLINE_RECOVERY_STATE_KEY,
+                        GenerationOperationState.CREDIT_COMMITTED.name()),
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                "Replay-safe work exceeded its deadline.");
+        repository.release(recovery.id(), OWNER, lease);
+
+        GenerationOperation prepared = repository.prepareRetryableReplay(
+                repository.findByOwnerAndId(
+                                recovery.id(), OWNER)
+                        .orElseThrow(),
+                Duration.ofMinutes(10));
+
+        assertEquals(
+                GenerationOperationState.CREDIT_COMMITTED,
+                prepared.state());
+        assertNull(prepared.failureCode());
+        assertNull(prepared.failureMessage());
+        assertTrue(prepared.deadlineAt().isAfter(
+                Instant.now().plus(Duration.ofMinutes(9))));
+    }
+
+    @Test
+    void ambiguousDeadlineRecoveryRemainsTerminal() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-ambiguous-deadline-recovery",
+                SAVED_JOB_ID,
+                "d".repeat(64),
+                Duration.ofMinutes(10));
+        UUID lease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, lease,
+                Duration.ofSeconds(30)));
+        GenerationOperation recovery = repository.checkpoint(
+                created,
+                lease,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                Map.of(),
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                "Ambiguous retained recovery.");
+        repository.release(recovery.id(), OWNER, lease);
+        GenerationOperation available = repository.findByOwnerAndId(
+                        recovery.id(), OWNER)
+                .orElseThrow();
+
+        GenerationOperation unchanged =
+                repository.prepareRetryableReplay(
+                        available, Duration.ofMinutes(10));
+
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                unchanged.state());
+        assertEquals(
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                unchanged.failureCode());
+        assertEquals(available.version(), unchanged.version());
+        assertEquals(available.deadlineAt(), unchanged.deadlineAt());
+    }
+
+    @Test
+    void unsafeRecordedDeadlineCheckpointDoesNotUseLegacyFallback() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-unsafe-recorded-deadline-recovery",
+                SAVED_JOB_ID,
+                "e".repeat(64),
+                Duration.ofMinutes(10));
+        UUID lease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, lease,
+                Duration.ofSeconds(30)));
+        GenerationOperation recovery = repository.checkpoint(
+                created,
+                lease,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                Map.of(
+                        GenerationOperationRepository
+                                .DEADLINE_RECOVERY_STATE_KEY,
+                        GenerationOperationState.CREATED.name(),
+                        "generation", Map.of("retained", true),
+                        "actualTokens", 600,
+                        "reservationId", UUID.randomUUID().toString()),
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                "Unsafe recorded checkpoint.");
+        repository.release(recovery.id(), OWNER, lease);
+
+        GenerationOperation unchanged =
+                repository.prepareRetryableReplay(
+                        repository.findByOwnerAndId(
+                                        recovery.id(), OWNER)
+                                .orElseThrow(),
+                        Duration.ofMinutes(10));
+
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                unchanged.state());
+        assertEquals(
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                unchanged.failureCode());
+    }
+
+    @Test
+    void zeroTokenLegacyDeadlineCheckpointRemainsTerminal() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-zero-token-deadline-recovery",
+                SAVED_JOB_ID,
+                "f".repeat(64),
+                Duration.ofMinutes(10));
+        UUID lease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, lease,
+                Duration.ofSeconds(30)));
+        GenerationOperation recovery = repository.checkpoint(
+                created,
+                lease,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                Map.of(
+                        "generation", Map.of("retained", true),
+                        "actualTokens", 0,
+                        "reservationId", UUID.randomUUID().toString()),
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                "Invalid legacy checkpoint.");
+        repository.release(recovery.id(), OWNER, lease);
+
+        GenerationOperation unchanged =
+                repository.prepareRetryableReplay(
+                        repository.findByOwnerAndId(
+                                        recovery.id(), OWNER)
+                                .orElseThrow(),
+                        Duration.ofMinutes(10));
+
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                unchanged.state());
+        assertEquals(
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                unchanged.failureCode());
+    }
+
+    @Test
+    void olderDeadlineRecoveryIsNotSelectedAfterANewerOperation() {
+        String fingerprint = "1".repeat(64);
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-old-deadline-recovery",
+                SAVED_JOB_ID,
+                fingerprint,
+                Duration.ofMinutes(10));
+        UUID recoveryLease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, recoveryLease,
+                Duration.ofSeconds(30)));
+        GenerationOperation recovery = repository.checkpoint(
+                created,
+                recoveryLease,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                Map.of(
+                        GenerationOperationRepository
+                                .DEADLINE_RECOVERY_STATE_KEY,
+                        GenerationOperationState.CREDIT_COMMITTED.name()),
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                "Older retained recovery.");
+        repository.release(recovery.id(), OWNER, recoveryLease);
+        assertEquals(
+                1,
+                jdbc.update(
+                        """
+                        UPDATE generation_operations
+                           SET created_at = ?
+                         WHERE id = ? AND owner_id = ?
+                        """,
+                        OffsetDateTime.ofInstant(
+                                Instant.now().minus(Duration.ofMinutes(1)),
+                                ZoneOffset.UTC),
+                        recovery.id(),
+                        OWNER));
+
+        GenerationOperation newer = repository.createOrReplay(
+                OWNER,
+                "postgres-newer-terminal-operation",
+                SAVED_JOB_ID,
+                fingerprint,
+                Duration.ofMinutes(10));
+        UUID newerLease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                newer.id(), OWNER, newerLease,
+                Duration.ofSeconds(30)));
+        GenerationOperation failed = repository.checkpoint(
+                newer,
+                newerLease,
+                GenerationOperationState.FAILED,
+                Map.of(),
+                "GENERATION_REJECTED",
+                "Newer terminal operation.");
+        repository.release(failed.id(), OWNER, newerLease);
+
+        assertTrue(repository.findLatestDeadlineRecovery(
+                        OWNER, SAVED_JOB_ID, fingerprint)
+                .isEmpty());
     }
 
     @Test

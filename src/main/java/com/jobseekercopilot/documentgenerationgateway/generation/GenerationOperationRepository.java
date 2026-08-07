@@ -23,6 +23,8 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class GenerationOperationRepository {
     private static final int APPROVAL_ACCEPT_ATTEMPTS = 3;
+    static final String DEADLINE_RECOVERY_STATE_KEY =
+            "deadlineRecoveryState";
     private static final TypeReference<LinkedHashMap<String, Object>> DATA_TYPE =
             new TypeReference<>() {
             };
@@ -172,6 +174,47 @@ public class GenerationOperationRepository {
                 requestFingerprint);
     }
 
+    public Optional<GenerationOperation> findLatestDeadlineRecovery(
+            String ownerId,
+            UUID savedJobId,
+            String requestFingerprint) {
+        return one(
+                SELECT_COLUMNS
+                        + """
+                         WHERE owner_id = ?
+                           AND saved_job_id = ?
+                           AND request_fingerprint = ?
+                           AND state = 'RECOVERY_REQUIRED'
+                           AND failure_code =
+                               'OPERATION_DEADLINE_RECOVERY_REQUIRED'
+                           AND NOT EXISTS (
+                               SELECT 1
+                                 FROM generation_operations newer
+                                WHERE newer.owner_id =
+                                          generation_operations.owner_id
+                                  AND newer.saved_job_id =
+                                          generation_operations.saved_job_id
+                                  AND newer.request_fingerprint =
+                                          generation_operations.request_fingerprint
+                                  AND (
+                                      newer.created_at >
+                                          generation_operations.created_at
+                                      OR (
+                                          newer.created_at =
+                                              generation_operations.created_at
+                                          AND CAST(newer.id AS VARCHAR) >
+                                              CAST(generation_operations.id AS VARCHAR)
+                                      )
+                                  )
+                           )
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                        """,
+                ownerId,
+                savedJobId,
+                requestFingerprint);
+    }
+
     public Optional<GenerationOperation>
             findLatestRecoverableApplicationConflict(
                     String ownerId,
@@ -195,6 +238,53 @@ public class GenerationOperationRepository {
                 savedJobId,
                 requestFingerprint,
                 atOffset(Instant.now()));
+    }
+
+    public GenerationOperation prepareRetryableReplay(
+            GenerationOperation operation,
+            Duration renewedDeadline) {
+        Objects.requireNonNull(operation, "operation");
+        if (renewedDeadline == null
+                || renewedDeadline.isZero()
+                || renewedDeadline.isNegative()) {
+            throw new IllegalArgumentException(
+                    "Renewed generation deadline must be positive.");
+        }
+        GenerationOperationState replayState =
+                retryableReplayState(operation);
+        if (replayState == null) {
+            return operation;
+        }
+
+        Instant now = Instant.now();
+        jdbc.update("""
+                UPDATE generation_operations
+                   SET state = ?, deadline_at = ?, failure_code = NULL,
+                       failure_message = NULL, updated_at = ?,
+                       version = version + 1
+                 WHERE id = ? AND owner_id = ?
+                   AND idempotency_key = ? AND saved_job_id = ?
+                   AND request_fingerprint = ? AND state = ?
+                   AND failure_code = ?
+                   AND version = ?
+                   AND (lease_until IS NULL OR lease_until < ?)
+                """,
+                replayState.name(),
+                atOffset(now.plus(renewedDeadline)),
+                atOffset(now),
+                operation.id(),
+                operation.ownerId(),
+                operation.idempotencyKey(),
+                operation.savedJobId(),
+                operation.requestFingerprint(),
+                operation.state().name(),
+                operation.failureCode(),
+                operation.version(),
+                atOffset(now));
+        return findByOwnerAndId(
+                        operation.id(), operation.ownerId())
+                .orElseThrow(() -> new GenerationConflictException(
+                        "Generation operation changed while replay was being prepared."));
     }
 
     public boolean tryAcquire(
@@ -398,5 +488,81 @@ public class GenerationOperationRepository {
             return value;
         }
         return value.substring(0, maximum);
+    }
+
+    private static boolean replaySafeAfterGeneration(
+            GenerationOperationState state) {
+        return switch (state) {
+            case DRAFT_GENERATED,
+                    CREDIT_COMMITTED,
+                    DRAFTS_STORED,
+                    AWAITING_APPROVAL,
+                    APPROVED,
+                    CV_EXPORT_IN_PROGRESS,
+                    CV_EXPORTED,
+                    COVER_LETTER_EXPORT_IN_PROGRESS,
+                    EXPORTED -> true;
+            default -> false;
+        };
+    }
+
+    private static GenerationOperationState retryableReplayState(
+            GenerationOperation operation) {
+        if ("DOWNSTREAM_RETRYABLE".equals(operation.failureCode())
+                && replaySafeAfterGeneration(operation.state())) {
+            return operation.state();
+        }
+        if (operation.state()
+                        != GenerationOperationState.RECOVERY_REQUIRED
+                || !"OPERATION_DEADLINE_RECOVERY_REQUIRED".equals(
+                        operation.failureCode())) {
+            return null;
+        }
+
+        if (operation.data().containsKey(DEADLINE_RECOVERY_STATE_KEY)) {
+            GenerationOperationState recorded = recordedRecoveryState(
+                    operation.data().get(DEADLINE_RECOVERY_STATE_KEY));
+            return recorded != null && replaySafeAfterGeneration(recorded)
+                    ? recorded
+                    : null;
+        }
+        return legacyGeneratedCheckpoint(operation.data())
+                ? GenerationOperationState.DRAFT_GENERATED
+                : null;
+    }
+
+    private static GenerationOperationState recordedRecoveryState(
+            Object value) {
+        if (!(value instanceof String state) || state.isBlank()) {
+            return null;
+        }
+        try {
+            return GenerationOperationState.valueOf(state);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private static boolean legacyGeneratedCheckpoint(
+            Map<String, Object> data) {
+        Object generated = data.get("generation");
+        Object actualTokens = data.get("actualTokens");
+        return generated instanceof Map<?, ?> generatedMap
+                && !generatedMap.isEmpty()
+                && actualTokens instanceof Number tokens
+                && tokens.longValue() > 0
+                && validUuid(data.get("reservationId"));
+    }
+
+    private static boolean validUuid(Object value) {
+        if (value instanceof UUID) {
+            return true;
+        }
+        try {
+            UUID.fromString(Objects.toString(value, ""));
+            return true;
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
     }
 }

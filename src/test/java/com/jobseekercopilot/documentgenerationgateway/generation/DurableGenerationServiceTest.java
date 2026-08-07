@@ -2,6 +2,8 @@ package com.jobseekercopilot.documentgenerationgateway.generation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,6 +32,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -994,7 +997,7 @@ class DurableGenerationServiceTest {
     }
 
     @Test
-    void replaySafeStoreFailureResumesWithTheSameKeys() {
+    void expiredReplaySafeStoreFailureResumesWithTheSameKeys() {
         AtomicInteger coverLetterAttempts = new AtomicInteger();
         List<String> documentKeys = new ArrayList<>();
         List<String> generatedAtValues = new ArrayList<>();
@@ -1028,9 +1031,46 @@ class DurableGenerationServiceTest {
                 "DOWNSTREAM_RETRYABLE",
                 interrupted.failureCode());
 
-        var resumed = startAndAwait(
+        Instant expiredDeadline = Instant.now().minusSeconds(1);
+        assertEquals(
+                1,
+                jdbc.update("""
+                        UPDATE generation_operations
+                           SET deadline_at = ?
+                         WHERE id = ? AND owner_id = ?
+                        """,
+                        OffsetDateTime.ofInstant(
+                                expiredDeadline, ZoneOffset.UTC),
+                        interrupted.operationId(),
+                        OWNER));
+
+        AtomicReference<Runnable> resumedWork = new AtomicReference<>();
+        reset(workScheduler);
+        doAnswer(invocation -> {
+                    resumedWork.set(
+                            invocation.getArgument(2, Runnable.class));
+                    return true;
+                })
+                .when(workScheduler)
+                .submit(any(), anyString(), any(Runnable.class));
+
+        var prepared = service.start(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-2",
                 selectionRequest());
+        assertEquals(interrupted.operationId(), prepared.operationId());
+        assertEquals(
+                GenerationOperationState.CREDIT_COMMITTED,
+                prepared.state());
+        assertNull(prepared.failureCode());
+        assertTrue(prepared.deadlineAt().isAfter(Instant.now()));
+        assertNotNull(resumedWork.get());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1))
+                .commit(OWNER, RESERVATION_ID, 600);
+
+        resumedWork.get().run();
+        var resumed = service.get(OWNER, prepared.operationId());
         assertEquals(interrupted.operationId(), resumed.operationId());
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
@@ -1048,6 +1088,96 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
+                .commit(OWNER, RESERVATION_ID, 600);
+    }
+
+    @Test
+    void legacyDeadlineRecoveryResumesAfterGenerationWithoutAnotherModelCall() {
+        AtomicInteger coverLetterAttempts = new AtomicInteger();
+        List<String> documentKeys = new ArrayList<>();
+        doAnswer(invocation -> {
+                    String key = invocation.getArgument(1);
+                    Map<String, Object> request =
+                            invocation.getArgument(2);
+                    documentKeys.add(key);
+                    if ("COVER_LETTER".equals(
+                            request.get("documentType"))
+                            && coverLetterAttempts
+                            .getAndIncrement() == 0) {
+                        throw new ResourceAccessException(
+                                "store unavailable");
+                    }
+                    return documentResponse(request);
+                })
+                .when(downstream)
+                .createDocument(anyString(), anyString(), anyMap());
+
+        var interrupted = startAndAwait(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID,
+                "legacy-deadline-recovery",
+                selectionRequest());
+        assertEquals(
+                GenerationOperationState.CREDIT_COMMITTED,
+                interrupted.state());
+        assertEquals(
+                "DOWNSTREAM_RETRYABLE",
+                interrupted.failureCode());
+        assertEquals(
+                1,
+                jdbc.update("""
+                        UPDATE generation_operations
+                           SET state = 'RECOVERY_REQUIRED',
+                               failure_code =
+                                   'OPERATION_DEADLINE_RECOVERY_REQUIRED',
+                               failure_message = 'Retained legacy recovery',
+                               deadline_at = ?, version = version + 1
+                         WHERE id = ? AND owner_id = ?
+                        """,
+                        OffsetDateTime.ofInstant(
+                                Instant.now().minusSeconds(1),
+                                ZoneOffset.UTC),
+                        interrupted.operationId(),
+                        OWNER));
+
+        AtomicReference<Runnable> resumedWork = new AtomicReference<>();
+        reset(workScheduler);
+        doAnswer(invocation -> {
+                    resumedWork.set(
+                            invocation.getArgument(2, Runnable.class));
+                    return true;
+                })
+                .when(workScheduler)
+                .submit(any(), anyString(), any(Runnable.class));
+
+        var prepared = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID,
+                "fresh-browser-key-after-terminal-state",
+                selectionRequest());
+        assertEquals(interrupted.operationId(), prepared.operationId());
+        assertEquals(
+                GenerationOperationState.DRAFT_GENERATED,
+                prepared.state());
+        assertNull(prepared.failureCode());
+        assertTrue(prepared.deadlineAt().isAfter(Instant.now()));
+        assertNotNull(resumedWork.get());
+
+        resumedWork.get().run();
+        var resumed = service.get(OWNER, prepared.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                resumed.state());
+        assertEquals(
+                List.of(
+                        resumed.operationId() + ":cv-document",
+                        resumed.operationId()
+                                + ":cover-letter-document",
+                        resumed.operationId() + ":cv-document",
+                        resumed.operationId()
+                                + ":cover-letter-document"),
+                documentKeys);
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(2))
                 .commit(OWNER, RESERVATION_ID, 600);
     }
 
