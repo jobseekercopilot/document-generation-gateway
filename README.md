@@ -30,6 +30,12 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `2.4.0` exposes owner-scoped per-version archive, restore and
+recoverable-delete orchestration plus content-free draft/frozen application
+associations. Family history carries `PURGED` tombstones, stable unavailable
+reason/timestamps and exact application/freeze identity without content,
+filenames, complete hashes or evidence payloads. No public purge endpoint is
+introduced.
 Version `2.3.0` consumes Application Tracker `4.3.0` and carries its explicit
 frozen `SELECTED`, `OMITTED` and legacy `UNKNOWN` slot states, exact frozen
 references and one freeze/application time through safe Gateway response
@@ -65,7 +71,7 @@ Job `2.0.0` and Payment `3.0.0`, plus producer-owned clients for User Profile
 `1.3.0` and CV/Cover Letter `3.4.0`. The raw
 Authentication, Document Store, Application Tracker and replacement-upload
 adapters are also checked against their pinned producer contracts. The durable
-path consumes Store `2.3.0`, Application Tracker `4.3.0` and Export `3.0.0`
+path consumes Store `3.2.0`, Application Tracker `4.4.0` and Export `3.0.0`
 through focused handwritten
 adapters, while replacement flows retain the immutable Export `2.0.0` client.
 Generated sources and binaries are build output and are not committed. See

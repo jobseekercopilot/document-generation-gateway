@@ -9,7 +9,7 @@
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "3.0.0"
+    "version" : "3.2.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8089",
@@ -203,22 +203,22 @@
               }
             }
           },
-          "409" : {
-            "description" : "Idempotency conflict",
-            "content" : {
-              "*/*" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/DocumentFileResponse"
-                }
-              }
-            }
-          },
           "413" : {
             "description" : "Upload exceeds a configured safety limit",
             "content" : {
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Idempotency conflict",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentFileResponse"
                 }
               }
             }
@@ -364,16 +364,6 @@
           "required" : true
         },
         "responses" : {
-          "413" : {
-            "description" : "Decoded file or archive exceeds a configured safety limit",
-            "content" : {
-              "*/*" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "404" : {
             "description" : "Generated document not found",
             "content" : {
@@ -400,6 +390,16 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/DocumentFileResponse"
+                }
+              }
+            }
+          },
+          "413" : {
+            "description" : "Decoded file or archive exceeds a configured safety limit",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1094,6 +1094,119 @@
         } ]
       }
     },
+    "/api/v1/documents/{generatedDocumentId}/artifacts/{artifactId}/download" : {
+      "get" : {
+        "tags" : [ "Document Files" ],
+        "summary" : "Download an exact retained document artifact",
+        "description" : "Validates the exact document-version/artifact relationship and downloads an available retained artifact, including one on an archived version, without changing state",
+        "operationId" : "downloadDocumentArtifact",
+        "parameters" : [ {
+          "name" : "generatedDocumentId",
+          "in" : "path",
+          "description" : "UUID of the exact document version",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "artifactId",
+          "in" : "path",
+          "description" : "UUID of its exact retained artifact",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Document-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "503" : {
+            "description" : "Stored artifact failed integrity or safety validation",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Exact retained artifact bytes",
+            "headers" : {
+              "Cache-Control" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "string"
+                }
+              },
+              "X-Content-Type-Options" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "string"
+                }
+              },
+              "Content-Disposition" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "string"
+                }
+              },
+              "Pragma" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "string"
+                }
+              },
+              "Content-Length" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "integer",
+                  "format" : "int64"
+                }
+              }
+            },
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "string",
+                    "format" : "byte"
+                  }
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Artifact not found, unavailable, not owned or not related to the document version",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "type" : "string",
+                    "format" : "byte"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
     "/api/v1/documents/{documentId}/lifecycle-events" : {
       "get" : {
         "tags" : [ "Generated Documents" ],
@@ -1380,7 +1493,8 @@
     "/api/v1/document-files/{id}/download" : {
       "get" : {
         "tags" : [ "Document Files" ],
-        "summary" : "Download exported file",
+        "summary" : "Download an exact retained artifact (legacy route)",
+        "description" : "Downloads the owner-authorised retained artifact without activating it or changing document state. Prefer the document/artifact relationship route for new consumers.",
         "operationId" : "downloadDocumentFile",
         "parameters" : [ {
           "name" : "id",
@@ -1401,6 +1515,16 @@
           }
         } ],
         "responses" : {
+          "503" : {
+            "description" : "Stored file failed integrity or safety validation",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404" : {
             "description" : "Exported file not found",
             "content" : {
@@ -1415,18 +1539,41 @@
               }
             }
           },
-          "503" : {
-            "description" : "Stored file failed integrity or safety validation",
-            "content" : {
-              "*/*" : {
+          "200" : {
+            "description" : "Exact retained artifact bytes",
+            "headers" : {
+              "Cache-Control" : {
+                "style" : "simple",
                 "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
+                  "type" : "string"
+                }
+              },
+              "X-Content-Type-Options" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "string"
+                }
+              },
+              "Content-Disposition" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "string"
+                }
+              },
+              "Pragma" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "string"
+                }
+              },
+              "Content-Length" : {
+                "style" : "simple",
+                "schema" : {
+                  "type" : "integer",
+                  "format" : "int64"
                 }
               }
-            }
-          },
-          "200" : {
-            "description" : "Exported file bytes",
+            },
             "content" : {
               "*/*" : {
                 "schema" : {
@@ -1635,7 +1782,7 @@
           },
           "retentionState" : {
             "type" : "string",
-            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
           },
           "contentSha256" : {
             "type" : "string"
@@ -1682,6 +1829,13 @@
           "purgeEligibleAt" : {
             "type" : "string",
             "format" : "date-time"
+          },
+          "purgedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "unavailableReason" : {
+            "type" : "string"
           },
           "legalHold" : {
             "type" : "boolean"
@@ -2140,7 +2294,7 @@
           "retentionState" : {
             "type" : "string",
             "description" : "Recoverable retention state",
-            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
           },
           "contentSha256" : {
             "type" : "string",
@@ -2185,6 +2339,15 @@
             "type" : "string",
             "description" : "Earliest time an authorized purge may be considered",
             "format" : "date-time"
+          },
+          "purgedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when content was irreversibly purged and this response became a minimal tombstone",
+            "format" : "date-time"
+          },
+          "unavailableReason" : {
+            "type" : "string",
+            "description" : "Stable content-free reason exact document bytes are unavailable"
           },
           "legalHold" : {
             "type" : "boolean"
@@ -2514,11 +2677,11 @@
           },
           "fromState" : {
             "type" : "string",
-            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
           },
           "toState" : {
             "type" : "string",
-            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
           },
           "actorId" : {
             "type" : "string"
@@ -2592,7 +2755,7 @@
           },
           "latestRetention" : {
             "type" : "string",
-            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
           },
           "currentDocumentId" : {
             "type" : "string",
@@ -2690,6 +2853,30 @@
         },
         "description" : "Owner-scoped newest-first history for one document family"
       },
+      "DocumentTombstoneAssociationResponse" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "associationState" : {
+            "type" : "string",
+            "enum" : [ "DRAFT_SELECTED", "FROZEN_USED" ]
+          },
+          "applicationStatus" : {
+            "type" : "string"
+          },
+          "frozenAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
       "DocumentVersionHistoryItem" : {
         "type" : "object",
         "properties" : {
@@ -2714,7 +2901,7 @@
           },
           "retention" : {
             "type" : "string",
-            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED" ]
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
           },
           "current" : {
             "type" : "boolean"
@@ -2735,6 +2922,13 @@
             "type" : "string",
             "format" : "date-time"
           },
+          "purgedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "unavailableReason" : {
+            "type" : "string"
+          },
           "createdAt" : {
             "type" : "string",
             "format" : "date-time"
@@ -2742,6 +2936,12 @@
           "updatedAt" : {
             "type" : "string",
             "format" : "date-time"
+          },
+          "applicationAssociations" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/DocumentTombstoneAssociationResponse"
+            }
           },
           "artifacts" : {
             "type" : "array",

@@ -2,14 +2,14 @@
   "openapi" : "3.0.1",
   "info" : {
     "title" : "Jobseeker Copilot - Application Tracker API",
-    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions and explicit omissions frozen only when an application\nfirst enters APPLIED.\nAtomic document-selection commands require explicit SELECTED or OMITTED\nstate for both optional slots, an expected record version and a durable\nowner-scoped idempotency key.\nApplying requires expectedVersion and Idempotency-Key, re-verifies\nevery selected exact version, and commits both frozen slot states,\ntimestamps and content-free events atomically.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
+    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions and explicit omissions frozen only when an application\nfirst enters APPLIED.\nAtomic document-selection commands require explicit SELECTED or OMITTED\nstate for both optional slots, an expected record version and a durable\nowner-scoped idempotency key.\nApplying requires expectedVersion and Idempotency-Key, re-verifies\nevery selected exact version, and commits both frozen slot states,\ntimestamps and content-free events atomically.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nOrdered Store lifecycle projections mark exact references archived,\ndeleted or purged. Purge keeps family/version identity and association\nhistory while scrubbing complete hashes and evidence details.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
     "contact" : {
       "name" : "Jobseeker Copilot"
     },
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "4.3.0"
+    "version" : "4.4.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8088",
@@ -67,12 +67,12 @@
           "required" : true
         },
         "responses" : {
-          "404" : {
-            "description" : "Application record not found",
+          "200" : {
+            "description" : "Selection saved or exact command replayed",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
                 }
               }
             }
@@ -101,18 +101,18 @@
               }
             }
           },
-          "200" : {
-            "description" : "Selection saved or exact command replayed",
+          "400" : {
+            "description" : "Invalid command, status or document reference",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
           },
-          "400" : {
-            "description" : "Invalid command, status or document reference",
+          "404" : {
+            "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -125,6 +125,86 @@
         "security" : [ {
           "bearerAuth" : [ ]
         }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/document/{documentId}/availability" : {
+      "put" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Project exact document availability into application history",
+        "description" : "Applies an ordered owner-scoped lifecycle projection. PURGED is terminal and scrubs complete hashes and evidence details while retaining exact family/version identity.",
+        "operationId" : "updateDocumentAvailability",
+        "parameters" : [ {
+          "name" : "documentId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for the approved producer identity",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateDocumentAvailabilityRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Availability projection applied or replayed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid or stale lifecycle projection",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid service identity",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Service identity lacks producer authority",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
           "serviceToken" : [ ]
         } ]
       }
@@ -474,6 +554,16 @@
           "required" : true
         },
         "responses" : {
+          "401" : {
+            "description" : "Missing or invalid authentication",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
           "200" : {
             "description" : "Status updated successfully",
             "content" : {
@@ -484,8 +574,8 @@
               }
             }
           },
-          "404" : {
-            "description" : "Application record not found",
+          "400" : {
+            "description" : "Invalid status value",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -494,8 +584,8 @@
               }
             }
           },
-          "400" : {
-            "description" : "Invalid status value",
+          "409" : {
+            "description" : "Invalid lifecycle transition or stale/concurrent record version",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -514,22 +604,12 @@
               }
             }
           },
-          "409" : {
-            "description" : "Invalid lifecycle transition or stale/concurrent record version",
+          "404" : {
+            "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401" : {
-            "description" : "Missing or invalid authentication",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -1002,22 +1082,22 @@
           }
         } ],
         "responses" : {
-          "404" : {
-            "description" : "Application record not found",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "200" : {
             "description" : "Ordered activity page returned",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ApplicationHistoryResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1146,16 +1226,6 @@
           }
         } ],
         "responses" : {
-          "401" : {
-            "description" : "Missing, invalid or ambiguous authentication",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
-                }
-              }
-            }
-          },
           "403" : {
             "description" : "Authenticated identity lacks reader permission",
             "content" : {
@@ -1185,6 +1255,16 @@
                   "items" : {
                     "$ref" : "#/components/schemas/ApplicationRecordResponse"
                   }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing, invalid or ambiguous authentication",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -1247,6 +1327,66 @@
           "serviceToken" : [ ]
         } ]
       }
+    },
+    "/api/v1/applications/document/{documentId}/associations" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get content-free associations for one exact document version",
+        "description" : "Returns every owner-scoped draft selection and frozen use. An empty list is authoritative and cross-owner identifiers remain non-enumerable.",
+        "operationId" : "getDocumentAssociations",
+        "parameters" : [ {
+          "name" : "documentId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for the approved reader identity",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Authoritative association snapshot",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentApplicationAssociationsResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Service identity lacks association-read authority",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentApplicationAssociationsResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid service identity",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentApplicationAssociationsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "serviceToken" : [ ]
+        } ]
+      }
     }
   },
   "components" : {
@@ -1287,29 +1427,6 @@
           }
         },
         "description" : "Complete desired CV and cover-letter selection. Both slot objects are required so older or partial clients cannot accidentally clear a selection."
-      },
-      "ErrorResponse" : {
-        "required" : [ "message", "status", "timestamp" ],
-        "type" : "object",
-        "properties" : {
-          "status" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "message" : {
-            "type" : "string"
-          },
-          "timestamp" : {
-            "type" : "string",
-            "format" : "date-time"
-          },
-          "errors" : {
-            "type" : "array",
-            "items" : {
-              "type" : "string"
-            }
-          }
-        }
       },
       "ApplicationRecordResponse" : {
         "required" : [ "canonicalJobId", "companyName", "createdAt", "externalJobId", "id", "jobId", "jobTitle", "provenance", "provider", "status", "updatedAt", "userId", "version" ],
@@ -1434,26 +1551,6 @@
         },
         "description" : "Response containing application record details"
       },
-      "ApplicationVersionConflictResponse" : {
-        "type" : "object",
-        "properties" : {
-          "status" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "message" : {
-            "type" : "string"
-          },
-          "timestamp" : {
-            "type" : "string",
-            "format" : "date-time"
-          },
-          "currentApplication" : {
-            "$ref" : "#/components/schemas/ApplicationRecordResponse"
-          }
-        },
-        "description" : "Stale application command response with the authoritative current record"
-      },
       "DocumentEvidenceProvenance" : {
         "type" : "object",
         "properties" : {
@@ -1526,6 +1623,17 @@
             "type" : "string",
             "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
           },
+          "availability" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
+          },
+          "unavailableReason" : {
+            "type" : "string"
+          },
+          "unavailableAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
           "parentDocumentId" : {
             "type" : "string",
             "format" : "uuid"
@@ -1580,6 +1688,90 @@
           }
         },
         "description" : "Non-sensitive identity and digest of the exact claim ledger\naccepted by generation validation.\n"
+      },
+      "ErrorResponse" : {
+        "required" : [ "message", "status", "timestamp" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "errors" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "ApplicationVersionConflictResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "currentApplication" : {
+            "$ref" : "#/components/schemas/ApplicationRecordResponse"
+          }
+        },
+        "description" : "Stale application command response with the authoritative current record"
+      },
+      "UpdateDocumentAvailabilityRequest" : {
+        "required" : [ "availability", "occurredAt" ],
+        "type" : "object",
+        "properties" : {
+          "availability" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
+          },
+          "unavailableReason" : {
+            "type" : "string"
+          },
+          "occurredAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "DocumentAvailabilityResponse" : {
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "availability" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
+          },
+          "unavailableReason" : {
+            "type" : "string"
+          },
+          "unavailableAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
       },
       "SystemDataApplicationSeedRecord" : {
         "required" : [ "companyName", "coverLetterDocumentContentSha256", "coverLetterDocumentFamilyId", "coverLetterDocumentId", "coverLetterDocumentVersion", "createdAt", "cvDocumentContentSha256", "cvDocumentFamilyId", "cvDocumentId", "cvDocumentVersion", "id", "jobId", "jobTitle", "status", "updatedAt" ],
@@ -2146,6 +2338,51 @@
           }
         },
         "description" : "Durable application/document-reference reconciliation state"
+      },
+      "DocumentApplicationAssociation" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "associationState" : {
+            "type" : "string",
+            "enum" : [ "DRAFT_SELECTED", "FROZEN_USED" ]
+          },
+          "applicationStatus" : {
+            "type" : "string",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "frozenAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "DocumentApplicationAssociationsResponse" : {
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "associationCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "associations" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/DocumentApplicationAssociation"
+            }
+          }
+        },
+        "description" : "Content-free authoritative application associations for one exact document version"
       }
     },
     "securitySchemes" : {
