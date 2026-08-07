@@ -2,6 +2,8 @@ package com.jobseekercopilot.documentgenerationgateway.generation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -22,6 +24,7 @@ import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationReque
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import com.jobseekercopilot.documentgenerationgateway.dto.EvidenceSection;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
@@ -29,10 +32,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -40,6 +45,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -76,17 +82,38 @@ class DurableGenerationServiceTest {
     @Autowired private OperationDeadlineGuard deadlineGuard;
     @Autowired private JdbcTemplate jdbc;
     @MockBean private GenerationDownstreamClient downstream;
+    @MockBean private GenerationWorkScheduler workScheduler;
 
     @BeforeEach
     void resetState() {
         jdbc.update("DELETE FROM generation_operations");
-        reset(downstream);
+        reset(downstream, workScheduler);
+        doAnswer(invocation -> {
+                    invocation.getArgument(2, Runnable.class).run();
+                    return true;
+                })
+                .when(workScheduler)
+                .submit(any(), anyString(), any(Runnable.class));
         successfulDownstream();
     }
 
     @Test
+    void rejectsLeaseThatCannotCoverTheDownstreamReadTimeout() {
+        assertThrows(
+                IllegalStateException.class,
+                () -> new DurableGenerationService(
+                        repository,
+                        downstream,
+                        objectMapper,
+                        deadlineGuard,
+                        Duration.ofMinutes(10),
+                        Duration.ofSeconds(30),
+                        Duration.ofSeconds(30)));
+    }
+
+    @Test
     void completesOneReplaySafeOperationThenApprovesExactDrafts() {
-        var first = service.start(
+        var first = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1",
                 selectionRequest());
 
@@ -100,7 +127,7 @@ class DurableGenerationServiceTest {
         assertTrue(first.replaySafe());
         assertFalse(first.manualActionRequired());
 
-        var replay = service.start(
+        var replay = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1",
                 selectionRequest());
         assertEquals(first.operationId(), replay.operationId());
@@ -112,14 +139,14 @@ class DurableGenerationServiceTest {
 
         assertThrows(
                 GenerationConflictException.class,
-                () -> service.approve(
+                () -> approveAndAwait(
                         OWNER,
                         first.operationId(),
                         new ApproveGenerationRequest(
                                 UUID.randomUUID(),
                                 COVER_LETTER_DOCUMENT_ID)));
 
-        var completed = service.approve(
+        var completed = approveAndAwait(
                 OWNER,
                 first.operationId(),
                 new ApproveGenerationRequest(
@@ -161,8 +188,574 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void replayRecoversDuplicateCanonicalApplicationWithoutRegeneration() {
+        var generated = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "duplicate-application-1",
+                selectionRequest());
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.CONFLICT,
+                "Conflict",
+                org.springframework.http.HttpHeaders.EMPTY,
+                """
+                {"status":409,"message":"An application for this canonical job is already tracked for the owner."}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+
+        var recoveryRequired = approveAndAwait(
+                OWNER,
+                generated.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                recoveryRequired.state());
+        assertEquals(
+                "APPLICATION_LINK_RECOVERY_REQUIRED",
+                recoveryRequired.failureCode());
+        assertEquals(
+                "The generated documents could not be linked to the "
+                        + "existing saved application automatically.",
+                recoveryRequired.failureMessage());
+
+        when(downstream.applications(OWNER)).thenReturn(List.of(
+                Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 3)));
+        when(downstream.updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 4));
+        when(downstream.updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 5));
+        when(downstream.updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED",
+                        "version", 6));
+
+        var recovered = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "duplicate-application-retry",
+                selectionRequest());
+
+        assertEquals(
+                generated.operationId(),
+                recovered.operationId());
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                recovered.state());
+        assertEquals(APPLICATION_ID, recovered.applicationId());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1))
+                .commit(OWNER, RESERVATION_ID, 600);
+        verify(downstream).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID);
+        verify(downstream).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID);
+        verify(downstream).updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5);
+    }
+
+    @Test
+    void startReturnsPersistedOperationBeforeQueuedWorkRuns() {
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        reset(workScheduler);
+        when(workScheduler.submit(any(), anyString(), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    queued.set(invocation.getArgument(2));
+                    return true;
+                });
+
+        var accepted = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "asynchronous-start-1",
+                selectionRequest());
+
+        assertEquals(GenerationOperationState.CREATED, accepted.state());
+        assertEquals(
+                GenerationOperationState.CREATED,
+                service.get(OWNER, accepted.operationId()).state());
+        verify(downstream, never()).savedJob(any(), anyString());
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+
+        queued.get().run();
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                service.get(OWNER, accepted.operationId()).state());
+    }
+
+    @Test
+    void approvalIntentIsPersistedBeforeQueuedWorkRuns() {
+        var awaiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "asynchronous-approval-1",
+                selectionRequest());
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        reset(workScheduler);
+        when(workScheduler.submit(any(), anyString(), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    queued.set(invocation.getArgument(2));
+                    return true;
+                });
+
+        var accepted = service.approve(
+                OWNER,
+                awaiting.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                accepted.state());
+        GenerationOperation persisted = repository
+                .findByOwnerAndId(awaiting.operationId(), OWNER)
+                .orElseThrow();
+        assertTrue(persisted.data().containsKey("approvalRequest"));
+        verify(downstream, never()).approveDocument(
+                anyString(), any());
+
+        queued.get().run();
+
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                service.get(OWNER, awaiting.operationId()).state());
+    }
+
+    @Test
+    void queuedStartReplayCanFinishANewlyPersistedApprovalIntent() {
+        AtomicReference<Runnable> queuedStart = new AtomicReference<>();
+        reset(workScheduler);
+        when(workScheduler.submit(any(), anyString(), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    queuedStart.set(invocation.getArgument(2));
+                    return true;
+                });
+        var accepted = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "start-approval-handoff-1",
+                selectionRequest());
+        var synchronousService = new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                deadlineGuard,
+                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(1));
+        var awaiting = startAndAwait(
+                synchronousService,
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "start-approval-handoff-1",
+                selectionRequest());
+        GenerationOperation operation = repository
+                .findByOwnerAndId(accepted.operationId(), OWNER)
+                .orElseThrow();
+        Map<String, Object> data = new LinkedHashMap<>(operation.data());
+        data.put("approvalRequest", Map.of(
+                "cvDocumentId", CV_DOCUMENT_ID.toString(),
+                "coverLetterDocumentId",
+                COVER_LETTER_DOCUMENT_ID.toString()));
+        repository.acceptApproval(operation, data);
+
+        queuedStart.get().run();
+
+        assertEquals(
+                awaiting.operationId(), accepted.operationId());
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                service.get(OWNER, accepted.operationId()).state());
+        verify(downstream, times(1)).createApplication(
+                anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void approvalAcceptanceRecoversFromAConcurrentVersionChange()
+            throws Exception {
+        var awaitingResponse = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "approval-version-race-1",
+                selectionRequest());
+        GenerationOperation stale = repository
+                .findByOwnerAndId(
+                        awaitingResponse.operationId(), OWNER)
+                .orElseThrow();
+        Map<String, Object> concurrentData =
+                new LinkedHashMap<>(stale.data());
+        concurrentData.put("concurrentMarker", "retained");
+        assertEquals(
+                1,
+                jdbc.update("""
+                        UPDATE generation_operations
+                           SET data_json = ?, version = version + 1
+                         WHERE id = ? AND owner_id = ?
+                        """,
+                        objectMapper.writeValueAsString(concurrentData),
+                        stale.id(),
+                        stale.ownerId()));
+        Map<String, Object> approvalRequest = Map.of(
+                "cvDocumentId", CV_DOCUMENT_ID.toString(),
+                "coverLetterDocumentId",
+                COVER_LETTER_DOCUMENT_ID.toString());
+        Map<String, Object> requestedData =
+                new LinkedHashMap<>(stale.data());
+        requestedData.put("approvalRequest", approvalRequest);
+
+        GenerationOperation accepted =
+                repository.acceptApproval(stale, requestedData);
+
+        assertEquals("retained", accepted.data().get("concurrentMarker"));
+        assertEquals(
+                approvalRequest, accepted.data().get("approvalRequest"));
+        GenerationOperation replay =
+                repository.acceptApproval(stale, requestedData);
+        assertEquals(accepted.version(), replay.version());
+
+        Map<String, Object> differentData =
+                new LinkedHashMap<>(stale.data());
+        differentData.put("approvalRequest", Map.of(
+                "cvDocumentId", UUID.randomUUID().toString(),
+                "coverLetterDocumentId",
+                COVER_LETTER_DOCUMENT_ID.toString()));
+        assertThrows(
+                GenerationConflictException.class,
+                () -> repository.acceptApproval(
+                        stale, differentData));
+    }
+
+    @Test
+    void authoritativeGetResubmitsPersistedApprovalAfterAStaleLease() {
+        var awaiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "approval-restart-1",
+                selectionRequest());
+        UUID staleLease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                awaiting.operationId(),
+                OWNER,
+                staleLease,
+                Duration.ofSeconds(30)));
+
+        var accepted = service.approve(
+                OWNER,
+                awaiting.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                accepted.state());
+        assertTrue(repository.findByOwnerAndId(
+                        awaiting.operationId(), OWNER)
+                .orElseThrow()
+                .data()
+                .containsKey("approvalRequest"));
+        repository.release(
+                awaiting.operationId(), OWNER, staleLease);
+
+        var firstPoll = service.get(
+                OWNER, awaiting.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                firstPoll.state());
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                service.get(OWNER, awaiting.operationId()).state());
+        verify(downstream, times(1)).createApplication(
+                anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void replayOnANewServiceInstanceResumesTheSamePreProviderOperation() {
+        reset(workScheduler);
+        when(workScheduler.submit(any(), anyString(), any(Runnable.class)))
+                .thenReturn(false);
+        var stalled = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "restart-replay-1",
+                selectionRequest());
+        assertEquals(GenerationOperationState.CREATED, stalled.state());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+
+        var restartedService = new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                deadlineGuard,
+                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(1));
+        var replay = restartedService.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "restart-replay-1",
+                selectionRequest());
+
+        assertEquals(stalled.operationId(), replay.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                restartedService.get(
+                        OWNER, replay.operationId()).state());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void replayDefersPreProviderResumeUntilAStaleLeaseExpires() {
+        reset(workScheduler);
+        when(workScheduler.submit(any(), anyString(), any(Runnable.class)))
+                .thenReturn(false);
+        var stalled = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "stale-lease-replay-1",
+                selectionRequest());
+        UUID staleLease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                stalled.operationId(),
+                OWNER,
+                staleLease,
+                Duration.ofSeconds(30)));
+
+        AtomicReference<Runnable> deferred = new AtomicReference<>();
+        reset(workScheduler);
+        when(workScheduler.submit(any(), anyString(), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    invocation.getArgument(2, Runnable.class).run();
+                    return true;
+                });
+        when(workScheduler.submitAfter(
+                any(),
+                anyString(),
+                any(Duration.class),
+                any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    deferred.set(invocation.getArgument(3));
+                    return true;
+                });
+
+        var replay = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "stale-lease-replay-1",
+                selectionRequest());
+        assertEquals(stalled.operationId(), replay.operationId());
+        assertTrue(deferred.get() != null);
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+
+        repository.release(
+                stalled.operationId(), OWNER, staleLease);
+        deferred.get().run();
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                service.get(OWNER, stalled.operationId()).state());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void cancellationWinsBeforeQueuedWorkAndRemainsAuthoritative() {
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        reset(workScheduler);
+        when(workScheduler.submit(any(), anyString(), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    queued.set(invocation.getArgument(2));
+                    return true;
+                });
+        var accepted = service.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "queued-cancellation-1",
+                selectionRequest());
+
+        var cancelled = service.cancel(
+                OWNER, accepted.operationId());
+        queued.get().run();
+
+        assertEquals(
+                GenerationOperationState.CANCELLED,
+                cancelled.state());
+        assertEquals(
+                GenerationOperationState.CANCELLED,
+                service.get(OWNER, accepted.operationId()).state());
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+    }
+
+    @Test
+    void retryAcceptsMatchingDocumentsWhenStatusUpdateOutcomeWasUnknown() {
+        String idempotencyKey = "ambiguous-status-update-1";
+        var generated = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                idempotencyKey,
+                selectionRequest());
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.CONFLICT,
+                "Conflict",
+                org.springframework.http.HttpHeaders.EMPTY,
+                """
+                {"status":409,"message":"An application for this canonical job is already tracked for the owner."}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+        when(downstream.applications(OWNER)).thenReturn(
+                List.of(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 3)),
+                List.of(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED",
+                        "cvDocumentId", CV_DOCUMENT_ID.toString(),
+                        "coverLetterDocumentId",
+                                COVER_LETTER_DOCUMENT_ID.toString(),
+                        "version", 6)));
+        when(downstream.updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "status", "SAVED",
+                        "version", 4));
+        when(downstream.updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "status", "SAVED",
+                        "version", 5));
+        when(downstream.updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5))
+                .thenThrow(new ResourceAccessException(
+                        "status response was lost"));
+
+        var ambiguous = approveAndAwait(
+                OWNER,
+                generated.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.EXPORTED,
+                ambiguous.state());
+        assertEquals("DOWNSTREAM_RETRYABLE", ambiguous.failureCode());
+
+        var recovered = approveAndAwait(
+                OWNER,
+                generated.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                recovered.state());
+        assertEquals(APPLICATION_ID, recovered.applicationId());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1)).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "CV",
+                CV_DOCUMENT_ID);
+        verify(downstream, times(1)).updateApplicationDocument(
+                OWNER,
+                APPLICATION_ID,
+                "COVER_LETTER",
+                COVER_LETTER_DOCUMENT_ID);
+        verify(downstream, times(1)).updateApplicationStatus(
+                OWNER,
+                APPLICATION_ID,
+                "DOCUMENTS_GENERATED",
+                5);
+    }
+
+    @Test
     void sendsOnlyPurposeSpecificImmutableEvidenceSnapshotsToGeneration() {
-        service.start(
+        startAndAwait(
                 OWNER,
                 AUTHORIZATION,
                 SAVED_JOB_ID,
@@ -246,7 +839,7 @@ class DurableGenerationServiceTest {
 
     @Test
     void idempotencyKeyCannotBeReusedForDifferentEvidenceSelection() {
-        service.start(
+        startAndAwait(
                 OWNER,
                 AUTHORIZATION,
                 SAVED_JOB_ID,
@@ -255,7 +848,7 @@ class DurableGenerationServiceTest {
 
         assertThrows(
                 GenerationConflictException.class,
-                () -> service.start(
+                () -> startAndAwait(
                         OWNER,
                         AUTHORIZATION,
                         SAVED_JOB_ID,
@@ -269,13 +862,13 @@ class DurableGenerationServiceTest {
 
     @Test
     void claimantCanGenerateAgainForTheSameJobWithANewSelection() {
-        var first = service.start(
+        var first = startAndAwait(
                 OWNER,
                 AUTHORIZATION,
                 SAVED_JOB_ID,
                 "selection-a",
                 selectionRequest());
-        var second = service.start(
+        var second = startAndAwait(
                 OWNER,
                 AUTHORIZATION,
                 SAVED_JOB_ID,
@@ -299,7 +892,7 @@ class DurableGenerationServiceTest {
                 .thenReturn(savedJobResponse(
                         "SNAPSHOT", "30/06/2026"));
 
-        var operation = service.start(
+        var operation = startAndAwait(
                 OWNER,
                 AUTHORIZATION,
                 SAVED_JOB_ID,
@@ -333,7 +926,7 @@ class DurableGenerationServiceTest {
 
         var executor = Executors.newFixedThreadPool(2);
         try {
-            var first = executor.submit(() -> service.start(
+            var first = executor.submit(() -> startAndAwait(
                     OWNER,
                     AUTHORIZATION,
                     SAVED_JOB_ID,
@@ -341,7 +934,7 @@ class DurableGenerationServiceTest {
                     selectionRequest()));
             assertTrue(generationEntered.await(
                     5, TimeUnit.SECONDS));
-            var duplicate = executor.submit(() -> service.start(
+            var duplicate = executor.submit(() -> startAndAwait(
                     OWNER,
                     AUTHORIZATION,
                     SAVED_JOB_ID,
@@ -364,7 +957,7 @@ class DurableGenerationServiceTest {
                 .generate(anyString(), any(), anyMap());
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
-                service.start(
+                startAndAwait(
                         OWNER,
                         AUTHORIZATION,
                         SAVED_JOB_ID,
@@ -379,7 +972,7 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .generate(anyString(), any(), anyMap());
 
-        var unknown = service.start(
+        var unknown = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1",
                 selectionRequest());
 
@@ -391,7 +984,7 @@ class DurableGenerationServiceTest {
                 "GENERATION_OUTCOME_UNKNOWN",
                 unknown.failureCode());
 
-        var replay = service.start(
+        var replay = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "ambiguous-1",
                 selectionRequest());
         assertEquals(unknown.operationId(), replay.operationId());
@@ -404,7 +997,7 @@ class DurableGenerationServiceTest {
     }
 
     @Test
-    void replaySafeStoreFailureResumesWithTheSameKeys() {
+    void expiredReplaySafeStoreFailureResumesWithTheSameKeys() {
         AtomicInteger coverLetterAttempts = new AtomicInteger();
         List<String> documentKeys = new ArrayList<>();
         List<String> generatedAtValues = new ArrayList<>();
@@ -428,7 +1021,7 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .createDocument(anyString(), anyString(), anyMap());
 
-        var interrupted = service.start(
+        var interrupted = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1",
                 selectionRequest());
         assertEquals(
@@ -438,9 +1031,47 @@ class DurableGenerationServiceTest {
                 "DOWNSTREAM_RETRYABLE",
                 interrupted.failureCode());
 
-        var resumed = service.start(
-                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1",
+        Instant expiredDeadline = Instant.now().minusSeconds(1);
+        assertEquals(
+                1,
+                jdbc.update("""
+                        UPDATE generation_operations
+                           SET deadline_at = ?
+                         WHERE id = ? AND owner_id = ?
+                        """,
+                        OffsetDateTime.ofInstant(
+                                expiredDeadline, ZoneOffset.UTC),
+                        interrupted.operationId(),
+                        OWNER));
+
+        AtomicReference<Runnable> resumedWork = new AtomicReference<>();
+        reset(workScheduler);
+        doAnswer(invocation -> {
+                    resumedWork.set(
+                            invocation.getArgument(2, Runnable.class));
+                    return true;
+                })
+                .when(workScheduler)
+                .submit(any(), anyString(), any(Runnable.class));
+
+        var prepared = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-2",
                 selectionRequest());
+        assertEquals(interrupted.operationId(), prepared.operationId());
+        assertEquals(
+                GenerationOperationState.CREDIT_COMMITTED,
+                prepared.state());
+        assertNull(prepared.failureCode());
+        assertTrue(prepared.deadlineAt().isAfter(Instant.now()));
+        assertNotNull(resumedWork.get());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1))
+                .commit(OWNER, RESERVATION_ID, 600);
+
+        resumedWork.get().run();
+        var resumed = service.get(OWNER, prepared.operationId());
+        assertEquals(interrupted.operationId(), resumed.operationId());
         assertEquals(
                 GenerationOperationState.AWAITING_APPROVAL,
                 resumed.state());
@@ -461,8 +1092,362 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void legacyDeadlineRecoveryResumesAfterGenerationWithoutAnotherModelCall() {
+        AtomicInteger coverLetterAttempts = new AtomicInteger();
+        List<String> documentKeys = new ArrayList<>();
+        doAnswer(invocation -> {
+                    String key = invocation.getArgument(1);
+                    Map<String, Object> request =
+                            invocation.getArgument(2);
+                    documentKeys.add(key);
+                    if ("COVER_LETTER".equals(
+                            request.get("documentType"))
+                            && coverLetterAttempts
+                            .getAndIncrement() == 0) {
+                        throw new ResourceAccessException(
+                                "store unavailable");
+                    }
+                    return documentResponse(request);
+                })
+                .when(downstream)
+                .createDocument(anyString(), anyString(), anyMap());
+
+        var interrupted = startAndAwait(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID,
+                "legacy-deadline-recovery",
+                selectionRequest());
+        assertEquals(
+                GenerationOperationState.CREDIT_COMMITTED,
+                interrupted.state());
+        assertEquals(
+                "DOWNSTREAM_RETRYABLE",
+                interrupted.failureCode());
+        assertEquals(
+                1,
+                jdbc.update("""
+                        UPDATE generation_operations
+                           SET state = 'RECOVERY_REQUIRED',
+                               failure_code =
+                                   'OPERATION_DEADLINE_RECOVERY_REQUIRED',
+                               failure_message = 'Retained legacy recovery',
+                               deadline_at = ?, version = version + 1
+                         WHERE id = ? AND owner_id = ?
+                        """,
+                        OffsetDateTime.ofInstant(
+                                Instant.now().minusSeconds(1),
+                                ZoneOffset.UTC),
+                        interrupted.operationId(),
+                        OWNER));
+
+        AtomicReference<Runnable> resumedWork = new AtomicReference<>();
+        reset(workScheduler);
+        doAnswer(invocation -> {
+                    resumedWork.set(
+                            invocation.getArgument(2, Runnable.class));
+                    return true;
+                })
+                .when(workScheduler)
+                .submit(any(), anyString(), any(Runnable.class));
+
+        var prepared = service.start(
+                OWNER, AUTHORIZATION, SAVED_JOB_ID,
+                "fresh-browser-key-after-terminal-state",
+                selectionRequest());
+        assertEquals(interrupted.operationId(), prepared.operationId());
+        assertEquals(
+                GenerationOperationState.DRAFT_GENERATED,
+                prepared.state());
+        assertNull(prepared.failureCode());
+        assertTrue(prepared.deadlineAt().isAfter(Instant.now()));
+        assertNotNull(resumedWork.get());
+
+        resumedWork.get().run();
+        var resumed = service.get(OWNER, prepared.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                resumed.state());
+        assertEquals(
+                List.of(
+                        resumed.operationId() + ":cv-document",
+                        resumed.operationId()
+                                + ":cover-letter-document",
+                        resumed.operationId() + ":cv-document",
+                        resumed.operationId()
+                                + ":cover-letter-document"),
+                documentKeys);
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(2))
+                .commit(OWNER, RESERVATION_ID, 600);
+    }
+
+    @Test
+    void restartResumesDraftGeneratedWithoutAnotherModelInvocation() {
+        AtomicInteger commitAttempts = new AtomicInteger();
+        doAnswer(invocation -> {
+                    if (commitAttempts.getAndIncrement() == 0) {
+                        throw new ResourceAccessException(
+                                "commit unavailable");
+                    }
+                    return null;
+                })
+                .when(downstream)
+                .commit(OWNER, RESERVATION_ID, 600);
+
+        var interrupted = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "draft-generated-restart-a",
+                selectionRequest());
+        assertEquals(
+                GenerationOperationState.DRAFT_GENERATED,
+                interrupted.state());
+        assertEquals(
+                "DOWNSTREAM_RETRYABLE",
+                interrupted.failureCode());
+
+        var restartedService = new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                deadlineGuard,
+                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(1));
+        var resumed = startAndAwait(
+                restartedService,
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "draft-generated-restart-b",
+                selectionRequest());
+
+        assertEquals(interrupted.operationId(), resumed.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                resumed.state());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1)).reserve(
+                OWNER, resumed.operationId(), 1000);
+        verify(downstream, times(2))
+                .commit(OWNER, RESERVATION_ID, 600);
+    }
+
+    @Test
+    void restartPromotesPersistedDraftsStoredWithoutRepeatingSideEffects() {
+        var awaiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "drafts-stored-restart-a",
+                selectionRequest());
+        jdbc.update("""
+                UPDATE generation_operations
+                   SET state = 'DRAFTS_STORED',
+                       version = version + 1,
+                       updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ? AND owner_id = ?
+                """,
+                awaiting.operationId(),
+                OWNER);
+
+        var restartedService = new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                deadlineGuard,
+                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(1));
+        var resumed = startAndAwait(
+                restartedService,
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "drafts-stored-restart-b",
+                selectionRequest());
+
+        assertEquals(awaiting.operationId(), resumed.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                resumed.state());
+        verify(downstream, times(1))
+                .generate(anyString(), any(), anyMap());
+        verify(downstream, times(1))
+                .commit(OWNER, RESERVATION_ID, 600);
+        verify(downstream, times(2)).createDocument(
+                anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rejectsAnOversizedClaimBeforeCallingTheDocumentStore() {
+        doAnswer(invocation -> {
+                    Map<String, Object> response = new LinkedHashMap<>(
+                            generated(invocation.getArgument(1)));
+                    Map<String, Object> ledger = new LinkedHashMap<>(
+                            (Map<String, Object>) response.get(
+                                    "claimLedger"));
+                    List<Map<String, Object>> claims = new ArrayList<>(
+                            (List<Map<String, Object>>) ledger.get(
+                                    "claims"));
+                    Map<String, Object> oversized = new LinkedHashMap<>(
+                            claims.get(0));
+                    oversized.put(
+                            "contentPaths",
+                            java.util.stream.IntStream.range(0, 31)
+                                    .mapToObj(index ->
+                                            "/cv/coreSkills/"
+                                                    + index
+                                                    + "/name")
+                                    .toList());
+                    claims.set(0, oversized);
+                    ledger.put("claims", claims);
+                    response.put("claimLedger", ledger);
+                    return response;
+                })
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var rejected = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "oversized-claim-1",
+                selectionRequest());
+
+        assertEquals(
+                GenerationOperationState.FAILED,
+                rejected.state());
+        assertEquals(
+                "INVALID_DOWNSTREAM_RESPONSE",
+                rejected.failureCode());
+        verify(downstream, never()).createDocument(
+                anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void releasesCreditWhenTheModelOutputCannotBeGrounded() {
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unprocessable Entity",
+                org.springframework.http.HttpHeaders.EMPTY,
+                "{\"message\":\"alex@example.com unsupported claim\"}"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        org.slf4j.MDC.put(
+                "correlationId", "failure-correlation-1");
+        GenerationOperationResponse rejected;
+        try {
+            rejected = startAndAwait(
+                    OWNER,
+                    AUTHORIZATION,
+                    SAVED_JOB_ID,
+                    "ungrounded-output-1",
+                    selectionRequest());
+        } finally {
+            org.slf4j.MDC.clear();
+        }
+
+        assertEquals(
+                GenerationOperationState.FAILED,
+                rejected.state());
+        assertEquals(
+                "GENERATION_REJECTED",
+                rejected.failureCode());
+        assertEquals(
+                "Document generation was rejected before a usable "
+                        + "draft was returned.",
+                rejected.failureMessage());
+        assertFalse(rejected.failureMessage().contains(
+                "alex@example.com"));
+        assertEquals(
+                "failure-correlation-1",
+                repository.findByOwnerAndId(
+                                rejected.operationId(), OWNER)
+                        .orElseThrow()
+                        .data()
+                        .get("correlationId"));
+        verify(downstream).release(
+                OWNER,
+                RESERVATION_ID,
+                "GENERATION_REJECTED");
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+    }
+
+    @Test
+    void releasesCreditWhenTheSuccessfulResponseContractIsInvalid() {
+        doReturn(Map.of("unexpected", "response"))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var rejected = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "invalid-generation-response-1",
+                selectionRequest());
+
+        assertEquals(
+                GenerationOperationState.FAILED,
+                rejected.state());
+        assertEquals(
+                "INVALID_GENERATION_RESPONSE",
+                rejected.failureCode());
+        verify(downstream).release(
+                OWNER,
+                RESERVATION_ID,
+                "INVALID_GENERATION_RESPONSE");
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void acceptsAnExplicitlyBlankOptionalClaimReview() {
+        doAnswer(invocation -> {
+                    Map<String, Object> response = new LinkedHashMap<>(
+                            generated(invocation.getArgument(1)));
+                    Map<String, Object> ledger = new LinkedHashMap<>(
+                            (Map<String, Object>) response.get(
+                                    "claimLedger"));
+                    List<Map<String, Object>> claims = new ArrayList<>(
+                            (List<Map<String, Object>>) ledger.get(
+                                    "claims"));
+                    Map<String, Object> claim = new LinkedHashMap<>(
+                            claims.get(0));
+                    claim.put("reviewText", "");
+                    claims.set(0, claim);
+                    ledger.put("claims", claims);
+                    response.put("claimLedger", ledger);
+                    return response;
+                })
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+
+        var accepted = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "blank-claim-review-1",
+                selectionRequest());
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                accepted.state());
+        verify(downstream, times(2)).createDocument(
+                anyString(), anyString(), anyMap());
+    }
+
+    @Test
     void timedOutExportResumesWithTheSameReplayKey() {
-        var awaiting = service.start(
+        var awaiting = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "export-failure-1",
                 selectionRequest());
         doThrow(new ResourceAccessException(
@@ -470,7 +1455,7 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .exportDocument(anyString(), any(), anyString());
 
-        var retryable = service.approve(
+        var retryable = approveAndAwait(
                 OWNER,
                 awaiting.operationId(),
                 new ApproveGenerationRequest(
@@ -493,7 +1478,7 @@ class DurableGenerationServiceTest {
                                 Map.of("format", "PDF"))))
                 .when(downstream)
                 .exportDocument(anyString(), any(), anyString());
-        var completed = service.approve(
+        var completed = approveAndAwait(
                 OWNER,
                 awaiting.operationId(),
                 new ApproveGenerationRequest(
@@ -515,7 +1500,7 @@ class DurableGenerationServiceTest {
                 SAVED_JOB_ID, AUTHORIZATION))
                 .thenReturn(savedJobResponse("EXPIRED_SNAPSHOT"));
 
-        var failed = service.start(
+        var failed = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1",
                 selectionRequest());
 
@@ -533,7 +1518,7 @@ class DurableGenerationServiceTest {
         doReturn(savedJobResponse("SNAPSHOT"))
                 .when(downstream)
                 .savedJob(SAVED_JOB_ID, AUTHORIZATION);
-        var refreshed = service.start(
+        var refreshed = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "expired-job-1",
                 selectionRequest());
         assertEquals(failed.operationId(), refreshed.operationId());
@@ -557,7 +1542,7 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .savedJob(SAVED_JOB_ID, AUTHORIZATION);
 
-        var failed = service.start(
+        var failed = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1",
                 selectionRequest());
 
@@ -574,7 +1559,7 @@ class DurableGenerationServiceTest {
         doReturn(savedJobResponse("SNAPSHOT"))
                 .when(downstream)
                 .savedJob(SAVED_JOB_ID, AUTHORIZATION);
-        var nowAvailable = service.start(
+        var nowAvailable = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "missing-job-1",
                 selectionRequest());
         assertEquals(failed.operationId(), nowAvailable.operationId());
@@ -592,7 +1577,8 @@ class DurableGenerationServiceTest {
                 objectMapper,
                 new OperationDeadlineGuard(clock),
                 Duration.ofMinutes(1),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(1),
+                Duration.ofMillis(500));
         when(downstream.savedJob(
                 SAVED_JOB_ID, AUTHORIZATION))
                 .thenAnswer(invocation -> {
@@ -600,7 +1586,8 @@ class DurableGenerationServiceTest {
                     return savedJobResponse("SNAPSHOT");
                 });
 
-        var failed = shortDeadlineService.start(
+        var failed = startAndAwait(
+                shortDeadlineService,
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-snapshot-1",
                 selectionRequest());
 
@@ -624,7 +1611,8 @@ class DurableGenerationServiceTest {
                 objectMapper,
                 new OperationDeadlineGuard(clock),
                 Duration.ofMinutes(1),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(1),
+                Duration.ofMillis(500));
         doAnswer(invocation -> {
                     clock.advance(Duration.ofMinutes(2));
                     return generated(invocation.getArgument(1));
@@ -632,7 +1620,8 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .generate(anyString(), any(), anyMap());
 
-        var unknown = shortDeadlineService.start(
+        var unknown = startAndAwait(
+                shortDeadlineService,
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1",
                 selectionRequest());
 
@@ -642,7 +1631,8 @@ class DurableGenerationServiceTest {
         assertEquals(
                 "GENERATION_OUTCOME_UNKNOWN",
                 unknown.failureCode());
-        shortDeadlineService.start(
+        startAndAwait(
+                shortDeadlineService,
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-provider-1",
                 selectionRequest());
         verify(downstream, times(1))
@@ -660,7 +1650,8 @@ class DurableGenerationServiceTest {
                 objectMapper,
                 new OperationDeadlineGuard(clock),
                 Duration.ofMinutes(1),
-                Duration.ofSeconds(1));
+                Duration.ofSeconds(1),
+                Duration.ofMillis(500));
         doAnswer(invocation -> {
                     clock.advance(Duration.ofMinutes(2));
                     return Map.of(
@@ -672,7 +1663,8 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .reserve(anyString(), any(), anyLong());
 
-        var recovery = shortDeadlineService.start(
+        var recovery = startAndAwait(
+                shortDeadlineService,
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-reserve-1",
                 selectionRequest());
 
@@ -696,7 +1688,7 @@ class DurableGenerationServiceTest {
                 .when(downstream)
                 .estimate(anyString(), anyMap());
 
-        var retryable = service.start(
+        var retryable = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "cancel-1",
                 selectionRequest());
         assertEquals(
@@ -713,7 +1705,7 @@ class DurableGenerationServiceTest {
                 cancelled.state());
         assertEquals(
                 GenerationOperationState.CANCELLED,
-                service.start(
+                startAndAwait(
                         OWNER,
                         AUTHORIZATION,
                         SAVED_JOB_ID,
@@ -786,6 +1778,48 @@ class DurableGenerationServiceTest {
                 .thenReturn(Map.of(
                         "id", APPLICATION_ID.toString(),
                         "status", "DOCUMENTS_GENERATED"));
+    }
+
+    private GenerationOperationResponse startAndAwait(
+            String ownerId,
+            String authorization,
+            UUID savedJobId,
+            String idempotencyKey,
+            StartGenerationRequest request) {
+        return startAndAwait(
+                service,
+                ownerId,
+                authorization,
+                savedJobId,
+                idempotencyKey,
+                request);
+    }
+
+    private GenerationOperationResponse startAndAwait(
+            DurableGenerationService generationService,
+            String ownerId,
+            String authorization,
+            UUID savedJobId,
+            String idempotencyKey,
+            StartGenerationRequest request) {
+        GenerationOperationResponse accepted = generationService.start(
+                ownerId,
+                authorization,
+                savedJobId,
+                idempotencyKey,
+                request);
+        return generationService.get(ownerId, accepted.operationId());
+    }
+
+    private GenerationOperationResponse approveAndAwait(
+            String ownerId,
+            UUID operationId,
+            ApproveGenerationRequest request) {
+        GenerationOperationResponse accepted = service.approve(
+                ownerId,
+                operationId,
+                request);
+        return service.get(ownerId, accepted.operationId());
     }
 
     private Map<String, Object> savedJobResponse(

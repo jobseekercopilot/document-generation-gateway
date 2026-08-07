@@ -299,10 +299,12 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.5.0") and
+    (.info.version == "4.1.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
+    (.paths["/api/v1/applications/{id}/status"].patch.operationId
+        == "updateStatus") and
     (.paths["/api/v1/applications/{id}/document-replacements"].post.operationId
         == "beginDocumentReplacement") and
     (.paths["/api/v1/applications/{id}/document-replacements/{operationId}/replacement-document"]
@@ -313,11 +315,14 @@ jq -e '
         .patch.operationId == "markDocumentReplacementRecoveryRequired") and
     ([.paths["/api/v1/applications/{id}"].get,
       .paths["/api/v1/applications/document/{documentId}"].get,
+      .paths["/api/v1/applications/{id}/status"].patch,
       .paths["/api/v1/applications/{id}/document-replacements"].post,
       .paths["/api/v1/applications/{id}/document-replacements/{operationId}/replacement-document"].patch,
       .paths["/api/v1/applications/{id}/document-replacements/{operationId}/complete"].patch,
       .paths["/api/v1/applications/{id}/document-replacements/{operationId}/recovery-required"].patch]
         | all(.security | any(has("serviceToken")))) and
+    (.paths["/api/v1/applications/{id}/status"].patch.parameters
+        | any(.name == "X-Application-Owner" and .in == "header")) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
     (.components.schemas.BeginDocumentReplacementRequest.required

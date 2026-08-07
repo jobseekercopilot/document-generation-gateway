@@ -85,9 +85,15 @@ DOCUMENT_GENERATION_DATABASE_URL
 DOCUMENT_GENERATION_DATABASE_USERNAME
 DOCUMENT_GENERATION_DATABASE_PASSWORD
 DOCUMENT_GENERATION_OPERATION_DEADLINE
+DOCUMENT_GENERATION_OPERATION_LEASE
 DOCUMENT_GENERATION_CONNECT_TIMEOUT
 DOCUMENT_GENERATION_READ_TIMEOUT
 ```
+
+The operation lease must be longer than the downstream read timeout. The
+defaults are a three-minute lease and a two-minute read timeout so a bounded
+model invocation can complete without another request taking ownership of the
+same paid operation.
 
 The seven service tokens must be pairwise distinct and contain at least 32 bytes. They
 have no source-controlled runtime default. See

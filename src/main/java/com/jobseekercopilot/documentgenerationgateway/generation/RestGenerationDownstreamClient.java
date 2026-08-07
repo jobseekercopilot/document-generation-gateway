@@ -279,6 +279,80 @@ public class RestGenerationDownstreamClient
                 request);
     }
 
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> applications(String ownerId) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        Object body = restTemplate.exchange(
+                trackerBaseUrl + "/api/v1/applications/user/{userId}",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                List.class,
+                ownerId).getBody();
+        if (!(body instanceof List<?> applications)) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no application list.");
+        }
+        return applications.stream()
+                .map(application -> objectMapper.convertValue(
+                        application,
+                        LinkedHashMap.class))
+                .map(application ->
+                        (Map<String, Object>) application)
+                .toList();
+    }
+
+    @Override
+    public Map<String, Object> updateApplicationDocument(
+            String ownerId,
+            UUID applicationId,
+            String documentType,
+            UUID documentId) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return body(restTemplate.exchange(
+                trackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-reference",
+                HttpMethod.PATCH,
+                new HttpEntity<>(
+                        Map.of(
+                                "documentType", documentType,
+                                "documentId", documentId),
+                        headers),
+                Map.class,
+                applicationId));
+    }
+
+    @Override
+    public Map<String, Object> updateApplicationStatus(
+            String ownerId,
+            UUID applicationId,
+            String status,
+            long expectedVersion) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return body(restTemplate.exchange(
+                trackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/status",
+                HttpMethod.PATCH,
+                new HttpEntity<>(
+                        Map.of(
+                                "status", status,
+                                "expectedVersion", expectedVersion),
+                        headers),
+                Map.class,
+                applicationId));
+    }
+
     private Map<String, Object> post(
             String url,
             HttpHeaders headers,

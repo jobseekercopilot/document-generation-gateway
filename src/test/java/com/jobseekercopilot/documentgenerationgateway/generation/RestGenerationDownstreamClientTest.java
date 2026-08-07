@@ -193,6 +193,49 @@ class RestGenerationDownstreamClientTest {
                 ((Map<?, ?>) request.getBody()).get("formats"));
     }
 
+    @Test
+    void statusUpdateBindsOwnerAndObservedApplicationVersion() {
+        UUID applicationId = UUID.randomUUID();
+        when(restTemplate.exchange(
+                eq("http://tracker/api/v1/applications/{applicationId}"
+                        + "/status"),
+                eq(HttpMethod.PATCH),
+                any(HttpEntity.class),
+                eq(Map.class),
+                eq(applicationId)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "id", applicationId.toString(),
+                        "status", "DOCUMENTS_GENERATED",
+                        "version", 8)));
+
+        client.updateApplicationStatus(
+                OWNER,
+                applicationId,
+                "DOCUMENTS_GENERATED",
+                7);
+
+        ArgumentCaptor<HttpEntity> request =
+                ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(
+                eq("http://tracker/api/v1/applications/{applicationId}"
+                        + "/status"),
+                eq(HttpMethod.PATCH),
+                request.capture(),
+                eq(Map.class),
+                eq(applicationId));
+        assertSingleHeader(
+                request.getValue(),
+                "X-Service-Token",
+                "tracker-token-00000000000000000000000001");
+        assertSingleHeader(
+                request.getValue(),
+                "X-Application-Owner",
+                OWNER);
+        Map<?, ?> body = (Map<?, ?>) request.getValue().getBody();
+        assertEquals("DOCUMENTS_GENERATED", body.get("status"));
+        assertEquals(7L, body.get("expectedVersion"));
+    }
+
     private HttpEntity<?> capturedPost(String url) {
         ArgumentCaptor<HttpEntity> request =
                 ArgumentCaptor.forClass(HttpEntity.class);
