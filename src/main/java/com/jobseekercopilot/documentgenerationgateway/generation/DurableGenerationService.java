@@ -52,6 +52,12 @@ public class DurableGenerationService {
             Pattern.compile("sha256:[a-f0-9]{64}");
     private static final Pattern CONTENT_SHA256 =
             Pattern.compile("[a-f0-9]{64}");
+    private static final Pattern SKILL_MATCH_SEPARATOR =
+            Pattern.compile("[^\\p{L}\\p{N}#+.]+");
+    private static final Pattern SKILL_MATCH_TERMINAL_PERIOD =
+            Pattern.compile("(?<=[\\p{L}\\p{N}])\\.(?=\\s|$)");
+    private static final Pattern SKILL_MATCH_WHITESPACE =
+            Pattern.compile("\\s+");
 
     private final GenerationOperationRepository repository;
     private final GenerationDownstreamClient downstream;
@@ -585,7 +591,12 @@ public class DurableGenerationService {
         Map<String, Object> jobSnapshot =
                 jobSnapshot(operation, savedJob, rawJob, capturedAt);
         Map<String, Object> profileSnapshot =
-                profileSnapshot(operation, rawProfile, account, capturedAt);
+                profileSnapshot(
+                        operation,
+                        rawProfile,
+                        account,
+                        jobSnapshot,
+                        capturedAt);
         Map<String, Object> generationRequest = new LinkedHashMap<>();
         generationRequest.put("inputSchemaVersion", "2.0");
         generationRequest.put("profile", profileSnapshot);
@@ -1209,6 +1220,7 @@ public class DurableGenerationService {
             GenerationOperation operation,
             Map<String, Object> profile,
             Map<String, Object> account,
+            Map<String, Object> job,
             Instant capturedAt) {
         String revisionId = requiredText(profile, "revisionId");
         String contentDigest = requiredText(profile, "contentDigest");
@@ -1239,7 +1251,13 @@ public class DurableGenerationService {
         if (location != null) {
             result.put("location", bounded(location, 160));
         }
-        result.put("skills", List.of());
+        // Skills are canonical user-profile facts. They are captured from the
+        // server-owned profile revision that both purpose-bound evidence
+        // snapshots are validated against. The CV service admits these only
+        // as exact, CV-only declared skills; employment and qualification
+        // claims remain snapshot-only in schema 2.0.
+        result.put("skills", relevantProfileSkills(
+                list(profile.get("skills")), job));
         result.put("qualifications", List.of());
         result.put("employmentHistory", List.of());
 
@@ -1851,6 +1869,78 @@ public class DurableGenerationService {
             }
         }
         return result;
+    }
+
+    private List<String> relevantProfileSkills(
+            List<?> values,
+            Map<String, Object> job) {
+        List<String> titleMatches = new ArrayList<>();
+        List<String> descriptionMatches = new ArrayList<>();
+        List<String> remaining = new ArrayList<>();
+        HashSet<String> seen = new HashSet<>();
+        String title = skillMatchText(job.get("title"));
+        String description = skillMatchText(job.get("description"));
+
+        for (Object value : values) {
+            String skill = text(value);
+            if (skill == null) {
+                continue;
+            }
+            skill = bounded(skill, 100);
+            String matchKey = skillMatchText(skill);
+            if (matchKey.isEmpty() || !seen.add(matchKey)) {
+                continue;
+            }
+            if (containsSkill(title, matchKey)) {
+                titleMatches.add(skill);
+            } else if (containsSkill(description, matchKey)) {
+                descriptionMatches.add(skill);
+            } else {
+                remaining.add(skill);
+            }
+            if (seen.size() == 100) {
+                break;
+            }
+        }
+
+        List<String> selected = new ArrayList<>(40);
+        appendUntilFull(selected, titleMatches, 40);
+        appendUntilFull(selected, descriptionMatches, 40);
+        appendUntilFull(selected, remaining, 40);
+        return List.copyOf(selected);
+    }
+
+    private String skillMatchText(Object value) {
+        String source = text(value);
+        if (source == null) {
+            return "";
+        }
+        String separated = SKILL_MATCH_SEPARATOR.matcher(
+                        source.toLowerCase(Locale.ROOT))
+                .replaceAll(" ");
+        return SKILL_MATCH_WHITESPACE.matcher(
+                        SKILL_MATCH_TERMINAL_PERIOD.matcher(separated)
+                                .replaceAll("")
+                                .trim())
+                .replaceAll(" ");
+    }
+
+    private boolean containsSkill(String haystack, String skill) {
+        return !haystack.isEmpty()
+                && !skill.isEmpty()
+                && (" " + haystack + " ").contains(" " + skill + " ");
+    }
+
+    private void appendUntilFull(
+            List<String> target,
+            List<String> candidates,
+            int maximumItems) {
+        for (String candidate : candidates) {
+            if (target.size() == maximumItems) {
+                return;
+            }
+            target.add(candidate);
+        }
     }
 
     private String locationText(Object value) {

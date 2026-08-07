@@ -754,7 +754,7 @@ class DurableGenerationServiceTest {
     }
 
     @Test
-    void sendsOnlyPurposeSpecificImmutableEvidenceSnapshotsToGeneration() {
+    void sendsRevisionBoundSkillsAndPurposeSpecificEvidenceSnapshotsToGeneration() {
         startAndAwait(
                 OWNER,
                 AUTHORIZATION,
@@ -771,7 +771,9 @@ class DurableGenerationServiceTest {
         Map<?, ?> request = generationRequest.getValue();
         assertEquals("2.0", request.get("inputSchemaVersion"));
         Map<?, ?> profile = (Map<?, ?>) request.get("profile");
-        assertEquals(List.of(), profile.get("skills"));
+        assertEquals(
+                List.of("Java", "PostgreSQL"),
+                profile.get("skills"));
         assertEquals(List.of(), profile.get("qualifications"));
         assertEquals(List.of(), profile.get("employmentHistory"));
 
@@ -835,6 +837,60 @@ class DurableGenerationServiceTest {
         assertEquals(
                 cvProvenance.get("generatedAt"),
                 coverProvenance.get("generatedAt"));
+    }
+
+    @Test
+    void prioritizesPunctuatedJobRelevantSkillsBeforeTheBoundedGenerationLimit() {
+        List<String> skills = new ArrayList<>();
+        for (int index = 1; index <= 40; index++) {
+            skills.add("Unrelated skill " + index);
+        }
+        skills.add("Java");
+        skills.add(".NET");
+        skills.add("Node.js");
+        when(downstream.profile()).thenReturn(Map.of(
+                "userId", OWNER,
+                "revisionId",
+                "60000000-0000-4000-8000-000000000001",
+                "contentDigest", "f".repeat(64),
+                "skills", skills,
+                "aspirations", Map.of(
+                        "targetRoles", List.of("Backend Developer")),
+                "workPreferences", Map.of()));
+        Map<String, Object> savedJob = new LinkedHashMap<>(
+                savedJobResponse("SNAPSHOT"));
+        Map<String, Object> job = new LinkedHashMap<>(
+                (Map<String, Object>) savedJob.get("job"));
+        job.put("title", "Backend Developer");
+        job.put(
+                "description",
+                "Experience with .NET, Node.js and Java.");
+        savedJob.put("job", job);
+        when(downstream.savedJob(SAVED_JOB_ID, AUTHORIZATION))
+                .thenReturn(savedJob);
+
+        startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "relevant-skill-selection-1",
+                selectionRequest());
+
+        ArgumentCaptor<Map> generationRequest =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).generate(
+                org.mockito.ArgumentMatchers.eq(OWNER),
+                any(),
+                generationRequest.capture());
+        Map<?, ?> profile = (Map<?, ?>) generationRequest
+                .getValue()
+                .get("profile");
+        List<?> selected = (List<?>) profile.get("skills");
+        assertEquals(40, selected.size());
+        assertEquals(List.of("Java", ".NET", "Node.js"),
+                selected.subList(0, 3));
+        assertTrue(selected.contains("Unrelated skill 1"));
+        assertFalse(selected.contains("Unrelated skill 40"));
     }
 
     @Test
