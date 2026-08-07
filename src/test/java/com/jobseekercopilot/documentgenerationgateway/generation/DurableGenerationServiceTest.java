@@ -1608,8 +1608,9 @@ class DurableGenerationServiceTest {
     }
 
     @Test
-    void totalDeadlineStopsSlowSnapshotResolutionBeforeAnyCharge() {
+    void totalDeadlineBeforeProviderCanBeReplayedWithoutDuplicateCharge() {
         MutableClock clock = new MutableClock(Instant.now());
+        AtomicInteger snapshotAttempts = new AtomicInteger();
         var shortDeadlineService = new DurableGenerationService(
                 repository,
                 downstream,
@@ -1621,7 +1622,9 @@ class DurableGenerationServiceTest {
         when(downstream.savedJob(
                 SAVED_JOB_ID, AUTHORIZATION))
                 .thenAnswer(invocation -> {
-                    clock.advance(Duration.ofMinutes(2));
+                    if (snapshotAttempts.getAndIncrement() == 0) {
+                        clock.advance(Duration.ofMinutes(2));
+                    }
                     return savedJobResponse("SNAPSHOT");
                 });
 
@@ -1638,6 +1641,22 @@ class DurableGenerationServiceTest {
         verify(downstream, never()).reserve(
                 anyString(), any(), anyLong());
         verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+
+        clock.advance(Duration.ofMinutes(-2));
+        var recovered = startAndAwait(
+                shortDeadlineService,
+                OWNER, AUTHORIZATION, SAVED_JOB_ID, "slow-snapshot-1",
+                selectionRequest());
+
+        assertEquals(failed.operationId(), recovered.operationId());
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                recovered.state());
+        assertNull(recovered.failureCode());
+        verify(downstream, times(1)).reserve(
+                anyString(), any(), anyLong());
+        verify(downstream, times(1)).generate(
                 anyString(), any(), anyMap());
     }
 
