@@ -69,6 +69,9 @@ public class DocumentLifecycleController {
     @Operation(
             summary = "Recoverably delete one exact document version",
             description = "Makes bytes unavailable for the approved recovery window; archive should be offered first when applications are associated.")
+    @ApiResponse(
+            responseCode = "204",
+            description = "Version moved to recoverable deletion without returning document content")
     public ResponseEntity<Void> delete(
             @PathVariable UUID documentId,
             Authentication authentication) {

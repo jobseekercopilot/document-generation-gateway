@@ -68,6 +68,11 @@ class OpenApiExportTest {
                 .has("/api/v1/document-generation/document-versions/{documentId}/restore"));
         assertTrue(contract.path("paths")
                 .has("/api/v1/document-generation/document-versions/{documentId}"));
+        assertTrue(contract.path("paths")
+                .path("/api/v1/document-generation/document-versions/{documentId}")
+                .path("delete")
+                .path("responses")
+                .has("204"));
         JsonNode selections = contract.path("paths")
                 .path("/api/v1/document-generation/applications/{applicationId}/document-selections")
                 .path("put");
