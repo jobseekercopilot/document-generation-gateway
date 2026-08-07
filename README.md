@@ -30,6 +30,9 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `2.1.0` adds authenticated content-free family paging, newest-first
+server-numbered history, exact safe artifact manifests and explicit
+concurrency/idempotency-protected current selection using Document Store 3.0.
 Version `2.0.0` requires separate claimant-selected entry and section order
 for CV and cover-letter generation, resolves immutable evidence snapshots and
 removes the legacy browser-supplied Job route. Version `1.4.0` validates active

@@ -85,9 +85,9 @@ verify_source \
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    2c4e34c8f7466fd2685c1687e2d58a5dd1963180 \
+    53ea56f11af8b256e9c233e634bcc3698ff8d220 \
     contracts/openapi.json \
-    ea289a4ce7bc3488d5dcec8e00cb2faec9cf88d10ec30d209de1225b89a16fd3
+    272ea9b680e50a32c822dcf2e7393577bd6da20c7323726db93b62810015bf44
 verify_source \
     job-service \
     jobseekercopilot/job-service \
@@ -246,13 +246,19 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "2.3.0") and
+    (.info.version == "3.0.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
     (.paths["/api/v1/documents/{documentId}/approve"].patch.operationId
         == "approveDocumentVersion") and
     (.paths["/api/v1/document-files/{id}/download"].get.operationId
         == "downloadDocumentFile") and
+    (.paths["/api/v1/documents/families"].get.operationId
+        == "listDocumentFamilies") and
+    (.paths["/api/v1/documents/families/{documentFamilyId}"].get.operationId
+        == "getDocumentFamilyHistory") and
+    (.paths["/api/v1/documents/families/{documentFamilyId}/current"].patch.operationId
+        == "selectFamilyCurrent") and
     ([.paths["/api/v1/documents/{id}"].get,
       .paths["/api/v1/documents"].post,
       .paths["/api/v1/documents/{documentId}/approve"].patch,
@@ -271,6 +277,12 @@ jq -e '
             .in == "header" and
             .required == false and
             .schema.type == "string")) and
+    (.paths["/api/v1/documents/families/{documentFamilyId}/current"].patch.parameters
+        | any(
+            .name == "Idempotency-Key" and
+            .in == "header" and
+            .required == true and
+            .schema.type == "string")) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
@@ -286,6 +298,18 @@ jq -e '
         | has("id") and has("documentFamilyId") and has("version") and
           has("lifecycleState") and has("evidenceProvenance") and
           has("groundingState") and has("parentDocumentId")) and
+    (.components.schemas.DocumentVersionHistoryItem.properties
+        | has("documentId") and has("version") and has("source") and
+          has("lifecycle") and has("retention") and has("current") and
+          has("artifacts") and
+          (has("content") | not) and
+          (has("contentSha256") | not) and
+          (has("originalFilename") | not)) and
+    (.components.schemas.DocumentArtifactManifestItem.properties
+        | has("artifactId") and has("role") and has("format") and
+          has("source") and has("availability") and has("size") and
+          (has("fileName") | not) and
+          (has("contentSha256") | not)) and
     (.components.schemas.DocumentEvidenceProvenance.required
         | index("profileRevisionId") != null and
           index("profileContentDigest") != null and

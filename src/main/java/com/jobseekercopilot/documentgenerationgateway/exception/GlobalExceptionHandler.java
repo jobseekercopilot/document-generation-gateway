@@ -44,6 +44,24 @@ public class GlobalExceptionHandler {
                         "A required service could not complete the request."));
     }
 
+    @ExceptionHandler(DocumentHistoryDownstreamException.class)
+    ResponseEntity<Map<String, String>> documentHistoryFailure(
+            DocumentHistoryDownstreamException exception) {
+        int status = exception.status().value();
+        String error = status == HttpStatus.NOT_FOUND.value()
+                ? "DOCUMENT_FAMILY_NOT_FOUND"
+                : status == HttpStatus.CONFLICT.value()
+                        ? "DOCUMENT_CURRENT_CONFLICT"
+                        : "DOCUMENT_HISTORY_REQUEST_FAILED";
+        String message = status == HttpStatus.NOT_FOUND.value()
+                ? "Document family was not found."
+                : status == HttpStatus.CONFLICT.value()
+                        ? "Document family changed; refresh and retry."
+                        : "Document history request could not be completed.";
+        return ResponseEntity.status(exception.status())
+                .body(Map.of("error", error, "message", message));
+    }
+
     @ExceptionHandler(IllegalStateException.class)
     ResponseEntity<Map<String, String>> emptyDownstreamResponse(IllegalStateException exception) {
         if ("DOCUMENT_CONVERSION_FAILED".equals(exception.getMessage())) {

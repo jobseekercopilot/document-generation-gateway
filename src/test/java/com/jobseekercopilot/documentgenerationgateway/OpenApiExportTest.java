@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.0.0", contract.path("info").path("version").asText());
+        assertEquals("2.1.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -54,6 +54,12 @@ class OpenApiExportTest {
         assertFalse(spec.contains("X-User-Id"));
         assertFalse(contract.path("paths")
                 .has("/api/v1/document-generation/jobs/{jobId}/generate"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-families"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-families/{documentFamilyId}"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-families/{documentFamilyId}/current"));
         JsonNode start = contract.path("paths")
                 .path("/api/v1/document-generation/saved-jobs/{savedJobId}/operations")
                 .path("post");
@@ -67,6 +73,10 @@ class OpenApiExportTest {
                         .path("$ref")
                         .asText());
         JsonNode schemas = contract.path("components").path("schemas");
+        assertFalse(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("content"));
+        assertFalse(schemas.path("DocumentArtifactManifestItem")
+                .path("properties").has("fileName"));
         assertEquals(
                 java.util.Set.of("documents"),
                 new java.util.HashSet<>(objectMapper.convertValue(
