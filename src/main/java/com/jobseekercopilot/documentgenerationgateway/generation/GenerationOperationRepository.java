@@ -512,6 +512,11 @@ public class GenerationOperationRepository {
                 && replaySafeAfterGeneration(operation.state())) {
             return operation.state();
         }
+        if (operation.state() == GenerationOperationState.FAILED
+                && "OPERATION_DEADLINE_EXCEEDED".equals(
+                        operation.failureCode())) {
+            return preProviderDeadlineReplayState(operation.data());
+        }
         if (operation.state()
                         != GenerationOperationState.RECOVERY_REQUIRED
                 || !"OPERATION_DEADLINE_RECOVERY_REQUIRED".equals(
@@ -529,6 +534,29 @@ public class GenerationOperationRepository {
         return legacyGeneratedCheckpoint(operation.data())
                 ? GenerationOperationState.DRAFT_GENERATED
                 : null;
+    }
+
+    private static GenerationOperationState preProviderDeadlineReplayState(
+            Map<String, Object> data) {
+        if (data.containsKey("generation")
+                || data.containsKey("generationCompletedAt")
+                || data.containsKey("actualTokens")
+                || data.containsKey("reservationId")
+                || data.containsKey("reservationEvidence")
+                || data.containsKey("cvDocumentId")
+                || data.containsKey("coverLetterDocumentId")) {
+            return null;
+        }
+        if (data.get("estimatedTokens") instanceof Number) {
+            // The reservation call had not started. A persisted reservation
+            // is deliberately excluded because its stable downstream key may
+            // replay a hold that was already released.
+            return GenerationOperationState.ESTIMATED;
+        }
+        if (data.get("generationRequest") instanceof Map<?, ?>) {
+            return GenerationOperationState.SNAPSHOTS_RESOLVED;
+        }
+        return GenerationOperationState.CREATED;
     }
 
     private static GenerationOperationState recordedRecoveryState(

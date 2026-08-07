@@ -343,6 +343,108 @@ class GenerationOperationRepositoryPostgresTest {
     }
 
     @Test
+    void expiredSnapshotCheckpointIsPreparedForPreProviderReplay() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-pre-provider-deadline",
+                SAVED_JOB_ID,
+                "d".repeat(64),
+                Map.of(
+                        "evidenceSelectionRequest", Map.of(),
+                        "generationRequest", Map.of("inputSchemaVersion", "2.0")),
+                Duration.ofMinutes(10));
+        UUID lease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, lease, Duration.ofSeconds(30)));
+        GenerationOperation failed = repository.checkpoint(
+                created,
+                lease,
+                GenerationOperationState.FAILED,
+                created.data(),
+                "OPERATION_DEADLINE_EXCEEDED",
+                "The operation deadline was exceeded.");
+        repository.release(failed.id(), OWNER, lease);
+
+        GenerationOperation prepared = repository.prepareRetryableReplay(
+                repository.findByOwnerAndId(failed.id(), OWNER).orElseThrow(),
+                Duration.ofMinutes(10));
+
+        assertEquals(
+                GenerationOperationState.SNAPSHOTS_RESOLVED,
+                prepared.state());
+        assertNull(prepared.failureCode());
+        assertNull(prepared.failureMessage());
+        assertTrue(prepared.deadlineAt().isAfter(
+                Instant.now().plus(Duration.ofMinutes(9))));
+    }
+
+    @Test
+    void deadlineFailureWithProviderOutputIsNeverPreparedForReplay() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-ambiguous-deadline",
+                SAVED_JOB_ID,
+                "e".repeat(64),
+                Map.of(
+                        "generationRequest", Map.of("inputSchemaVersion", "2.0"),
+                        "generation", Map.of("documents", List.of()),
+                        "actualTokens", 100),
+                Duration.ofMinutes(10));
+        UUID lease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, lease, Duration.ofSeconds(30)));
+        GenerationOperation failed = repository.checkpoint(
+                created,
+                lease,
+                GenerationOperationState.FAILED,
+                created.data(),
+                "OPERATION_DEADLINE_EXCEEDED",
+                "Retained ambiguous legacy failure.");
+        repository.release(failed.id(), OWNER, lease);
+
+        GenerationOperation unchanged = repository.prepareRetryableReplay(
+                repository.findByOwnerAndId(failed.id(), OWNER).orElseThrow(),
+                Duration.ofMinutes(10));
+
+        assertEquals(GenerationOperationState.FAILED, unchanged.state());
+        assertEquals("OPERATION_DEADLINE_EXCEEDED", unchanged.failureCode());
+        assertEquals(failed.version(), unchanged.version());
+    }
+
+    @Test
+    void releasedReservationDeadlineIsNotReplayedUnderItsStableKey() {
+        GenerationOperation created = repository.createOrReplay(
+                OWNER,
+                "postgres-released-reservation-deadline",
+                SAVED_JOB_ID,
+                "f".repeat(64),
+                Map.of(
+                        "generationRequest", Map.of("inputSchemaVersion", "2.0"),
+                        "estimatedTokens", 1000,
+                        "reservationId", RESERVATION_ID.toString()),
+                Duration.ofMinutes(10));
+        UUID lease = UUID.randomUUID();
+        assertTrue(repository.tryAcquire(
+                created.id(), OWNER, lease, Duration.ofSeconds(30)));
+        GenerationOperation failed = repository.checkpoint(
+                created,
+                lease,
+                GenerationOperationState.FAILED,
+                created.data(),
+                "OPERATION_DEADLINE_EXCEEDED",
+                "The released reservation cannot reuse its stable key.");
+        repository.release(failed.id(), OWNER, lease);
+
+        GenerationOperation unchanged = repository.prepareRetryableReplay(
+                repository.findByOwnerAndId(failed.id(), OWNER).orElseThrow(),
+                Duration.ofMinutes(10));
+
+        assertEquals(GenerationOperationState.FAILED, unchanged.state());
+        assertEquals("OPERATION_DEADLINE_EXCEEDED", unchanged.failureCode());
+        assertEquals(failed.version(), unchanged.version());
+    }
+
+    @Test
     void deadlineRecoveryRestoresOnlyARecordedPostModelCheckpoint() {
         GenerationOperation created = repository.createOrReplay(
                 OWNER,
