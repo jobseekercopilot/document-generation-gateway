@@ -61,9 +61,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    b6a2a54adb18ef7dc9d9e0c25c34addc62ec0aaa \
+    f29333657fa0f6e64947e9dbebfdc7e117f8fc2b \
     contracts/openapi.json \
-    5c5b032793fbe46deafffca2015b0725997d2afa7d12a61899bf106bef150ec2
+    92a1043b82ab17ac2d3023eda460d81294f3d7b206c262bf22172acb0c628104
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -323,12 +323,14 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "4.1.0") and
+    (.info.version == "4.2.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
     (.paths["/api/v1/applications/{id}/status"].patch.operationId
         == "updateStatus") and
+    (.paths["/api/v1/applications/{id}/document-selections"].put.operationId
+        == "saveDocumentSelections") and
     (.paths["/api/v1/applications/{id}/document-replacements"].post.operationId
         == "beginDocumentReplacement") and
     (.paths["/api/v1/applications/{id}/document-replacements/{operationId}/replacement-document"]
@@ -347,6 +349,15 @@ jq -e '
         | all(.security | any(has("serviceToken")))) and
     (.paths["/api/v1/applications/{id}/status"].patch.parameters
         | any(.name == "X-Application-Owner" and .in == "header")) and
+    (.paths["/api/v1/applications/{id}/document-selections"].put.parameters
+        | any(.name == "Idempotency-Key" and .in == "header" and
+              .required == true and .schema.maxLength == 128)) and
+    (.components.schemas.SaveDocumentSelectionsRequest.required
+        | index("cvSelection") != null and
+          index("coverLetterSelection") != null and
+          index("expectedVersion") != null) and
+    (.components.schemas.DocumentSelectionCommand.properties.state.enum
+        | index("SELECTED") != null and index("OMITTED") != null) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
     (.components.schemas.BeginDocumentReplacementRequest.required

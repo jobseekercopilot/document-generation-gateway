@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.1.0", contract.path("info").path("version").asText());
+        assertEquals("2.2.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -60,6 +60,12 @@ class OpenApiExportTest {
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}"));
         assertTrue(contract.path("paths")
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}/current"));
+        JsonNode selections = contract.path("paths")
+                .path("/api/v1/document-generation/applications/{applicationId}/document-selections")
+                .path("put");
+        assertTrue(selections.path("requestBody").path("required").asBoolean());
+        assertTrue(selections.path("parameters").findValuesAsText("name")
+                .contains("Idempotency-Key"));
         JsonNode start = contract.path("paths")
                 .path("/api/v1/document-generation/saved-jobs/{savedJobId}/operations")
                 .path("post");
@@ -73,6 +79,17 @@ class OpenApiExportTest {
                         .path("$ref")
                         .asText());
         JsonNode schemas = contract.path("components").path("schemas");
+        assertEquals(
+                java.util.Set.of(
+                        "cvSelection",
+                        "coverLetterSelection",
+                        "expectedVersion"),
+                new java.util.HashSet<>(objectMapper.convertValue(
+                        schemas.path("SaveApplicationDocumentSelectionsRequest")
+                                .path("required"),
+                        objectMapper.getTypeFactory().constructCollectionType(
+                                java.util.List.class,
+                                String.class))));
         assertFalse(schemas.path("DocumentVersionHistoryItem")
                 .path("properties").has("content"));
         assertFalse(schemas.path("DocumentArtifactManifestItem")

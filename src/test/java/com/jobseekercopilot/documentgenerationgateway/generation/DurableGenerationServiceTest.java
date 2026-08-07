@@ -231,36 +231,29 @@ class DurableGenerationServiceTest {
                         "canonicalJobId", "canonical-job-1",
                         "status", "SAVED",
                         "version", 3)));
-        when(downstream.updateApplicationDocument(
+        when(downstream.updateApplicationDocumentSelections(
                 OWNER,
                 APPLICATION_ID,
-                "CV",
-                CV_DOCUMENT_ID))
-                .thenReturn(Map.of(
-                        "id", APPLICATION_ID.toString(),
-                        "canonicalJobId", "canonical-job-1",
-                        "status", "SAVED",
-                        "version", 4));
-        when(downstream.updateApplicationDocument(
-                OWNER,
-                APPLICATION_ID,
-                "COVER_LETTER",
+                generated.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
                 COVER_LETTER_DOCUMENT_ID))
                 .thenReturn(Map.of(
                         "id", APPLICATION_ID.toString(),
                         "canonicalJobId", "canonical-job-1",
                         "status", "SAVED",
-                        "version", 5));
+                        "version", 4));
         when(downstream.updateApplicationStatus(
                 OWNER,
                 APPLICATION_ID,
                 "DOCUMENTS_GENERATED",
-                5))
+                4))
                 .thenReturn(Map.of(
                         "id", APPLICATION_ID.toString(),
                         "canonicalJobId", "canonical-job-1",
                         "status", "DOCUMENTS_GENERATED",
-                        "version", 6));
+                        "version", 5));
 
         var recovered = startAndAwait(
                 OWNER,
@@ -280,21 +273,19 @@ class DurableGenerationServiceTest {
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
                 .commit(OWNER, RESERVATION_ID, 600);
-        verify(downstream).updateApplicationDocument(
+        verify(downstream).updateApplicationDocumentSelections(
                 OWNER,
                 APPLICATION_ID,
-                "CV",
-                CV_DOCUMENT_ID);
-        verify(downstream).updateApplicationDocument(
-                OWNER,
-                APPLICATION_ID,
-                "COVER_LETTER",
+                generated.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
                 COVER_LETTER_DOCUMENT_ID);
         verify(downstream).updateApplicationStatus(
                 OWNER,
                 APPLICATION_ID,
                 "DOCUMENTS_GENERATED",
-                5);
+                4);
     }
 
     @Test
@@ -685,29 +676,23 @@ class DurableGenerationServiceTest {
                         "coverLetterDocumentId",
                                 COVER_LETTER_DOCUMENT_ID.toString(),
                         "version", 6)));
-        when(downstream.updateApplicationDocument(
+        when(downstream.updateApplicationDocumentSelections(
                 OWNER,
                 APPLICATION_ID,
-                "CV",
-                CV_DOCUMENT_ID))
-                .thenReturn(Map.of(
-                        "id", APPLICATION_ID.toString(),
-                        "status", "SAVED",
-                        "version", 4));
-        when(downstream.updateApplicationDocument(
-                OWNER,
-                APPLICATION_ID,
-                "COVER_LETTER",
+                generated.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
                 COVER_LETTER_DOCUMENT_ID))
                 .thenReturn(Map.of(
                         "id", APPLICATION_ID.toString(),
                         "status", "SAVED",
-                        "version", 5));
+                        "version", 4));
         when(downstream.updateApplicationStatus(
                 OWNER,
                 APPLICATION_ID,
                 "DOCUMENTS_GENERATED",
-                5))
+                4))
                 .thenThrow(new ResourceAccessException(
                         "status response was lost"));
 
@@ -736,21 +721,19 @@ class DurableGenerationServiceTest {
         assertEquals(APPLICATION_ID, recovered.applicationId());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
-        verify(downstream, times(1)).updateApplicationDocument(
+        verify(downstream, times(1)).updateApplicationDocumentSelections(
                 OWNER,
                 APPLICATION_ID,
-                "CV",
-                CV_DOCUMENT_ID);
-        verify(downstream, times(1)).updateApplicationDocument(
-                OWNER,
-                APPLICATION_ID,
-                "COVER_LETTER",
+                generated.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
                 COVER_LETTER_DOCUMENT_ID);
         verify(downstream, times(1)).updateApplicationStatus(
                 OWNER,
                 APPLICATION_ID,
                 "DOCUMENTS_GENERATED",
-                5);
+                4);
     }
 
     @Test

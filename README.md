@@ -30,6 +30,10 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `2.2.0` adds one authenticated, explicit, expected-version and
+idempotency-protected application selection command for CV, cover letter and
+intentional omission. Durable generation recovery uses the same atomic Tracker
+contract instead of two sequential slot writes.
 Version `2.1.0` adds authenticated content-free family paging, newest-first
 server-numbered history, exact safe artifact manifests and explicit
 concurrency/idempotency-protected current selection using Document Store 3.0.

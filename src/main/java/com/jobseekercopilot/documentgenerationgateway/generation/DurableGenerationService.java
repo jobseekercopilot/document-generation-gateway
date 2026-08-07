@@ -1105,21 +1105,16 @@ public class DurableGenerationService {
         if (!"SAVED".equals(status)) {
             throw conflict;
         }
-        bounded(
-                operation,
-                () -> downstream.updateApplicationDocument(
-                        operation.ownerId(),
-                        applicationId,
-                        "CV",
-                        requiredUuid(
-                                operation.data(),
-                                "cvDocumentId")));
         Map<String, Object> applicationWithDocuments = bounded(
                 operation,
-                () -> downstream.updateApplicationDocument(
+                () -> downstream.updateApplicationDocumentSelections(
                         operation.ownerId(),
                         applicationId,
-                        "COVER_LETTER",
+                        operation.id() + ":application-document-selections",
+                        number(application, "version").longValue(),
+                        requiredUuid(
+                                operation.data(),
+                                "cvDocumentId"),
                         requiredUuid(
                                 operation.data(),
                                 "coverLetterDocumentId")));

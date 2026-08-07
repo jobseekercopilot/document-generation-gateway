@@ -4,14 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.jobseekercopilot.documentgenerationgateway.dto.ApplicationDocumentSelectionsResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.generation.DurableGenerationService;
 import com.jobseekercopilot.documentgenerationgateway.generation.GenerationOperationState;
+import com.jobseekercopilot.documentgenerationgateway.service.ApplicationDocumentSelectionService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownloadService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentGenerationService;
 import java.util.List;
@@ -76,6 +79,9 @@ class GatewayIdentityIntegrationTest {
 
     @MockBean
     private DurableGenerationService durableGenerationService;
+
+    @MockBean
+    private ApplicationDocumentSelectionService applicationDocumentSelectionService;
 
     @Test
     void browserIdentityHeaderCannotAuthenticate() throws Exception {
@@ -182,6 +188,58 @@ class GatewayIdentityIntegrationTest {
                 selection.getValue().documents().stream()
                         .map(document -> document.purpose().name())
                         .toList());
+    }
+
+    @Test
+    void validatedSubjectIsBoundToAtomicDocumentSelectionSave() throws Exception {
+        UUID applicationId = UUID.randomUUID();
+        UUID cvDocumentId = UUID.randomUUID();
+        String token = JWKS.validToken("alice");
+        org.mockito.Mockito.when(applicationDocumentSelectionService.save(
+                        ArgumentMatchers.eq("alice"),
+                        ArgumentMatchers.eq(applicationId),
+                        ArgumentMatchers.eq("save-selections-1"),
+                        ArgumentMatchers.any()))
+                .thenReturn(new ApplicationDocumentSelectionsResponse(
+                        applicationId,
+                        "APPLIED",
+                        8,
+                        cvDocumentId,
+                        null,
+                        null,
+                        null));
+
+        mockMvc.perform(put(
+                        "/api/v1/document-generation/applications/"
+                                + "{applicationId}/document-selections",
+                        applicationId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Application-Owner", "victim")
+                        .header("Idempotency-Key", "save-selections-1")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "cvSelection": {
+                                    "state": "SELECTED",
+                                    "documentId": "%s"
+                                  },
+                                  "coverLetterSelection": {
+                                    "state": "OMITTED"
+                                  },
+                                  "expectedVersion": 7
+                                }
+                                """.formatted(cvDocumentId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(8));
+
+        verify(applicationDocumentSelectionService).save(
+                ArgumentMatchers.eq("alice"),
+                ArgumentMatchers.eq(applicationId),
+                ArgumentMatchers.eq("save-selections-1"),
+                ArgumentMatchers.argThat(request ->
+                        request.cvSelection().documentId().equals(cvDocumentId)
+                                && request.coverLetterSelection().documentId() == null
+                                && request.expectedVersion() == 7));
     }
 
     @Test
