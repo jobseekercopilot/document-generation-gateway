@@ -306,7 +306,7 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/auth-security"
 fi
 
 copy_contracts "$temporary_dir/source-revision"
-sed 's/revision=86c8510/revision=0000000/' \
+sed 's/^revision=.*/revision=0000000/' \
     "$temporary_dir/source-revision/user-profile-service.SOURCE" \
     > "$temporary_dir/source-revision/changed.SOURCE"
 mv "$temporary_dir/source-revision/changed.SOURCE" \
