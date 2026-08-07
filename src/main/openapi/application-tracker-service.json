@@ -9,7 +9,7 @@
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "4.4.0"
+    "version" : "4.5.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8088",
@@ -67,40 +67,6 @@
           "required" : true
         },
         "responses" : {
-          "200" : {
-            "description" : "Selection saved or exact command replayed",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
-                }
-              }
-            }
-          },
-          "503" : {
-            "description" : "Document reference validation unavailable",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409" : {
-            "description" : "Stale record version or conflicting idempotency-key reuse",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "oneOf" : [ {
-                    "$ref" : "#/components/schemas/ApplicationVersionConflictResponse"
-                  }, {
-                    "$ref" : "#/components/schemas/ErrorResponse"
-                  } ]
-                }
-              }
-            }
-          },
           "400" : {
             "description" : "Invalid command, status or document reference",
             "content" : {
@@ -117,6 +83,40 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Document reference validation unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Selection saved or exact command replayed",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Stale record version or conflicting idempotency-key reuse",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "oneOf" : [ {
+                    "$ref" : "#/components/schemas/ApplicationVersionConflictResponse"
+                  }, {
+                    "$ref" : "#/components/schemas/ErrorResponse"
+                  } ]
                 }
               }
             }
@@ -554,16 +554,6 @@
           "required" : true
         },
         "responses" : {
-          "401" : {
-            "description" : "Missing or invalid authentication",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
-                }
-              }
-            }
-          },
           "200" : {
             "description" : "Status updated successfully",
             "content" : {
@@ -574,18 +564,18 @@
               }
             }
           },
-          "400" : {
-            "description" : "Invalid status value",
+          "401" : {
+            "description" : "Missing or invalid authentication",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
           },
-          "409" : {
-            "description" : "Invalid lifecycle transition or stale/concurrent record version",
+          "404" : {
+            "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -604,8 +594,18 @@
               }
             }
           },
-          "404" : {
-            "description" : "Application record not found",
+          "400" : {
+            "description" : "Invalid status value",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Invalid lifecycle transition or stale/concurrent record version",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1226,8 +1226,8 @@
           }
         } ],
         "responses" : {
-          "403" : {
-            "description" : "Authenticated identity lacks reader permission",
+          "401" : {
+            "description" : "Missing, invalid or ambiguous authentication",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1259,8 +1259,8 @@
               }
             }
           },
-          "401" : {
-            "description" : "Missing, invalid or ambiguous authentication",
+          "403" : {
+            "description" : "Authenticated identity lacks reader permission",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1387,6 +1387,28 @@
           "serviceToken" : [ ]
         } ]
       }
+    },
+    "/api/v1/applications/account-export" : {
+      "get" : {
+        "tags" : [ "application-account-lifecycle-controller" ],
+        "summary" : "Export current owner's application data",
+        "operationId" : "export",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationPersonalDataExport"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      }
     }
   },
   "components" : {
@@ -1427,6 +1449,29 @@
           }
         },
         "description" : "Complete desired CV and cover-letter selection. Both slot objects are required so older or partial clients cannot accidentally clear a selection."
+      },
+      "ErrorResponse" : {
+        "required" : [ "message", "status", "timestamp" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "errors" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
       },
       "ApplicationRecordResponse" : {
         "required" : [ "canonicalJobId", "companyName", "createdAt", "externalJobId", "id", "jobId", "jobTitle", "provenance", "provider", "status", "updatedAt", "userId", "version" ],
@@ -1688,29 +1733,6 @@
           }
         },
         "description" : "Non-sensitive identity and digest of the exact claim ledger\naccepted by generation validation.\n"
-      },
-      "ErrorResponse" : {
-        "required" : [ "message", "status", "timestamp" ],
-        "type" : "object",
-        "properties" : {
-          "status" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "message" : {
-            "type" : "string"
-          },
-          "timestamp" : {
-            "type" : "string",
-            "format" : "date-time"
-          },
-          "errors" : {
-            "type" : "array",
-            "items" : {
-              "type" : "string"
-            }
-          }
-        }
       },
       "ApplicationVersionConflictResponse" : {
         "type" : "object",
@@ -2383,6 +2405,30 @@
           }
         },
         "description" : "Content-free authoritative application associations for one exact document version"
+      },
+      "ApplicationPersonalDataExport" : {
+        "type" : "object",
+        "properties" : {
+          "schemaVersion" : {
+            "type" : "string"
+          },
+          "generatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "applications" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ApplicationRecordResponse"
+            }
+          },
+          "events" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ApplicationEventResponse"
+            }
+          }
+        }
       }
     },
     "securitySchemes" : {

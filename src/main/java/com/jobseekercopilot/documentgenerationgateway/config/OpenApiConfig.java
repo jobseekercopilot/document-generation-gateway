@@ -24,7 +24,8 @@ public class OpenApiConfig {
                         .description("Durably coordinates owner-scoped canonical snapshots, "
                                 + "explicit purpose-bound evidence selections, bounded tailored "
                                 + "document generation, approval, truthful document-family history "
-                                + "atomic application document selections and truthful frozen "
-                                + "selection/omission state."));
+                                + "exact retained-artifact downloads and atomic application "
+                                + "document selections with truthful frozen selection/omission "
+                                + "state."));
     }
 }

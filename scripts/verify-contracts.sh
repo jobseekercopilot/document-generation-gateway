@@ -61,9 +61,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    3995b0831cfedb4e393a38a3eb6168328af395ed \
+    5f9cfe4ec110a17862031588f5f9f0214b471fd0 \
     contracts/openapi.json \
-    7f94b71fd622c8fa6e273601b4c4190cfbe4f9e232c5b9bde7dd9577ac109957
+    cba90d68ee371ba323608243adc231efd17645a40f1b200cc15c82be76f3442d
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -75,7 +75,7 @@ verify_source \
     jobseekercopilot/cv-cover-letter-service \
     fed6400b706b7b44bdbf3241809123fc0d66d3f7 \
     contracts/openapi.json \
-    9b0001257ff800bec919c7fff7e0d43eebfd3600e7f86d9d3fdd9616cf3e5d08
+    010115695d2c0cf1b4510b82a21b164efb0a45eb5a328c894f97baad3967dadf
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
@@ -85,9 +85,9 @@ verify_source \
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    53ea56f11af8b256e9c233e634bcc3698ff8d220 \
+    e5550c1bbb916f241b89e7cba4635b3b5b25263c \
     contracts/openapi.json \
-    272ea9b680e50a32c822dcf2e7393577bd6da20c7323726db93b62810015bf44
+    e521181e393d87919339d56a40d1fad2ae53d7d6dda2959b90508f405d5968af
 verify_source \
     job-service \
     jobseekercopilot/job-service \
@@ -246,13 +246,15 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.0.0") and
+    (.info.version == "3.3.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
     (.paths["/api/v1/documents/{documentId}/approve"].patch.operationId
         == "approveDocumentVersion") and
     (.paths["/api/v1/document-files/{id}/download"].get.operationId
         == "downloadDocumentFile") and
+    (.paths["/api/v1/documents/{generatedDocumentId}/artifacts/{artifactId}/download"].get.operationId
+        == "downloadDocumentArtifact") and
     (.paths["/api/v1/documents/families"].get.operationId
         == "listDocumentFamilies") and
     (.paths["/api/v1/documents/families/{documentFamilyId}"].get.operationId
@@ -283,6 +285,9 @@ jq -e '
             .in == "header" and
             .required == true and
             .schema.type == "string")) and
+    (.paths["/api/v1/documents/{generatedDocumentId}/artifacts/{artifactId}/download"].get.responses["200"].headers
+        | has("Content-Disposition") and has("Content-Length") and
+          has("X-Content-Type-Options") and has("Cache-Control") and has("Pragma")) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
@@ -323,7 +328,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "4.3.0") and
+    (.info.version == "4.5.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
