@@ -75,7 +75,7 @@ verify_source \
     jobseekercopilot/cv-cover-letter-service \
     fed6400b706b7b44bdbf3241809123fc0d66d3f7 \
     contracts/openapi.json \
-    9b0001257ff800bec919c7fff7e0d43eebfd3600e7f86d9d3fdd9616cf3e5d08
+    010115695d2c0cf1b4510b82a21b164efb0a45eb5a328c894f97baad3967dadf
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
