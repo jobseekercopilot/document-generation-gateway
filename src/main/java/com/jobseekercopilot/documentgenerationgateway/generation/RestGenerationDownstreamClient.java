@@ -41,6 +41,7 @@ public class RestGenerationDownstreamClient
     private final String storeBaseUrl;
     private final String exportBaseUrl;
     private final String trackerBaseUrl;
+    private final String rejectedGenerationOperatorToken;
 
     public RestGenerationDownstreamClient(
             RestTemplate restTemplate,
@@ -59,7 +60,9 @@ public class RestGenerationDownstreamClient
             @Value("${services.document-export-service.base-url}")
             String exportBaseUrl,
             @Value("${services.application-tracker-service.base-url}")
-            String trackerBaseUrl) {
+            String trackerBaseUrl,
+            @Value("${document-generation.retained-response-recovery.operator-token:}")
+            String rejectedGenerationOperatorToken) {
         this.restTemplate = restTemplate;
         this.profilesApi = profilesApi;
         this.evidenceSnapshotsApi = evidenceSnapshotsApi;
@@ -72,6 +75,8 @@ public class RestGenerationDownstreamClient
         this.storeBaseUrl = storeBaseUrl;
         this.exportBaseUrl = exportBaseUrl;
         this.trackerBaseUrl = trackerBaseUrl;
+        this.rejectedGenerationOperatorToken =
+                rejectedGenerationOperatorToken;
     }
 
     @Override
@@ -163,6 +168,26 @@ public class RestGenerationDownstreamClient
     }
 
     @Override
+    public Map<String, Object> reserveRetainedResponseRecovery(
+            String ownerId,
+            UUID operationId,
+            long actualTokens) {
+        return post(
+                paymentBaseUrl + "/api/v1/payments/reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "feature", "CV_AND_COVER_LETTER_GENERATION",
+                        "estimatedTokens", actualTokens,
+                        "operationKey", operationId
+                                + ":retained-response-recovery",
+                        "referenceType", "GENERATION_OPERATION_RECOVERY",
+                        "referenceId", operationId.toString()));
+    }
+
+    @Override
     public Map<String, Object> generate(
             String ownerId,
             UUID operationId,
@@ -174,6 +199,23 @@ public class RestGenerationDownstreamClient
         headers.set("X-Generation-Operation-Id", operationId.toString());
         return post(
                 cvBaseUrl + "/api/v1/cv-cover-letter/drafts",
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> replayRejectedGeneration(
+            String ownerId,
+            UUID operationId,
+            Map<String, Object> request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Operator-Token", rejectedGenerationOperatorToken);
+        headers.set(DOCUMENT_OWNER, ownerId);
+        return post(
+                cvBaseUrl
+                        + "/internal/v1/cv-cover-letter/rejected-generations/"
+                        + operationId
+                        + "/replay",
                 headers,
                 request);
     }

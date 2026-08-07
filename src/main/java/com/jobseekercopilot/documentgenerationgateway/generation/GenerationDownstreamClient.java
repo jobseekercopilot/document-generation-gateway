@@ -21,7 +21,17 @@ public interface GenerationDownstreamClient {
             UUID operationId,
             long estimatedTokens);
 
+    Map<String, Object> reserveRetainedResponseRecovery(
+            String ownerId,
+            UUID operationId,
+            long actualTokens);
+
     Map<String, Object> generate(
+            String ownerId,
+            UUID operationId,
+            Map<String, Object> request);
+
+    Map<String, Object> replayRejectedGeneration(
             String ownerId,
             UUID operationId,
             Map<String, Object> request);

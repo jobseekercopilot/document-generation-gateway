@@ -71,6 +71,29 @@ non-replayable recovery failure. No error path silently refunds known model
 use, creates an application before explicit approval, or reruns an uncertain
 paid call.
 
+### Retained-response recovery
+
+When CV validation rejects a response after a successful provider call, an
+operator can resume the exact failed operation through:
+
+```text
+POST /internal/v1/document-generation/rejected-generations/{operationId}/recover
+X-Operator-Token: <shared recovery token>
+X-Document-Owner: <exact operation owner>
+```
+
+The route is disabled by default and is intentionally excluded from the public
+OpenAPI contract. It accepts only an owner-matched `FAILED` operation with
+`failureCode=GENERATION_REJECTED`. Gateway asks CV Service to decrypt and
+revalidate its retained response, then requires `outcome=ACCEPTED`, a matching
+operation ID and `providerInvocationCount=0` before reserving the response's
+actual token usage. The operation resumes at `DRAFT_GENERATED` with a renewed
+deadline and the normal idempotent Payment, Store, Export and Tracker keys. The
+two recovered versions are approved automatically because this route is only
+used for the already-approved generation operation. Replaying the route after
+the recovery checkpoint neither calls the provider nor creates another credit
+reservation.
+
 ## Runtime configuration
 
 Gateway now requires:
@@ -85,6 +108,8 @@ DOCUMENT_GENERATION_OPERATION_DEADLINE
 DOCUMENT_GENERATION_OPERATION_LEASE
 DOCUMENT_GENERATION_CONNECT_TIMEOUT
 DOCUMENT_GENERATION_READ_TIMEOUT
+RETAINED_RESPONSE_RECOVERY_ENABLED
+REJECTED_GENERATION_OPERATOR_TOKEN
 ```
 
 `DOCUMENT_GENERATION_OPERATION_LEASE` must be longer than
@@ -97,6 +122,10 @@ The Payment token is a distinct workload identity and is accepted only for
 owner-scoped reservation create/read/commit/release. Infrastructure must inject
 the same secret into Payment Service and Gateway and provide the PostgreSQL
 database before this path is enabled in a deployed fleet.
+
+`REJECTED_GENERATION_OPERATOR_TOKEN` must be the same high-entropy secret used
+by CV Service's rejected-generation operator API. Enable the route only while
+that encrypted retention and its bounded expiry policy are active.
 
 ## Current limits
 
