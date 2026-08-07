@@ -73,9 +73,9 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    fed6400b706b7b44bdbf3241809123fc0d66d3f7 \
+    6af4144f3292e61d14a25da943604c43a27693d4 \
     contracts/openapi.json \
-    010115695d2c0cf1b4510b82a21b164efb0a45eb5a328c894f97baad3967dadf
+    c4896052884cf4d3290afa864ec2747b088817a4164a1715bb5e4cbb7a1e6bea
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
@@ -103,9 +103,9 @@ verify_source \
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
-    85ac64be8c541d0a252d8c7657306f950fec3c08 \
+    806ed6064d10b2de9171b14bd252477c4646de35 \
     api/openapi.json \
-    54a50801e5b4f871d33c93efdf5fe8c93f65f78b9b673be74ac4321a7d193eec
+    1770e3aed76aa69f16015b496947e9ed2d28fb93f48e21fd4abcb03ec38d680d
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
@@ -127,7 +127,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "1.3.0") and
+    (.info.version == "2.1.0") and
     (.paths["/api/profiles/me"].get.operationId == "getMyProfile") and
     (.paths["/api/profiles/me"].get.security | any(has("bearerAuth"))) and
     (.components.securitySchemes.bearerAuth.type == "http") and
@@ -146,7 +146,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.4.0") and
+    (.info.version == "4.0.0") and
     (.paths["/api/v1/cv-cover-letter/drafts/estimate"].post.operationId
         == "estimateDraft") and
     (.paths["/api/v1/cv-cover-letter/drafts"].post.operationId

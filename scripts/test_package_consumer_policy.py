@@ -95,7 +95,20 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         pom = root / "pom.xml"
         pom.write_text(
             pom.read_text().replace(
-                "2.0.0-rev.87fc2393309a", "2.0.0-rev.000000000000"
+                "4.0.0-rev.6af4144f3292", "4.0.0-rev.000000000000"
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "reviewed immutable pin"):
+            verify(root, check_git=False)
+
+    def test_user_profile_package_version_drift_is_rejected(self) -> None:
+        temporary, root = self.fixture()
+        self.addCleanup(temporary.cleanup)
+        pom = root / "pom.xml"
+        pom.write_text(
+            pom.read_text().replace(
+                "2.1.0-rev.806ed6064d10", "2.1.0-rev.000000000000"
             ),
             encoding="utf-8",
         )
