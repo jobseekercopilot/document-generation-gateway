@@ -38,7 +38,10 @@ generation producer identity is still limited to document preparation.
 Version `2.2.0` adds one authenticated, explicit, expected-version and
 idempotency-protected application selection command for CV, cover letter and
 intentional omission. Durable generation recovery uses the same atomic Tracker
-contract instead of two sequential slot writes.
+contract instead of two sequential slot writes. It also adds exact
+owner-authorised retained-artifact downloads and
+preserves canonical MIME, attachment, length, `nosniff`, private/no-store and
+`Pragma` policy through the Gateway without changing document state.
 Version `2.1.0` adds authenticated content-free family paging, newest-first
 server-numbered history, exact safe artifact manifests and explicit
 concurrency/idempotency-protected current selection using Document Store 3.0.
@@ -100,12 +103,19 @@ DOCUMENT_GENERATION_OPERATION_DEADLINE
 DOCUMENT_GENERATION_OPERATION_LEASE
 DOCUMENT_GENERATION_CONNECT_TIMEOUT
 DOCUMENT_GENERATION_READ_TIMEOUT
+DOCUMENT_METADATA_REQUESTS_PER_MINUTE
+DOCUMENT_DOWNLOADS_PER_MINUTE
 ```
 
 The operation lease must be longer than the downstream read timeout. The
 defaults are a three-minute lease and a two-minute read timeout so a bounded
 model invocation can complete without another request taking ownership of the
 same paid operation.
+
+Document family metadata/current commands and exact downloads are limited per
+authenticated owner in each Gateway instance. Defaults are 120 metadata
+requests and 30 downloads per minute; excess requests return `429` with a
+bounded `Retry-After` value and do not call Document Store.
 
 The seven service tokens must be pairwise distinct and contain at least 32 bytes. They
 have no source-controlled runtime default. See

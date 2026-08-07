@@ -9,8 +9,12 @@ import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest
 import com.jobseekercopilot.documentgenerationgateway.generation.DurableGenerationService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentFileDownloadService;
 import com.jobseekercopilot.documentgenerationgateway.service.DocumentGenerationService;
+import com.jobseekercopilot.documentgenerationgateway.service.OwnerDocumentRateLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.headers.Header;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -37,14 +41,17 @@ public class DocumentGenerationController {
     private final DocumentGenerationService service;
     private final DocumentFileDownloadService downloadService;
     private final DurableGenerationService durableGenerationService;
+    private final OwnerDocumentRateLimiter documentRateLimiter;
 
     public DocumentGenerationController(
             DocumentGenerationService service,
             DocumentFileDownloadService downloadService,
-            DurableGenerationService durableGenerationService) {
+            DurableGenerationService durableGenerationService,
+            OwnerDocumentRateLimiter documentRateLimiter) {
         this.service = service;
         this.downloadService = downloadService;
         this.durableGenerationService = durableGenerationService;
+        this.documentRateLimiter = documentRateLimiter;
     }
 
     @PostMapping("/saved-jobs/{savedJobId}/operations")
@@ -128,7 +135,42 @@ public class DocumentGenerationController {
     public ResponseEntity<byte[]> download(
             @PathVariable UUID fileId,
             @Parameter(hidden = true) Authentication authentication) {
-        return downloadService.download(fileId, authenticatedSubject(authentication));
+        String ownerId = authenticatedSubject(authentication);
+        documentRateLimiter.download(ownerId);
+        return downloadService.download(fileId, ownerId);
+    }
+
+    @GetMapping("/documents/{documentId}/artifacts/{artifactId}/download")
+    @Operation(
+            summary = "Download one exact retained document artifact",
+            description = "Authorises the exact document-version/artifact relationship and never changes current, lifecycle, artifact activity or application selections.")
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Exact retained artifact bytes with private no-store download policy",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE,
+                            schema = @Schema(type = "string", format = "binary")),
+                    headers = {
+                            @Header(name = "Content-Disposition", schema = @Schema(type = "string")),
+                            @Header(name = "Content-Length", schema = @Schema(type = "integer", format = "int64")),
+                            @Header(name = "X-Content-Type-Options", schema = @Schema(type = "string")),
+                            @Header(name = "Cache-Control", schema = @Schema(type = "string")),
+                            @Header(name = "Pragma", schema = @Schema(type = "string"))
+                    }),
+            @ApiResponse(responseCode = "401", description = "No authenticated user"),
+            @ApiResponse(responseCode = "404", description = "Artifact relationship not found for this owner"),
+            @ApiResponse(responseCode = "409", description = "Artifact is not safely downloadable"),
+            @ApiResponse(responseCode = "502", description = "Document Store failed")
+    })
+    public ResponseEntity<byte[]> downloadExactArtifact(
+            @PathVariable UUID documentId,
+            @PathVariable UUID artifactId,
+            @Parameter(hidden = true) Authentication authentication) {
+        String ownerId = authenticatedSubject(authentication);
+        documentRateLimiter.download(ownerId);
+        return downloadService.downloadExactArtifact(
+                documentId, artifactId, ownerId);
     }
 
     @PostMapping(value = "/documents/{generatedDocumentId}/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
