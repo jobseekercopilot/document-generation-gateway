@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.3.0", contract.path("info").path("version").asText());
+        assertEquals("2.4.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -60,6 +60,19 @@ class OpenApiExportTest {
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}"));
         assertTrue(contract.path("paths")
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}/current"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}/application-associations"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}/archive"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}/restore"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}"));
+        assertTrue(contract.path("paths")
+                .path("/api/v1/document-generation/document-versions/{documentId}")
+                .path("delete")
+                .path("responses")
+                .has("204"));
         JsonNode selections = contract.path("paths")
                 .path("/api/v1/document-generation/applications/{applicationId}/document-selections")
                 .path("put");
@@ -92,6 +105,14 @@ class OpenApiExportTest {
                         .path("$ref")
                         .asText());
         JsonNode schemas = contract.path("components").path("schemas");
+        assertTrue(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("purgedAt"));
+        assertTrue(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("unavailableReason"));
+        assertTrue(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("applicationAssociations"));
+        assertFalse(schemas.path("DocumentApplicationAssociation")
+                .path("properties").has("contentSha256"));
         JsonNode selectionResponse = schemas
                 .path("ApplicationDocumentSelectionsResponse")
                 .path("properties");

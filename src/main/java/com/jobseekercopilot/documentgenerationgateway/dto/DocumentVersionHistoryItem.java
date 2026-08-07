@@ -16,7 +16,10 @@ public record DocumentVersionHistoryItem(
         OffsetDateTime archivedAt,
         OffsetDateTime deletedAt,
         OffsetDateTime purgeEligibleAt,
+        OffsetDateTime purgedAt,
+        String unavailableReason,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt,
+        List<DocumentApplicationAssociation> applicationAssociations,
         List<DocumentArtifactManifestItem> artifacts) {
 }

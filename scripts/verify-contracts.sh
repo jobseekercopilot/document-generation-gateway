@@ -61,9 +61,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    3995b0831cfedb4e393a38a3eb6168328af395ed \
+    5f9cfe4ec110a17862031588f5f9f0214b471fd0 \
     contracts/openapi.json \
-    7f94b71fd622c8fa6e273601b4c4190cfbe4f9e232c5b9bde7dd9577ac109957
+    cba90d68ee371ba323608243adc231efd17645a40f1b200cc15c82be76f3442d
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -85,9 +85,9 @@ verify_source \
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    3abf92b67ac169997f7b7b42c3610586dd622a50 \
+    e5550c1bbb916f241b89e7cba4635b3b5b25263c \
     contracts/openapi.json \
-    b701f8aa4c3601da76b2efbea29c785445f1ca05af947987b507c69e5de9d8f9
+    e521181e393d87919339d56a40d1fad2ae53d7d6dda2959b90508f405d5968af
 verify_source \
     job-service \
     jobseekercopilot/job-service \
@@ -246,7 +246,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.1.0") and
+    (.info.version == "3.3.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
     (.paths["/api/v1/documents/{documentId}/approve"].patch.operationId
@@ -328,7 +328,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "4.3.0") and
+    (.info.version == "4.5.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
