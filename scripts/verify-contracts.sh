@@ -61,9 +61,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    b6a2a54adb18ef7dc9d9e0c25c34addc62ec0aaa \
+    09ec630e69c61d5be650fce55722c0b85b335bd8 \
     contracts/openapi.json \
-    5c5b032793fbe46deafffca2015b0725997d2afa7d12a61899bf106bef150ec2
+    7722467906230b37c48aee583254115c16ea663e284bb4e6e020abb292693d78
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -75,7 +75,7 @@ verify_source \
     jobseekercopilot/cv-cover-letter-service \
     fed6400b706b7b44bdbf3241809123fc0d66d3f7 \
     contracts/openapi.json \
-    9b0001257ff800bec919c7fff7e0d43eebfd3600e7f86d9d3fdd9616cf3e5d08
+    010115695d2c0cf1b4510b82a21b164efb0a45eb5a328c894f97baad3967dadf
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
