@@ -236,6 +236,66 @@ class RestGenerationDownstreamClientTest {
         assertEquals(7L, body.get("expectedVersion"));
     }
 
+    @Test
+    void atomicSelectionsBindOwnerReplayKeyAndCompleteDesiredState() {
+        UUID applicationId = UUID.randomUUID();
+        UUID cvDocumentId = UUID.randomUUID();
+        UUID coverLetterDocumentId = UUID.randomUUID();
+        when(restTemplate.exchange(
+                eq("http://tracker/api/v1/applications/{applicationId}"
+                        + "/document-selections"),
+                eq(HttpMethod.PUT),
+                any(HttpEntity.class),
+                eq(Map.class),
+                eq(applicationId)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "id", applicationId.toString(),
+                        "status", "SAVED",
+                        "version", 8)));
+
+        client.updateApplicationDocumentSelections(
+                OWNER,
+                applicationId,
+                "operation-1:application-document-selections",
+                7,
+                cvDocumentId,
+                coverLetterDocumentId);
+
+        ArgumentCaptor<HttpEntity> request =
+                ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(
+                eq("http://tracker/api/v1/applications/{applicationId}"
+                        + "/document-selections"),
+                eq(HttpMethod.PUT),
+                request.capture(),
+                eq(Map.class),
+                eq(applicationId));
+        assertSingleHeader(
+                request.getValue(),
+                "X-Service-Token",
+                "tracker-token-00000000000000000000000001");
+        assertSingleHeader(
+                request.getValue(),
+                "X-Application-Owner",
+                OWNER);
+        assertSingleHeader(
+                request.getValue(),
+                "Idempotency-Key",
+                "operation-1:application-document-selections");
+        Map<?, ?> body = (Map<?, ?>) request.getValue().getBody();
+        assertEquals(7L, body.get("expectedVersion"));
+        assertEquals(
+                Map.of("state", "SELECTED", "documentId", cvDocumentId),
+                body.get("cvSelection"));
+        assertEquals(
+                Map.of(
+                        "state",
+                        "SELECTED",
+                        "documentId",
+                        coverLetterDocumentId),
+                body.get("coverLetterSelection"));
+    }
+
     private HttpEntity<?> capturedPost(String url) {
         ArgumentCaptor<HttpEntity> request =
                 ArgumentCaptor.forClass(HttpEntity.class);

@@ -1,8 +1,7 @@
 package com.jobseekercopilot.documentgenerationgateway.exception;
 
+import com.jobseekercopilot.documentgenerationgateway.dto.ApplicationSelectionConflictResponse;
 import java.util.Map;
-import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
-import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -14,6 +13,37 @@ import org.springframework.http.HttpHeaders;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    @ExceptionHandler(ApplicationSelectionDownstreamException.class)
+    ResponseEntity<?> applicationSelectionFailure(
+            ApplicationSelectionDownstreamException exception) {
+        int status = exception.status().value();
+        if (status == HttpStatus.CONFLICT.value()) {
+            return ResponseEntity.status(exception.status()).body(
+                    new ApplicationSelectionConflictResponse(
+                            status,
+                            exception.currentApplication() == null
+                                    ? "Selection command conflicts with an earlier request."
+                                    : "Application changed; refresh and retry.",
+                            exception.currentApplication()));
+        }
+        String error = status == HttpStatus.NOT_FOUND.value()
+                ? "APPLICATION_NOT_FOUND"
+                : status == HttpStatus.BAD_REQUEST.value()
+                        ? "INVALID_DOCUMENT_SELECTION"
+                        : "APPLICATION_SELECTION_UNAVAILABLE";
+        String message = status == HttpStatus.NOT_FOUND.value()
+                ? "Application or document selection was not found."
+                : status == HttpStatus.BAD_REQUEST.value()
+                        ? "Document selection is invalid."
+                        : "Document selections could not be saved.";
+        HttpStatus responseStatus = status == HttpStatus.NOT_FOUND.value()
+                        || status == HttpStatus.BAD_REQUEST.value()
+                ? HttpStatus.valueOf(status)
+                : HttpStatus.SERVICE_UNAVAILABLE;
+        return ResponseEntity.status(responseStatus)
+                .body(Map.of("error", error, "message", message));
+    }
+
     @ExceptionHandler(OwnerDocumentRateLimitExceededException.class)
     ResponseEntity<Map<String, String>> documentRateLimited(
             OwnerDocumentRateLimitExceededException exception) {

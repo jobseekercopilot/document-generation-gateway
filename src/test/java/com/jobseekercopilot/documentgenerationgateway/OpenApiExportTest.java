@@ -60,6 +60,12 @@ class OpenApiExportTest {
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}"));
         assertTrue(contract.path("paths")
                 .has("/api/v1/document-generation/document-families/{documentFamilyId}/current"));
+        JsonNode selections = contract.path("paths")
+                .path("/api/v1/document-generation/applications/{applicationId}/document-selections")
+                .path("put");
+        assertTrue(selections.path("requestBody").path("required").asBoolean());
+        assertTrue(selections.path("parameters").findValuesAsText("name")
+                .contains("Idempotency-Key"));
         assertTrue(contract.path("paths")
                 .has("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download"));
         JsonNode downloadHeaders = contract.path("paths")
@@ -86,6 +92,17 @@ class OpenApiExportTest {
                         .path("$ref")
                         .asText());
         JsonNode schemas = contract.path("components").path("schemas");
+        assertEquals(
+                java.util.Set.of(
+                        "cvSelection",
+                        "coverLetterSelection",
+                        "expectedVersion"),
+                new java.util.HashSet<>(objectMapper.convertValue(
+                        schemas.path("SaveApplicationDocumentSelectionsRequest")
+                                .path("required"),
+                        objectMapper.getTypeFactory().constructCollectionType(
+                                java.util.List.class,
+                                String.class))));
         assertFalse(schemas.path("DocumentVersionHistoryItem")
                 .path("properties").has("content"));
         assertFalse(schemas.path("DocumentArtifactManifestItem")

@@ -306,24 +306,32 @@ public class RestGenerationDownstreamClient
     }
 
     @Override
-    public Map<String, Object> updateApplicationDocument(
+    public Map<String, Object> updateApplicationDocumentSelections(
             String ownerId,
             UUID applicationId,
-            String documentType,
-            UUID documentId) {
+            String idempotencyKey,
+            long expectedVersion,
+            UUID cvDocumentId,
+            UUID coverLetterDocumentId) {
         HttpHeaders headers = serviceHeaders(
                 credentials.applicationTrackerProducerToken(),
                 APPLICATION_OWNER,
                 ownerId);
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("Idempotency-Key", idempotencyKey);
         return body(restTemplate.exchange(
                 trackerBaseUrl
-                        + "/api/v1/applications/{applicationId}/document-reference",
-                HttpMethod.PATCH,
+                        + "/api/v1/applications/{applicationId}/document-selections",
+                HttpMethod.PUT,
                 new HttpEntity<>(
                         Map.of(
-                                "documentType", documentType,
-                                "documentId", documentId),
+                                "cvSelection", Map.of(
+                                        "state", "SELECTED",
+                                        "documentId", cvDocumentId),
+                                "coverLetterSelection", Map.of(
+                                        "state", "SELECTED",
+                                        "documentId", coverLetterDocumentId),
+                                "expectedVersion", expectedVersion),
                         headers),
                 Map.class,
                 applicationId));

@@ -30,7 +30,11 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-Version `2.2.0` adds exact owner-authorised retained-artifact downloads and
+Version `2.2.0` adds one authenticated, explicit, expected-version and
+idempotency-protected application selection command for CV, cover letter and
+intentional omission. Durable generation recovery uses the same atomic Tracker
+contract instead of two sequential slot writes. It also adds exact
+owner-authorised retained-artifact downloads and
 preserves canonical MIME, attachment, length, `nosniff`, private/no-store and
 `Pragma` policy through the Gateway without changing document state.
 Version `2.1.0` adds authenticated content-free family paging, newest-first

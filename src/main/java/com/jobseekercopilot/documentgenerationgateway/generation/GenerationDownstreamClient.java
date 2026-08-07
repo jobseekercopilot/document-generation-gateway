@@ -49,11 +49,13 @@ public interface GenerationDownstreamClient {
 
     List<Map<String, Object>> applications(String ownerId);
 
-    Map<String, Object> updateApplicationDocument(
+    Map<String, Object> updateApplicationDocumentSelections(
             String ownerId,
             UUID applicationId,
-            String documentType,
-            UUID documentId);
+            String idempotencyKey,
+            long expectedVersion,
+            UUID cvDocumentId,
+            UUID coverLetterDocumentId);
 
     Map<String, Object> updateApplicationStatus(
             String ownerId,

@@ -2,14 +2,14 @@
   "openapi" : "3.0.1",
   "info" : {
     "title" : "Jobseeker Copilot - Application Tracker API",
-    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions frozen when an application first progresses.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
+    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions frozen when an application first progresses.\nAtomic document-selection commands require explicit SELECTED or OMITTED\nstate for both optional slots, an expected record version and a durable\nowner-scoped idempotency key.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
     "contact" : {
       "name" : "Jobseeker Copilot"
     },
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "4.1.0"
+    "version" : "4.2.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8088",
@@ -20,6 +20,115 @@
     "description" : "Endpoints for tracking job applications"
   } ],
   "paths" : {
+    "/api/v1/applications/{id}/document-selections" : {
+      "put" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Atomically save the complete optional document selection",
+        "description" : "Replaces the desired CV and cover-letter slots together while the\napplication is SAVED or DOCUMENTS_GENERATED. Both slot objects are\nmandatory and must explicitly say SELECTED or OMITTED, preventing a\npartial rolling-deploy payload from being interpreted as a clear.\nExact approved and available versions are verified against Document\nStore. Family current is recommendation metadata only.\n",
+        "operationId" : "saveDocumentSelections",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "description" : "Required owner-scoped retry key, fingerprinted to the complete payload",
+          "required" : true,
+          "schema" : {
+            "maxLength" : 128,
+            "minLength" : 1,
+            "pattern" : "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "type" : "string"
+          },
+          "example" : "save-documents-application-123-attempt-1"
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SaveDocumentSelectionsRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "503" : {
+            "description" : "Document reference validation unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid command, status or document reference",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Stale record version or conflicting idempotency-key reuse",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "oneOf" : [ {
+                    "$ref" : "#/components/schemas/ApplicationVersionConflictResponse"
+                  }, {
+                    "$ref" : "#/components/schemas/ErrorResponse"
+                  } ]
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Selection saved or exact command replayed",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
     "/internal/system-data/v1/application-scenarios" : {
       "post" : {
         "tags" : [ "System Data Applications" ],
@@ -354,12 +463,12 @@
           "required" : true
         },
         "responses" : {
-          "404" : {
-            "description" : "Application record not found",
+          "401" : {
+            "description" : "Missing or invalid authentication",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -370,6 +479,26 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Status updated successfully",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
                 }
               }
             }
@@ -390,26 +519,6 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "200" : {
-            "description" : "Status updated successfully",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
-                }
-              }
-            }
-          },
-          "401" : {
-            "description" : "Missing or invalid authentication",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -604,7 +713,7 @@
       "patch" : {
         "tags" : [ "Application Records" ],
         "summary" : "Attach or replace a current approved document reference before application use",
-        "description" : "Available while the application is SAVED or DOCUMENTS_GENERATED; attaching a complete pair does not change lifecycle status",
+        "description" : "Legacy rolling-deploy endpoint for one selected slot. New clients must use the atomic document-selections command.",
         "operationId" : "updateDocumentReference",
         "parameters" : [ {
           "name" : "id",
@@ -676,6 +785,7 @@
             }
           }
         },
+        "deprecated" : true,
         "security" : [ {
           "bearerAuth" : [ ]
         }, {
@@ -881,22 +991,22 @@
           }
         } ],
         "responses" : {
-          "200" : {
-            "description" : "Ordered activity page returned",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationHistoryResponse"
-                }
-              }
-            }
-          },
           "404" : {
             "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Ordered activity page returned",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationHistoryResponse"
                 }
               }
             }
@@ -1025,8 +1135,8 @@
           }
         } ],
         "responses" : {
-          "401" : {
-            "description" : "Missing, invalid or ambiguous authentication",
+          "403" : {
+            "description" : "Authenticated identity lacks reader permission",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1035,21 +1145,8 @@
               }
             }
           },
-          "200" : {
-            "description" : "Owner-scoped application records",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "array",
-                  "items" : {
-                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
-                  }
-                }
-              }
-            }
-          },
-          "403" : {
-            "description" : "Authenticated identity lacks reader permission",
+          "401" : {
+            "description" : "Missing, invalid or ambiguous authentication",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1064,6 +1161,19 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Owner-scoped application records",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                  }
                 }
               }
             }
@@ -1130,6 +1240,326 @@
   },
   "components" : {
     "schemas" : {
+      "DocumentSelectionCommand" : {
+        "required" : [ "state" ],
+        "type" : "object",
+        "properties" : {
+          "state" : {
+            "type" : "string",
+            "enum" : [ "SELECTED", "OMITTED" ]
+          },
+          "documentId" : {
+            "type" : "string",
+            "description" : "Exact approved Document Store version. Required only when state is SELECTED.",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          }
+        },
+        "description" : "Explicit desired state for one optional application document slot. Omission of this object is never interpreted as clearing the slot."
+      },
+      "SaveDocumentSelectionsRequest" : {
+        "required" : [ "coverLetterSelection", "cvSelection", "expectedVersion" ],
+        "type" : "object",
+        "properties" : {
+          "cvSelection" : {
+            "$ref" : "#/components/schemas/DocumentSelectionCommand"
+          },
+          "coverLetterSelection" : {
+            "$ref" : "#/components/schemas/DocumentSelectionCommand"
+          },
+          "expectedVersion" : {
+            "minimum" : 0,
+            "type" : "integer",
+            "description" : "Application record version observed by the client.",
+            "format" : "int64",
+            "example" : 3
+          }
+        },
+        "description" : "Complete desired CV and cover-letter selection. Both slot objects are required so older or partial clients cannot accidentally clear a selection."
+      },
+      "ErrorResponse" : {
+        "required" : [ "message", "status", "timestamp" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "errors" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "ApplicationRecordResponse" : {
+        "required" : [ "canonicalJobId", "companyName", "createdAt", "externalJobId", "id", "jobId", "jobTitle", "provenance", "provider", "status", "updatedAt", "userId", "version" ],
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "description" : "Unique identifier of the application record",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "userId" : {
+            "type" : "string",
+            "description" : "ID of the user who owns this application",
+            "example" : "user-123"
+          },
+          "jobId" : {
+            "type" : "string",
+            "description" : "ID of the job being applied to",
+            "example" : "job-456"
+          },
+          "canonicalJobId" : {
+            "type" : "string",
+            "description" : "Stable cross-provider canonical job identifier",
+            "example" : "job_abc123"
+          },
+          "provider" : {
+            "type" : "string",
+            "description" : "Job provider name",
+            "example" : "REED"
+          },
+          "externalJobId" : {
+            "type" : "string",
+            "description" : "Provider-specific job identifier",
+            "example" : "123456"
+          },
+          "provenance" : {
+            "type" : "string",
+            "description" : "How the application entered the tracker",
+            "example" : "MANUAL",
+            "enum" : [ "GENERATED", "MANUAL", "EXTERNAL" ]
+          },
+          "jobTitle" : {
+            "type" : "string",
+            "description" : "Title of the job",
+            "example" : "Java Developer"
+          },
+          "companyName" : {
+            "type" : "string",
+            "description" : "Name of the company",
+            "example" : "Example Ltd"
+          },
+          "location" : {
+            "type" : "string",
+            "description" : "Job location",
+            "example" : "Dorking"
+          },
+          "cvDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated CV document (reference only)",
+            "example" : "cv-123"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated cover letter document (reference only)",
+            "example" : "cl-456"
+          },
+          "cvDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "coverLetterDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "applicationUsedCvDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "applicationUsedCoverLetterDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "applicationUsedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when application-used references were frozen",
+            "format" : "date-time"
+          },
+          "status" : {
+            "type" : "string",
+            "description" : "Current application status",
+            "example" : "DOCUMENTS_GENERATED",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "createdAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the record was created",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the record was last updated",
+            "format" : "date-time"
+          },
+          "appliedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the application was submitted (null if not yet applied)",
+            "format" : "date-time"
+          },
+          "version" : {
+            "type" : "integer",
+            "description" : "Monotonic record version for optimistic concurrency",
+            "format" : "int64",
+            "example" : 3
+          }
+        },
+        "description" : "Response containing application record details"
+      },
+      "ApplicationVersionConflictResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "currentApplication" : {
+            "$ref" : "#/components/schemas/ApplicationRecordResponse"
+          }
+        },
+        "description" : "Stale application command response with the authoritative current record"
+      },
+      "DocumentEvidenceProvenance" : {
+        "type" : "object",
+        "properties" : {
+          "profileRevisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "profileContentDigest" : {
+            "type" : "string"
+          },
+          "evidenceSnapshotId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "evidenceSnapshotDigest" : {
+            "type" : "string"
+          },
+          "evidenceRevisions" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/EvidenceRevisionReference"
+            }
+          },
+          "sectionOrder" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string",
+              "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
+            }
+          },
+          "claimLedger" : {
+            "$ref" : "#/components/schemas/ValidatedClaimLedger"
+          },
+          "generatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Immutable profile, evidence-snapshot and claim provenance\nretained with an exact document version.\n"
+      },
+      "DocumentVersionReference" : {
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "documentFamilyId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "jobId" : {
+            "type" : "string"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "version" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "contentSha256" : {
+            "type" : "string"
+          },
+          "evidenceProvenance" : {
+            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
+          },
+          "groundingState" : {
+            "type" : "string",
+            "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
+          },
+          "parentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "parentDocumentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        },
+        "description" : "Canonical immutable Document Store version descriptor"
+      },
+      "EvidenceRevisionReference" : {
+        "type" : "object",
+        "properties" : {
+          "entryId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionNumber" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "category" : {
+            "type" : "string",
+            "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
+          },
+          "contentDigest" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Exact immutable evidence revision selected for a document"
+      },
+      "ValidatedClaimLedger" : {
+        "type" : "object",
+        "properties" : {
+          "ledgerId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "ledgerSha256" : {
+            "type" : "string"
+          },
+          "policyVersion" : {
+            "type" : "string"
+          },
+          "parserVersion" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Non-sensitive identity and digest of the exact claim ledger\naccepted by generation validation.\n"
+      },
       "SystemDataApplicationSeedRecord" : {
         "required" : [ "companyName", "coverLetterDocumentContentSha256", "coverLetterDocumentFamilyId", "coverLetterDocumentId", "coverLetterDocumentVersion", "createdAt", "cvDocumentContentSha256", "cvDocumentFamilyId", "cvDocumentId", "cvDocumentVersion", "id", "jobId", "jobTitle", "status", "updatedAt" ],
         "type" : "object",
@@ -1377,246 +1807,6 @@
         },
         "description" : "Request to create a new application record"
       },
-      "ApplicationRecordResponse" : {
-        "required" : [ "canonicalJobId", "companyName", "createdAt", "externalJobId", "id", "jobId", "jobTitle", "provenance", "provider", "status", "updatedAt", "userId", "version" ],
-        "type" : "object",
-        "properties" : {
-          "id" : {
-            "type" : "string",
-            "description" : "Unique identifier of the application record",
-            "format" : "uuid",
-            "example" : "550e8400-e29b-41d4-a716-446655440000"
-          },
-          "userId" : {
-            "type" : "string",
-            "description" : "ID of the user who owns this application",
-            "example" : "user-123"
-          },
-          "jobId" : {
-            "type" : "string",
-            "description" : "ID of the job being applied to",
-            "example" : "job-456"
-          },
-          "canonicalJobId" : {
-            "type" : "string",
-            "description" : "Stable cross-provider canonical job identifier",
-            "example" : "job_abc123"
-          },
-          "provider" : {
-            "type" : "string",
-            "description" : "Job provider name",
-            "example" : "REED"
-          },
-          "externalJobId" : {
-            "type" : "string",
-            "description" : "Provider-specific job identifier",
-            "example" : "123456"
-          },
-          "provenance" : {
-            "type" : "string",
-            "description" : "How the application entered the tracker",
-            "example" : "MANUAL",
-            "enum" : [ "GENERATED", "MANUAL", "EXTERNAL" ]
-          },
-          "jobTitle" : {
-            "type" : "string",
-            "description" : "Title of the job",
-            "example" : "Java Developer"
-          },
-          "companyName" : {
-            "type" : "string",
-            "description" : "Name of the company",
-            "example" : "Example Ltd"
-          },
-          "location" : {
-            "type" : "string",
-            "description" : "Job location",
-            "example" : "Dorking"
-          },
-          "cvDocumentId" : {
-            "type" : "string",
-            "description" : "ID of the generated CV document (reference only)",
-            "example" : "cv-123"
-          },
-          "coverLetterDocumentId" : {
-            "type" : "string",
-            "description" : "ID of the generated cover letter document (reference only)",
-            "example" : "cl-456"
-          },
-          "cvDocumentReference" : {
-            "$ref" : "#/components/schemas/DocumentVersionReference"
-          },
-          "coverLetterDocumentReference" : {
-            "$ref" : "#/components/schemas/DocumentVersionReference"
-          },
-          "applicationUsedCvDocumentReference" : {
-            "$ref" : "#/components/schemas/DocumentVersionReference"
-          },
-          "applicationUsedCoverLetterDocumentReference" : {
-            "$ref" : "#/components/schemas/DocumentVersionReference"
-          },
-          "applicationUsedAt" : {
-            "type" : "string",
-            "description" : "Timestamp when application-used references were frozen",
-            "format" : "date-time"
-          },
-          "status" : {
-            "type" : "string",
-            "description" : "Current application status",
-            "example" : "DOCUMENTS_GENERATED",
-            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
-          },
-          "createdAt" : {
-            "type" : "string",
-            "description" : "Timestamp when the record was created",
-            "format" : "date-time"
-          },
-          "updatedAt" : {
-            "type" : "string",
-            "description" : "Timestamp when the record was last updated",
-            "format" : "date-time"
-          },
-          "appliedAt" : {
-            "type" : "string",
-            "description" : "Timestamp when the application was submitted (null if not yet applied)",
-            "format" : "date-time"
-          },
-          "version" : {
-            "type" : "integer",
-            "description" : "Monotonic record version for optimistic concurrency",
-            "format" : "int64",
-            "example" : 3
-          }
-        },
-        "description" : "Response containing application record details"
-      },
-      "DocumentEvidenceProvenance" : {
-        "type" : "object",
-        "properties" : {
-          "profileRevisionId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "profileContentDigest" : {
-            "type" : "string"
-          },
-          "evidenceSnapshotId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "evidenceSnapshotDigest" : {
-            "type" : "string"
-          },
-          "evidenceRevisions" : {
-            "type" : "array",
-            "items" : {
-              "$ref" : "#/components/schemas/EvidenceRevisionReference"
-            }
-          },
-          "sectionOrder" : {
-            "type" : "array",
-            "items" : {
-              "type" : "string",
-              "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
-            }
-          },
-          "claimLedger" : {
-            "$ref" : "#/components/schemas/ValidatedClaimLedger"
-          },
-          "generatedAt" : {
-            "type" : "string",
-            "format" : "date-time"
-          }
-        },
-        "description" : "Immutable profile, evidence-snapshot and claim provenance\nretained with an exact document version.\n"
-      },
-      "DocumentVersionReference" : {
-        "type" : "object",
-        "properties" : {
-          "documentId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "documentFamilyId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "jobId" : {
-            "type" : "string"
-          },
-          "documentType" : {
-            "type" : "string",
-            "enum" : [ "CV", "COVER_LETTER" ]
-          },
-          "version" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "contentSha256" : {
-            "type" : "string"
-          },
-          "evidenceProvenance" : {
-            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
-          },
-          "groundingState" : {
-            "type" : "string",
-            "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
-          },
-          "parentDocumentId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "parentDocumentVersion" : {
-            "type" : "integer",
-            "format" : "int32"
-          }
-        },
-        "description" : "Canonical immutable Document Store version descriptor"
-      },
-      "EvidenceRevisionReference" : {
-        "type" : "object",
-        "properties" : {
-          "entryId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "revisionId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "revisionNumber" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "category" : {
-            "type" : "string",
-            "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
-          },
-          "contentDigest" : {
-            "type" : "string"
-          }
-        },
-        "description" : "Exact immutable evidence revision selected for a document"
-      },
-      "ValidatedClaimLedger" : {
-        "type" : "object",
-        "properties" : {
-          "ledgerId" : {
-            "type" : "string",
-            "format" : "uuid"
-          },
-          "ledgerSha256" : {
-            "type" : "string"
-          },
-          "policyVersion" : {
-            "type" : "string"
-          },
-          "parserVersion" : {
-            "type" : "string"
-          }
-        },
-        "description" : "Non-sensitive identity and digest of the exact claim ledger\naccepted by generation validation.\n"
-      },
       "WithdrawGeneratedApplicationResponse" : {
         "type" : "object",
         "properties" : {
@@ -1759,29 +1949,6 @@
           }
         },
         "description" : "Request to update the status of an application"
-      },
-      "ErrorResponse" : {
-        "required" : [ "message", "status", "timestamp" ],
-        "type" : "object",
-        "properties" : {
-          "status" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "message" : {
-            "type" : "string"
-          },
-          "timestamp" : {
-            "type" : "string",
-            "format" : "date-time"
-          },
-          "errors" : {
-            "type" : "array",
-            "items" : {
-              "type" : "string"
-            }
-          }
-        }
       },
       "SecurityErrorResponse" : {
         "required" : [ "code", "message" ],
