@@ -1498,6 +1498,120 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void retainedResponseDeadlineRecoveryRenewsAndResumesWithoutAnotherProviderCall() {
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unprocessable Entity",
+                org.springframework.http.HttpHeaders.EMPTY,
+                new byte[0],
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+        var rejected = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "retained-response-deadline-recovery-1",
+                selectionRequest());
+
+        UUID recoveryReservation = UUID.fromString(
+                "20000000-0000-0000-0000-000000000098");
+        Map<String, Object> replay = new LinkedHashMap<>();
+        replay.put("outcome", "ACCEPTED");
+        replay.put("providerInvocationCount", 0);
+        replay.put("diagnostic", null);
+        Map<String, Object> draft = new LinkedHashMap<>(
+                generated(rejected.operationId()));
+        draft.put("usage", Map.of(
+                "inputTokens", 30_945,
+                "outputTokens", 6_853,
+                "totalTokens", 37_798));
+        replay.put("draft", draft);
+        when(downstream.replayRejectedGeneration(
+                eq(OWNER), eq(rejected.operationId()), anyMap()))
+                .thenReturn(replay);
+        when(downstream.reserveRetainedResponseRecovery(
+                OWNER, rejected.operationId(), 37_798))
+                .thenReturn(Map.of(
+                        "reservationId",
+                        recoveryReservation.toString(),
+                        "status", "RESERVED"));
+        doAnswer(invocation -> {
+                    jdbc.update("""
+                            UPDATE generation_operations
+                               SET deadline_at = ?
+                             WHERE id = ? AND owner_id = ?
+                            """,
+                            OffsetDateTime.ofInstant(
+                                    Instant.now().minusSeconds(1),
+                                    ZoneOffset.UTC),
+                            rejected.operationId(),
+                            OWNER);
+                    return null;
+                })
+                .when(downstream)
+                .commit(OWNER, recoveryReservation, 37_798);
+
+        AtomicReference<Runnable> initialWork = new AtomicReference<>();
+        reset(workScheduler);
+        doAnswer(invocation -> {
+                    initialWork.set(
+                            invocation.getArgument(2, Runnable.class));
+                    return true;
+                })
+                .when(workScheduler)
+                .submit(any(), anyString(), any(Runnable.class));
+
+        service.recoverRejectedGeneration(
+                OWNER, rejected.operationId());
+        assertNotNull(initialWork.get());
+        initialWork.get().run();
+        var deadlineRecovery = service.get(
+                OWNER, rejected.operationId());
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                deadlineRecovery.state());
+        assertEquals(
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                deadlineRecovery.failureCode());
+
+        AtomicReference<Runnable> resumedWork = new AtomicReference<>();
+        reset(workScheduler);
+        doAnswer(invocation -> {
+                    resumedWork.set(
+                            invocation.getArgument(2, Runnable.class));
+                    return true;
+                })
+                .when(workScheduler)
+                .submit(any(), anyString(), any(Runnable.class));
+
+        var prepared = service.recoverRejectedGeneration(
+                OWNER, rejected.operationId());
+        assertEquals(
+                GenerationOperationState.CREDIT_COMMITTED,
+                prepared.state());
+        assertNull(prepared.failureCode());
+        assertTrue(prepared.deadlineAt().isAfter(Instant.now()));
+        assertNotNull(resumedWork.get());
+
+        resumedWork.get().run();
+        var completed = service.get(
+                OWNER, rejected.operationId());
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                completed.state());
+        verify(downstream, times(1)).generate(
+                anyString(), any(), anyMap());
+        verify(downstream, times(1)).replayRejectedGeneration(
+                eq(OWNER), eq(rejected.operationId()), anyMap());
+        verify(downstream, times(1))
+                .reserveRetainedResponseRecovery(
+                        OWNER, rejected.operationId(), 37_798);
+        verify(downstream, times(1)).commit(
+                OWNER, recoveryReservation, 37_798);
+    }
+
+    @Test
     void releasesCreditWhenTheSuccessfulResponseContractIsInvalid() {
         doReturn(Map.of("unexpected", "response"))
                 .when(downstream)
