@@ -234,6 +234,8 @@ public class DurableGenerationService {
         requireOwner(ownerId);
         GenerationOperation operation = required(operationId, ownerId);
         if (operation.data().containsKey(RETAINED_RESPONSE_RECOVERY)) {
+            operation = repository.prepareRetryableReplay(
+                    operation, deadline);
             if (!operation.state().terminal()) {
                 submitStart(operation, ownerId, null);
             }
