@@ -236,7 +236,8 @@ public class DurableGenerationService {
         if (operation.data().containsKey(RETAINED_RESPONSE_RECOVERY)) {
             operation = repository.prepareRetryableReplay(
                     operation, deadline);
-            if (!operation.state().terminal()) {
+            if (!operation.state().terminal()
+                    || recoverableApplicationConflict(operation)) {
                 submitStart(operation, ownerId, null);
             }
             return response(operation);

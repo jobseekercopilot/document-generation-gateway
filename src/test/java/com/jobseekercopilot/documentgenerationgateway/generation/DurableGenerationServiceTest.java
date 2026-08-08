@@ -1682,6 +1682,125 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void retainedResponseOperatorRecoveryResumesApplicationLinkConflict() {
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Unprocessable Entity",
+                org.springframework.http.HttpHeaders.EMPTY,
+                new byte[0],
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .generate(anyString(), any(), anyMap());
+        var rejected = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "retained-application-link-recovery-1",
+                selectionRequest());
+
+        UUID recoveryReservation = UUID.fromString(
+                "20000000-0000-0000-0000-000000000097");
+        Map<String, Object> replay = new LinkedHashMap<>();
+        replay.put("outcome", "ACCEPTED");
+        replay.put("providerInvocationCount", 0);
+        replay.put("diagnostic", null);
+        Map<String, Object> draft = new LinkedHashMap<>(
+                generated(rejected.operationId()));
+        draft.put("usage", Map.of(
+                "inputTokens", 30_945,
+                "outputTokens", 6_853,
+                "totalTokens", 37_798));
+        replay.put("draft", draft);
+        when(downstream.replayRejectedGeneration(
+                eq(OWNER), eq(rejected.operationId()), anyMap()))
+                .thenReturn(replay);
+        when(downstream.reserveRetainedResponseRecovery(
+                OWNER, rejected.operationId(), 37_798))
+                .thenReturn(Map.of(
+                        "reservationId",
+                        recoveryReservation.toString(),
+                        "status", "RESERVED"));
+        HttpClientErrorException applicationConflict =
+                HttpClientErrorException.create(
+                        HttpStatus.CONFLICT,
+                        "Conflict",
+                        org.springframework.http.HttpHeaders.EMPTY,
+                        """
+                        {"status":409,"message":"An application for this canonical job is already tracked for the owner."}
+                        """.getBytes(
+                                java.nio.charset.StandardCharsets.UTF_8),
+                        java.nio.charset.StandardCharsets.UTF_8);
+        doThrow(applicationConflict)
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+        when(downstream.applications(OWNER))
+                .thenThrow(applicationConflict);
+
+        service.recoverRejectedGeneration(
+                OWNER, rejected.operationId());
+        var linkRecovery = service.get(
+                OWNER, rejected.operationId());
+        assertEquals(
+                GenerationOperationState.RECOVERY_REQUIRED,
+                linkRecovery.state());
+        assertEquals(
+                "APPLICATION_LINK_RECOVERY_REQUIRED",
+                linkRecovery.failureCode());
+
+        reset(downstream);
+        doThrow(applicationConflict)
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+        when(downstream.applications(OWNER)).thenReturn(List.of(
+                Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED",
+                        "cvDocumentId", UUID.randomUUID().toString(),
+                        "coverLetterDocumentId",
+                                UUID.randomUUID().toString(),
+                        "version", 3)));
+        when(downstream.updateApplicationDocumentSelections(
+                OWNER,
+                APPLICATION_ID,
+                rejected.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
+                COVER_LETTER_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "status", "DOCUMENTS_GENERATED",
+                        "version", 4));
+
+        service.recoverRejectedGeneration(
+                OWNER, rejected.operationId());
+        var completed = service.get(
+                OWNER, rejected.operationId());
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                completed.state());
+        assertEquals(APPLICATION_ID, completed.applicationId());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+        verify(downstream, never())
+                .reserveRetainedResponseRecovery(
+                        anyString(), any(), anyLong());
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong());
+        verify(downstream).updateApplicationDocumentSelections(
+                OWNER,
+                APPLICATION_ID,
+                rejected.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
+                COVER_LETTER_DOCUMENT_ID);
+    }
+
+    @Test
     void releasesCreditWhenTheSuccessfulResponseContractIsInvalid() {
         doReturn(Map.of("unexpected", "response"))
                 .when(downstream)
