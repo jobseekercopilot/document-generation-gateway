@@ -1239,7 +1239,20 @@ public class DurableGenerationService {
                                     "coverLetterDocumentId"))) {
                 return application;
             }
-            throw conflict;
+            return bounded(
+                    operation,
+                    () -> downstream.updateApplicationDocumentSelections(
+                            operation.ownerId(),
+                            applicationId,
+                            operation.id()
+                                    + ":application-document-selections",
+                            number(application, "version").longValue(),
+                            requiredUuid(
+                                    operation.data(),
+                                    "cvDocumentId"),
+                            requiredUuid(
+                                    operation.data(),
+                                    "coverLetterDocumentId")));
         }
         if (!"SAVED".equals(status)) {
             throw conflict;

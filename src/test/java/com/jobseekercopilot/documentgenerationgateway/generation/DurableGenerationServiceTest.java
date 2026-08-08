@@ -290,6 +290,76 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void relinksNewDocumentsToAnExistingUnappliedGeneratedApplication() {
+        var generated = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "existing-generated-application-1",
+                selectionRequest());
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.CONFLICT,
+                "Conflict",
+                org.springframework.http.HttpHeaders.EMPTY,
+                """
+                {"status":409,"message":"An application for this canonical job is already tracked for the owner."}
+                """.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+        when(downstream.applications(OWNER)).thenReturn(List.of(
+                Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED",
+                        "cvDocumentId", UUID.randomUUID().toString(),
+                        "coverLetterDocumentId",
+                                UUID.randomUUID().toString(),
+                        "version", 3)));
+        when(downstream.updateApplicationDocumentSelections(
+                OWNER,
+                APPLICATION_ID,
+                generated.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
+                COVER_LETTER_DOCUMENT_ID))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "DOCUMENTS_GENERATED",
+                        "cvDocumentId", CV_DOCUMENT_ID.toString(),
+                        "coverLetterDocumentId",
+                                COVER_LETTER_DOCUMENT_ID.toString(),
+                        "version", 4));
+
+        var completed = approveAndAwait(
+                OWNER,
+                generated.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                completed.state());
+        assertEquals(APPLICATION_ID, completed.applicationId());
+        verify(downstream).updateApplicationDocumentSelections(
+                OWNER,
+                APPLICATION_ID,
+                generated.operationId()
+                        + ":application-document-selections",
+                3,
+                CV_DOCUMENT_ID,
+                COVER_LETTER_DOCUMENT_ID);
+        verify(downstream, never()).updateApplicationStatus(
+                anyString(), any(), anyString(), anyLong());
+        verify(downstream, times(1)).generate(
+                anyString(), any(), anyMap());
+    }
+
+    @Test
     void startReturnsPersistedOperationBeforeQueuedWorkRuns() {
         AtomicReference<Runnable> queued = new AtomicReference<>();
         reset(workScheduler);
