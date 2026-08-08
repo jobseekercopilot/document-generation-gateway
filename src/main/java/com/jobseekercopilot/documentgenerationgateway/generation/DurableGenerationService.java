@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -1325,8 +1326,47 @@ public class DurableGenerationService {
                 bounded(requiredJobText(job, "title", "jobTitle"), 160));
         result.put("company",
                 bounded(requiredJobText(job, "company", "companyName"), 160));
-        result.put("description",
-                bounded(requiredText(job, "description"), 12000));
+        String description = bounded(
+                requiredText(job, "description"),
+                12000);
+        String descriptionCompleteness = firstText(
+                job.get("descriptionCompleteness"));
+        if (descriptionCompleteness == null) {
+            descriptionCompleteness = looksLikeDescriptionPreview(description)
+                    ? "PREVIEW"
+                    : "UNKNOWN";
+        }
+        if (!Set.of("FULL", "PREVIEW", "USER_CONFIRMED", "UNKNOWN")
+                .contains(descriptionCompleteness)) {
+            throw new IllegalStateException(
+                    "Job Service returned an invalid description completeness state.");
+        }
+        if (!Set.of("FULL", "USER_CONFIRMED")
+                .contains(descriptionCompleteness)) {
+            throw new GenerationSourceException(
+                    "JOB_DESCRIPTION_REVIEW_REQUIRED",
+                    "Review and confirm the complete job advert before generation; no AI request was made.",
+                    true);
+        }
+        result.put("description", description);
+        result.put("descriptionCompleteness", descriptionCompleteness);
+        putBounded(result, "advertiserName",
+                firstText(job.get("advertiserName"), job.get("companyName"), job.get("company")),
+                160);
+        String advertiserType = firstText(job.get("advertiserType"));
+        if (advertiserType == null) {
+            advertiserType = "UNKNOWN";
+        }
+        if (!Set.of("EMPLOYER", "RECRUITER", "UNKNOWN")
+                .contains(advertiserType)) {
+            throw new IllegalStateException(
+                    "Job Service returned an invalid advertiser type.");
+        }
+        result.put("advertiserType", advertiserType);
+        putBounded(result, "hiringOrganisationName",
+                job.get("hiringOrganisationName"), 160);
+        putBounded(result, "applicationContactName",
+                job.get("applicationContactName"), 160);
         putBounded(result, "location", job.get("location"), 160);
         putBounded(result, "employmentType",
                 firstText(
@@ -1340,6 +1380,14 @@ public class DurableGenerationService {
             result.put("postedDate", postedDate);
         }
         return result;
+    }
+
+    private boolean looksLikeDescriptionPreview(String description) {
+        String normalized = description.trim();
+        return normalized.length() < 600
+                || normalized.endsWith("...")
+                || normalized.endsWith("…")
+                || normalized.matches("(?is).*\\bTHE\\s+(?:ROL|ROLE)\\s*$");
     }
 
     private String isoDate(String value) {

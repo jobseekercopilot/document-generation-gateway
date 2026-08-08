@@ -2120,6 +2120,61 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void stopsBeforeCreditReservationWhenTheSavedJobContainsOnlyAPreview() {
+        Map<String, Object> savedJob = new LinkedHashMap<>(
+                savedJobResponse("SNAPSHOT"));
+        Map<String, Object> job = new LinkedHashMap<>(
+                (Map<String, Object>) savedJob.get("job"));
+        job.put("description", "Short provider preview...");
+        job.put("descriptionCompleteness", "PREVIEW");
+        savedJob.put("job", job);
+        when(downstream.savedJob(SAVED_JOB_ID, AUTHORIZATION))
+                .thenReturn(savedJob);
+
+        var result = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "preview-job-1",
+                selectionRequest());
+
+        assertEquals(GenerationOperationState.CREATED, result.state());
+        assertEquals(
+                "JOB_DESCRIPTION_REVIEW_REQUIRED",
+                result.failureCode());
+        verify(downstream, never()).estimate(anyString(), anyMap());
+        verify(downstream, never()).reserve(anyString(), any(), anyLong());
+        verify(downstream, never()).generate(anyString(), any(), anyMap());
+    }
+
+    @Test
+    void stopsBeforeCreditReservationWhenAdvertCompletenessIsUnknown() {
+        Map<String, Object> savedJob = new LinkedHashMap<>(
+                savedJobResponse("SNAPSHOT"));
+        Map<String, Object> job = new LinkedHashMap<>(
+                (Map<String, Object>) savedJob.get("job"));
+        job.remove("descriptionCompleteness");
+        savedJob.put("job", job);
+        when(downstream.savedJob(SAVED_JOB_ID, AUTHORIZATION))
+                .thenReturn(savedJob);
+
+        var result = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "unknown-job-1",
+                selectionRequest());
+
+        assertEquals(GenerationOperationState.CREATED, result.state());
+        assertEquals(
+                "JOB_DESCRIPTION_REVIEW_REQUIRED",
+                result.failureCode());
+        verify(downstream, never()).estimate(anyString(), anyMap());
+        verify(downstream, never()).reserve(anyString(), any(), anyLong());
+        verify(downstream, never()).generate(anyString(), any(), anyMap());
+    }
+
+    @Test
     void cancellationAfterReplaySafeFailureIsPersistedAndDeterministic() {
         doThrow(new ResourceAccessException(
                         "estimate temporarily unavailable"))
@@ -2277,17 +2332,25 @@ class DurableGenerationServiceTest {
                         + "a".repeat(64),
                 "contentSha256", "a".repeat(64),
                 "sourceState", sourceState,
-                "job", Map.of(
-                        "id", "provider-job-1",
-                        "canonicalJobId", "canonical-job-1",
-                        "provider", "REED",
-                        "externalJobId", "reed-1",
-                        "title", "Java Developer",
-                        "company", "Example Ltd",
-                        "location", "London",
-                        "employmentType", "FULL_TIME",
-                        "postedDate", postedDate,
-                        "description", "Build reliable services."));
+                "job", Map.ofEntries(
+                        Map.entry("id", "provider-job-1"),
+                        Map.entry("canonicalJobId", "canonical-job-1"),
+                        Map.entry("provider", "REED"),
+                        Map.entry("externalJobId", "reed-1"),
+                        Map.entry("title", "Java Developer"),
+                        Map.entry("company", "Example Ltd"),
+                        Map.entry("advertiserName", "Example Ltd"),
+                        Map.entry("advertiserType", "EMPLOYER"),
+                        Map.entry("location", "London"),
+                        Map.entry("employmentType", "FULL_TIME"),
+                        Map.entry("postedDate", postedDate),
+                        Map.entry(
+                                "description",
+                                "Build and launch reliable production services with a collaborative product team. "
+                                        .repeat(10)),
+                        Map.entry(
+                                "descriptionCompleteness",
+                                "USER_CONFIRMED")));
     }
 
     private Map<String, Object> generated(UUID operationId) {

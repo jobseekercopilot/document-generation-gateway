@@ -878,17 +878,22 @@ class GenerationOperationRepositoryPostgresTest {
                 "contentVersion", "sha256:" + "a".repeat(64),
                 "contentSha256", "a".repeat(64),
                 "sourceState", "SNAPSHOT",
-                "job", Map.of(
-                        "id", "postgres-provider-job",
-                        "canonicalJobId", "postgres-canonical-job",
-                        "provider", "TEST",
-                        "externalJobId", "postgres-job",
-                        "title", "Backend Developer",
-                        "company", "Example Ltd",
-                        "location", "London",
-                        "employmentType", "FULL_TIME",
-                        "postedDate", "2026-07-01",
-                        "description", "Build reliable services."));
+                "job", Map.ofEntries(
+                        Map.entry("id", "postgres-provider-job"),
+                        Map.entry("canonicalJobId", "postgres-canonical-job"),
+                        Map.entry("provider", "TEST"),
+                        Map.entry("externalJobId", "postgres-job"),
+                        Map.entry("title", "Backend Developer"),
+                        Map.entry("company", "Example Ltd"),
+                        Map.entry("advertiserName", "Example Ltd"),
+                        Map.entry("advertiserType", "EMPLOYER"),
+                        Map.entry("location", "London"),
+                        Map.entry("employmentType", "FULL_TIME"),
+                        Map.entry("postedDate", "2026-07-01"),
+                        Map.entry("description", "Build reliable services."),
+                        Map.entry(
+                                "descriptionCompleteness",
+                                "USER_CONFIRMED")));
     }
 
     private StartGenerationRequest selectionRequest() {
