@@ -1,5 +1,13 @@
 # Document Generation Gateway
 
+## Role in Job Seeker Copilot
+
+| Role | Called by | Calls | Data | Local port |
+|---|---|---|---|---:|
+| Browser-facing durable coordinator for generation, approval, export, free application-document upload/linking, download and replacement | Client Express BFF | Job, Profile, CV/Cover Letter, Payment, Store, Export and Tracker | PostgreSQL operation ledger | 8092 |
+
+See the central [document journey](https://docs.jobseekercopilot.com/journeys/documents/), [dependency map](https://docs.jobseekercopilot.com/architecture/dependency-maps/), and [data ownership](https://docs.jobseekercopilot.com/data/ownership/).
+
 Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
