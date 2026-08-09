@@ -61,7 +61,7 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    89d231e5c15b9bd4ce3b3d16064439488530b5f0 \
+    ac30b1badf21ef158d425eb1a94d37c23bcf23a5 \
     contracts/openapi.json \
     3d106cd0579721d68d683a980f7cdf7dd44b7ba2ce63cf21df158bd32db6fb86
 verify_source \
