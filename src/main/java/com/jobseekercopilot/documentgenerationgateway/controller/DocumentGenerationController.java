@@ -59,10 +59,13 @@ public class DocumentGenerationController {
             summary = "Start or replay durable draft generation from an owner-scoped saved job",
             description = "The same owner and Idempotency-Key return the same operation. "
                     + "The request accepts only an active canonical Job 2.0 snapshot, freezes "
-                    + "Job/Profile evidence and two explicit purpose-bound evidence selections, "
+                    + "Job/Profile evidence and one evidence selection for each explicitly "
+                    + "requested CV or cover-letter output, creates or resolves the saved "
+                    + "application before paid work, "
                     + "applies one deadline across downstream calls, "
-                    + "reserves AI Credit, performs at most one automatic model invocation "
-                    + "and stores DRAFT documents.")
+                    + "reserves AI Credit per selected output, performs at most one automatic "
+                    + "model invocation per output and stores independently usable DRAFT documents. "
+                    + "Legacy requests without outputs retain the paired workflow during migration.")
     @ApiResponses({
             @ApiResponse(responseCode = "202", description = "Operation accepted or replayed"),
             @ApiResponse(responseCode = "400", description = "Invalid idempotency key"),
@@ -98,8 +101,9 @@ public class DocumentGenerationController {
 
     @PostMapping("/operations/{operationId}/approve")
     @Operation(
-            summary = "Approve exact drafts and complete export and Tracker creation",
-            description = "Approval must name the exact DRAFT document IDs returned by this operation.")
+            summary = "Approve exact drafts and complete export and Tracker linkage",
+            description = "Approval must name exactly the DRAFT document IDs returned by this "
+                    + "operation; an unrequested or failed output remains absent.")
     public ResponseEntity<GenerationOperationResponse> approveOperation(
             @PathVariable UUID operationId,
             @Parameter(hidden = true) Authentication authentication,

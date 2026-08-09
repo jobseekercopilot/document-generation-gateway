@@ -3,6 +3,8 @@ package com.jobseekercopilot.documentgenerationgateway.generation;
 public enum GenerationOperationState {
     CREATED,
     SNAPSHOTS_RESOLVED,
+    APPLICATION_SAVED,
+    OUTPUT_READY,
     ESTIMATED,
     CREDIT_RESERVED,
     GENERATION_IN_PROGRESS,

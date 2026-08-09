@@ -9,7 +9,7 @@
     "license" : {
       "name" : "Proprietary and confidential"
     },
-    "version" : "4.5.0"
+    "version" : "4.7.0"
   },
   "servers" : [ {
     "url" : "http://localhost:8088",
@@ -67,16 +67,6 @@
           "required" : true
         },
         "responses" : {
-          "400" : {
-            "description" : "Invalid command, status or document reference",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "404" : {
             "description" : "Application record not found",
             "content" : {
@@ -87,8 +77,22 @@
               }
             }
           },
-          "503" : {
-            "description" : "Document reference validation unavailable",
+          "409" : {
+            "description" : "Stale record version or conflicting idempotency-key reuse",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "oneOf" : [ {
+                    "$ref" : "#/components/schemas/ApplicationVersionConflictResponse"
+                  }, {
+                    "$ref" : "#/components/schemas/ErrorResponse"
+                  } ]
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid command, status or document reference",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -107,16 +111,12 @@
               }
             }
           },
-          "409" : {
-            "description" : "Stale record version or conflicting idempotency-key reuse",
+          "503" : {
+            "description" : "Document reference validation unavailable",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "oneOf" : [ {
-                    "$ref" : "#/components/schemas/ApplicationVersionConflictResponse"
-                  }, {
-                    "$ref" : "#/components/schemas/ErrorResponse"
-                  } ]
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -554,12 +554,12 @@
           "required" : true
         },
         "responses" : {
-          "200" : {
-            "description" : "Status updated successfully",
+          "400" : {
+            "description" : "Invalid status value",
             "content" : {
               "application/json" : {
                 "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                  "$ref" : "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -574,16 +574,6 @@
               }
             }
           },
-          "404" : {
-            "description" : "Application record not found",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "403" : {
             "description" : "Authenticated identity is not permitted to perform the requested transition",
             "content" : {
@@ -594,8 +584,8 @@
               }
             }
           },
-          "400" : {
-            "description" : "Invalid status value",
+          "409" : {
+            "description" : "Invalid lifecycle transition or stale/concurrent record version",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -604,12 +594,22 @@
               }
             }
           },
-          "409" : {
-            "description" : "Invalid lifecycle transition or stale/concurrent record version",
+          "404" : {
+            "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Status updated successfully",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
                 }
               }
             }
@@ -1082,22 +1082,22 @@
           }
         } ],
         "responses" : {
-          "200" : {
-            "description" : "Ordered activity page returned",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/ApplicationHistoryResponse"
-                }
-              }
-            }
-          },
           "404" : {
             "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Ordered activity page returned",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationHistoryResponse"
                 }
               }
             }
@@ -1183,22 +1183,22 @@
           }
         } ],
         "responses" : {
-          "200" : {
-            "description" : "Owner-scoped reconciliation state returned",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/DocumentReferenceReconciliationResponse"
-                }
-              }
-            }
-          },
           "404" : {
             "description" : "Application record not found",
             "content" : {
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Owner-scoped reconciliation state returned",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReferenceReconciliationResponse"
                 }
               }
             }
@@ -1226,8 +1226,31 @@
           }
         } ],
         "responses" : {
+          "200" : {
+            "description" : "Owner-scoped application records",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                  }
+                }
+              }
+            }
+          },
           "401" : {
             "description" : "Missing, invalid or ambiguous authentication",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Authenticated identity lacks reader permission",
             "content" : {
               "application/json" : {
                 "schema" : {
@@ -1242,29 +1265,6 @@
               "application/json" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "200" : {
-            "description" : "Owner-scoped application records",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "type" : "array",
-                  "items" : {
-                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
-                  }
-                }
-              }
-            }
-          },
-          "403" : {
-            "description" : "Authenticated identity lacks reader permission",
-            "content" : {
-              "application/json" : {
-                "schema" : {
-                  "$ref" : "#/components/schemas/SecurityErrorResponse"
                 }
               }
             }
@@ -1596,6 +1596,26 @@
         },
         "description" : "Response containing application record details"
       },
+      "ApplicationVersionConflictResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "currentApplication" : {
+            "$ref" : "#/components/schemas/ApplicationRecordResponse"
+          }
+        },
+        "description" : "Stale application command response with the authoritative current record"
+      },
       "DocumentEvidenceProvenance" : {
         "type" : "object",
         "properties" : {
@@ -1733,26 +1753,6 @@
           }
         },
         "description" : "Non-sensitive identity and digest of the exact claim ledger\naccepted by generation validation.\n"
-      },
-      "ApplicationVersionConflictResponse" : {
-        "type" : "object",
-        "properties" : {
-          "status" : {
-            "type" : "integer",
-            "format" : "int32"
-          },
-          "message" : {
-            "type" : "string"
-          },
-          "timestamp" : {
-            "type" : "string",
-            "format" : "date-time"
-          },
-          "currentApplication" : {
-            "$ref" : "#/components/schemas/ApplicationRecordResponse"
-          }
-        },
-        "description" : "Stale application command response with the authoritative current record"
       },
       "UpdateDocumentAvailabilityRequest" : {
         "required" : [ "availability", "occurredAt" ],
@@ -2235,7 +2235,7 @@
           },
           "eventType" : {
             "type" : "string",
-            "enum" : [ "LEGACY_SNAPSHOT", "APPLICATION_CREATED", "STATUS_CHANGED", "DOCUMENT_REFERENCE_CHANGED", "DOCUMENT_REFERENCES_RECONCILED", "APPLICATION_DOCUMENTS_FROZEN", "GENERATED_APPLICATION_WITHDRAWN", "APPLICATION_DELETED" ]
+            "enum" : [ "LEGACY_SNAPSHOT", "APPLICATION_CREATED", "APPLICATION_SAVED", "STATUS_CHANGED", "DOCUMENT_REFERENCE_CHANGED", "DOCUMENT_REFERENCES_RECONCILED", "APPLICATION_DOCUMENT_SELECTED", "APPLICATION_DOCUMENT_SELECTION_CHANGED", "APPLICATION_DOCUMENTS_FROZEN", "GENERATED_APPLICATION_WITHDRAWN", "APPLICATION_DELETED" ]
           },
           "fromStatus" : {
             "type" : "string",

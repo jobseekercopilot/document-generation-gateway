@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.4.0", contract.path("info").path("version").asText());
+        assertEquals("2.5.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -153,6 +153,20 @@ class OpenApiExportTest {
                         objectMapper.getTypeFactory().constructCollectionType(
                                 java.util.List.class,
                                 String.class))));
+        JsonNode outputSelection = schemas.path("StartGenerationRequest")
+                .path("properties").path("outputs");
+        assertEquals(1, outputSelection.path("minItems").asInt());
+        assertEquals(2, outputSelection.path("maxItems").asInt());
+        assertTrue(outputSelection.path("uniqueItems").asBoolean());
+        assertEquals(
+                "[\"CV\",\"COVER_LETTER\"]",
+                outputSelection.path("items").path("enum").toString());
+        assertFalse(schemas.path("ApproveGenerationRequest")
+                .has("required"));
+        assertTrue(schemas.path("GenerationOperationResponse")
+                .path("properties").has("requestedOutputs"));
+        assertTrue(schemas.path("GenerationOperationResponse")
+                .path("properties").has("outputResults"));
         assertEquals(
                 java.util.Set.of("purpose", "entryIds", "sectionOrder"),
                 new java.util.HashSet<>(objectMapper.convertValue(

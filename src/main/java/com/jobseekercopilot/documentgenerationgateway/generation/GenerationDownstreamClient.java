@@ -1,6 +1,7 @@
 package com.jobseekercopilot.documentgenerationgateway.generation;
 
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -16,9 +17,20 @@ public interface GenerationDownstreamClient {
 
     long estimate(String ownerId, Map<String, Object> request);
 
+    long estimateSelected(
+            String ownerId,
+            DocumentPurpose output,
+            Map<String, Object> request);
+
     Map<String, Object> reserve(
             String ownerId,
             UUID operationId,
+            long estimatedTokens);
+
+    Map<String, Object> reserveSelected(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
             long estimatedTokens);
 
     Map<String, Object> reserveRetainedResponseRecovery(
@@ -29,6 +41,12 @@ public interface GenerationDownstreamClient {
     Map<String, Object> generate(
             String ownerId,
             UUID operationId,
+            Map<String, Object> request);
+
+    Map<String, Object> generateSelected(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
             Map<String, Object> request);
 
     Map<String, Object> replayRejectedGeneration(

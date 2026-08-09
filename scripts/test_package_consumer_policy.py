@@ -95,7 +95,7 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         pom = root / "pom.xml"
         pom.write_text(
             pom.read_text().replace(
-                "4.0.0-rev.6af4144f3292", "4.0.0-rev.000000000000"
+                "4.1.0-rev.2e79ca3963f4", "4.1.0-rev.000000000000"
             ),
             encoding="utf-8",
         )
