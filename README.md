@@ -30,6 +30,14 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `2.6.0` adds a durable owner/job/application/type-scoped free upload
+operation for one PDF or DOCX. It sends bytes only to Document Store's secure
+containerised scan/extraction path, retains no document content in the Gateway,
+and asks Application Tracker to independently verify and atomically select the
+exact clean, approved, available immutable version. Stable operation-derived
+keys make Store and Tracker retries convergent while preserving the unaffected
+sibling selection. The path does not call Payment, CV/Cover Letter, Document
+Export or an LLM.
 Version `2.4.0` exposes owner-scoped per-version archive, restore and
 recoverable-delete orchestration plus content-free draft/frozen application
 associations. Family history carries `PURGED` tombstones, stable unavailable
@@ -74,7 +82,7 @@ Job `2.0.0` and Payment `3.0.0`, plus producer-owned clients for User Profile
 `1.3.0` and CV/Cover Letter `3.4.0`. The raw
 Authentication, Document Store, Application Tracker and replacement-upload
 adapters are also checked against their pinned producer contracts. The durable
-path consumes Store `3.3.0`, Application Tracker `4.5.0` and Export `3.0.0`
+path consumes Store `4.0.0`, Application Tracker `4.7.0` and Export `3.0.0`
 through focused handwritten
 adapters, while replacement flows retain the immutable Export `2.0.0` client.
 Generated sources and binaries are build output and are not committed. See

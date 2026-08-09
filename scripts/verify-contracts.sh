@@ -85,9 +85,9 @@ verify_source \
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
-    e5550c1bbb916f241b89e7cba4635b3b5b25263c \
+    fa202573b5a60dc47875c4c663bb91d33b89187f \
     contracts/openapi.json \
-    e521181e393d87919339d56a40d1fad2ae53d7d6dda2959b90508f405d5968af
+    6470eb9e6770903922cc4cd6d841d72a51b362fe4b9146d20f8f2576f15d659c
 verify_source \
     job-service \
     jobseekercopilot/job-service \
@@ -256,7 +256,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.3.0") and
+    (.info.version == "4.0.0") and
     (.paths["/api/v1/documents/{id}"].get.operationId == "getDocumentById") and
     (.paths["/api/v1/documents"].post.operationId == "createDocument") and
     (.paths["/api/v1/documents/{documentId}/approve"].patch.operationId
@@ -271,6 +271,10 @@ jq -e '
         == "getDocumentFamilyHistory") and
     (.paths["/api/v1/documents/families/{documentFamilyId}/current"].patch.operationId
         == "selectFamilyCurrent") and
+    (.paths["/api/v1/applications/{applicationId}/documents/{documentType}/uploads"].post.operationId
+        == "upload") and
+    (.paths["/api/v1/application-document-uploads/{operationId}"].get.operationId
+        == "get") and
     ([.paths["/api/v1/documents/{id}"].get,
       .paths["/api/v1/documents"].post,
       .paths["/api/v1/documents/{documentId}/approve"].patch,
@@ -298,6 +302,15 @@ jq -e '
     (.paths["/api/v1/documents/{generatedDocumentId}/artifacts/{artifactId}/download"].get.responses["200"].headers
         | has("Content-Disposition") and has("Content-Length") and
           has("X-Content-Type-Options") and has("Cache-Control") and has("Pragma")) and
+    (.paths["/api/v1/applications/{applicationId}/documents/{documentType}/uploads"].post
+        | (.security | any(has("serviceToken"))) and
+          (.requestBody.content["multipart/form-data"].schema.required
+              | index("file") != null) and
+          (.parameters | any(
+              .name == "Idempotency-Key" and .in == "header" and
+              .required == true) and
+            any(.name == "jobId" and .in == "query" and .required == true) and
+            any(.name == "fileType" and .in == "query" and .required == true))) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and
     (.components.securitySchemes.serviceToken.in == "header") and
     (.components.securitySchemes.serviceToken.name == "X-Service-Token") and
@@ -313,6 +326,13 @@ jq -e '
         | has("id") and has("documentFamilyId") and has("version") and
           has("lifecycleState") and has("evidenceProvenance") and
           has("groundingState") and has("parentDocumentId")) and
+    (.components.schemas.ApplicationDocumentUploadResponse.properties
+        | has("operationId") and has("applicationId") and has("jobId") and
+          has("documentType") and has("fileType") and has("state") and
+          has("originalSha256") and has("originalSize") and
+          has("extractedTextSha256") and has("extractionState") and
+          has("documentId") and has("artifactId") and
+          (has("content") | not)) and
     (.components.schemas.DocumentVersionHistoryItem.properties
         | has("documentId") and has("version") and has("source") and
           has("lifecycle") and has("retention") and has("current") and

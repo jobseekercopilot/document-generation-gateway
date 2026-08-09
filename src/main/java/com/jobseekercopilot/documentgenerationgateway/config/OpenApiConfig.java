@@ -20,13 +20,14 @@ public class OpenApiConfig {
                                 .bearerFormat("JWT")))
                 .info(new Info()
                         .title("Jobseeker Copilot - Document Generation Gateway API")
-                        .version("2.5.0")
+                        .version("2.6.0")
                         .description("Durably coordinates owner-scoped canonical snapshots, "
                                 + "explicit requested outputs and purpose-bound evidence selections, "
                                 + "bounded independently usable tailored "
                                 + "document generation, approval, truthful document-family history "
                                 + "exact retained-artifact downloads and atomic application "
                                 + "document selections with truthful frozen selection/omission "
-                                + "state."));
+                                + "state, plus free secure application-document upload and exact "
+                                + "immutable-version linking."));
     }
 }

@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.5.0", contract.path("info").path("version").asText());
+        assertEquals("2.6.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -81,6 +81,15 @@ class OpenApiExportTest {
                 .contains("Idempotency-Key"));
         assertTrue(contract.path("paths")
                 .has("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download"));
+        JsonNode applicationUpload = contract.path("paths")
+                .path("/api/v1/document-generation/applications/{applicationId}/document-uploads")
+                .path("post");
+        assertTrue(applicationUpload.path("parameters").findValuesAsText("name")
+                .contains("Idempotency-Key"));
+        assertTrue(applicationUpload.path("requestBody")
+                .path("content").has("multipart/form-data"));
+        assertTrue(contract.path("paths").has(
+                "/api/v1/document-generation/application-document-uploads/{operationId}"));
         JsonNode downloadHeaders = contract.path("paths")
                 .path("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download")
                 .path("get")
@@ -105,6 +114,13 @@ class OpenApiExportTest {
                         .path("$ref")
                         .asText());
         JsonNode schemas = contract.path("components").path("schemas");
+        JsonNode uploadResponse = schemas
+                .path("ApplicationDocumentUploadOperationResponse")
+                .path("properties");
+        assertTrue(uploadResponse.has("operationId"));
+        assertTrue(uploadResponse.has("documentId"));
+        assertFalse(uploadResponse.has("content"));
+        assertFalse(uploadResponse.has("originalSha256"));
         assertTrue(schemas.path("DocumentVersionHistoryItem")
                 .path("properties").has("purgedAt"));
         assertTrue(schemas.path("DocumentVersionHistoryItem")
