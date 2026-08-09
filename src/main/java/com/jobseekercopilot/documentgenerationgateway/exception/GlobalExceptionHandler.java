@@ -74,6 +74,30 @@ public class GlobalExceptionHandler {
                 "message", exception.getMessage()));
     }
 
+    @ExceptionHandler(ApplicationUploadConflictException.class)
+    ResponseEntity<Map<String, String>> applicationUploadConflict(
+            ApplicationUploadConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "error", "APPLICATION_UPLOAD_CONFLICT",
+                "message", exception.getMessage()));
+    }
+
+    @ExceptionHandler(ApplicationUploadNotFoundException.class)
+    ResponseEntity<Map<String, String>> applicationUploadNotFound(
+            ApplicationUploadNotFoundException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                "error", "APPLICATION_UPLOAD_NOT_FOUND",
+                "message", exception.getMessage()));
+    }
+
+    @ExceptionHandler(ApplicationUploadTooLargeException.class)
+    ResponseEntity<Map<String, String>> applicationUploadTooLarge(
+            ApplicationUploadTooLargeException exception) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(Map.of(
+                "error", "APPLICATION_UPLOAD_TOO_LARGE",
+                "message", exception.getMessage()));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<Map<String, String>> invalidRequest(MethodArgumentNotValidException exception) {
         return ResponseEntity.badRequest().body(Map.of("error", "INVALID_REQUEST", "message", "Job is required"));
