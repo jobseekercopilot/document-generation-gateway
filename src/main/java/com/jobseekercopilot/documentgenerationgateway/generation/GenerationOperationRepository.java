@@ -407,8 +407,7 @@ public class GenerationOperationRepository {
             Instant now = Instant.now();
             int updated = jdbc.update("""
                     UPDATE generation_operations
-                       SET data_json = ?, failure_code = NULL,
-                           failure_message = NULL, updated_at = ?,
+                       SET data_json = ?, updated_at = ?,
                            version = version + 1
                      WHERE id = ? AND owner_id = ?
                        AND state = 'AWAITING_APPROVAL'

@@ -3,6 +3,7 @@ package com.jobseekercopilot.documentgenerationgateway.generation;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import com.jobseekercopilot.generated.userprofileservice.api.EvidenceSnapshotsApi;
 import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
 import com.jobseekercopilot.generated.userprofileservice.model.EvidenceCategory;
@@ -149,6 +150,29 @@ public class RestGenerationDownstreamClient
     }
 
     @Override
+    public long estimateSelected(
+            String ownerId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        Map<String, Object> response = post(
+                cvBaseUrl
+                        + "/api/v1/cv-cover-letter/drafts/"
+                        + output.name()
+                        + "/estimate",
+                serviceHeaders(
+                        credentials.cvCoverLetterServiceToken(),
+                        DOCUMENT_OWNER,
+                        ownerId),
+                request);
+        Number estimated = requiredNumber(response, "estimatedTokens");
+        if (estimated.longValue() < 1) {
+            throw new IllegalStateException(
+                    "CV service returned an invalid selected-output token estimate.");
+        }
+        return estimated.longValue();
+    }
+
+    @Override
     public Map<String, Object> reserve(
             String ownerId,
             UUID operationId,
@@ -165,6 +189,30 @@ public class RestGenerationDownstreamClient
                         "operationKey", operationId + ":reservation",
                         "referenceType", "GENERATION_OPERATION",
                         "referenceId", operationId.toString()));
+    }
+
+    @Override
+    public Map<String, Object> reserveSelected(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            long estimatedTokens) {
+        String outputKey = output == DocumentPurpose.CV
+                ? "cv"
+                : "cover-letter";
+        return post(
+                paymentBaseUrl + "/api/v1/payments/reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "feature", "CV_AND_COVER_LETTER_GENERATION",
+                        "estimatedTokens", estimatedTokens,
+                        "operationKey",
+                        operationId + ":" + outputKey + ":reservation",
+                        "referenceType", "GENERATION_OUTPUT",
+                        "referenceId", operationId + ":" + output.name()));
     }
 
     @Override
@@ -199,6 +247,25 @@ public class RestGenerationDownstreamClient
         headers.set("X-Generation-Operation-Id", operationId.toString());
         return post(
                 cvBaseUrl + "/api/v1/cv-cover-letter/drafts",
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> generateSelected(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.cvCoverLetterServiceToken(),
+                DOCUMENT_OWNER,
+                ownerId);
+        headers.set("X-Generation-Operation-Id", operationId.toString());
+        return post(
+                cvBaseUrl
+                        + "/api/v1/cv-cover-letter/drafts/"
+                        + output.name(),
                 headers,
                 request);
     }
@@ -361,22 +428,27 @@ public class RestGenerationDownstreamClient
                 ownerId);
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("Idempotency-Key", idempotencyKey);
+        Map<String, Object> cvSelection = documentSelection(cvDocumentId);
+        Map<String, Object> coverLetterSelection =
+                documentSelection(coverLetterDocumentId);
         return body(restTemplate.exchange(
                 trackerBaseUrl
                         + "/api/v1/applications/{applicationId}/document-selections",
                 HttpMethod.PUT,
                 new HttpEntity<>(
                         Map.of(
-                                "cvSelection", Map.of(
-                                        "state", "SELECTED",
-                                        "documentId", cvDocumentId),
-                                "coverLetterSelection", Map.of(
-                                        "state", "SELECTED",
-                                        "documentId", coverLetterDocumentId),
+                                "cvSelection", cvSelection,
+                                "coverLetterSelection", coverLetterSelection,
                                 "expectedVersion", expectedVersion),
                         headers),
                 Map.class,
                 applicationId));
+    }
+
+    private Map<String, Object> documentSelection(UUID documentId) {
+        return documentId == null
+                ? Map.of("state", "OMITTED")
+                : Map.of("state", "SELECTED", "documentId", documentId);
     }
 
     @Override

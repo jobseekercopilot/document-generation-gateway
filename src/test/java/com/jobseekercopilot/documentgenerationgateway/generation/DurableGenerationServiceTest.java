@@ -41,6 +41,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -66,6 +67,8 @@ class DurableGenerationServiceTest {
             UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID RESERVATION_ID =
             UUID.fromString("20000000-0000-0000-0000-000000000001");
+    private static final UUID COVER_LETTER_RESERVATION_ID =
+            UUID.fromString("20000000-0000-0000-0000-000000000002");
     private static final UUID CV_DOCUMENT_ID =
             UUID.fromString("30000000-0000-0000-0000-000000000001");
     private static final UUID COVER_LETTER_DOCUMENT_ID =
@@ -127,6 +130,12 @@ class DurableGenerationServiceTest {
                 first.coverLetterDocumentId());
         assertTrue(first.replaySafe());
         assertFalse(first.manualActionRequired());
+        Map<?, ?> persistedLegacyRequest = (Map<?, ?>) repository
+                .findByOwnerAndId(first.operationId(), OWNER)
+                .orElseThrow()
+                .data()
+                .get("evidenceSelectionRequest");
+        assertFalse(persistedLegacyRequest.containsKey("outputs"));
 
         var replay = startAndAwait(
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "generate-job-1",
@@ -186,6 +195,260 @@ class DurableGenerationServiceTest {
                 GenerationNotFoundException.class,
                 () -> service.get(
                         "different-owner", first.operationId()));
+    }
+
+    @Test
+    void generatesAndChargesOnlyTheExplicitlySelectedCv() {
+        stubSavedApplicationForSelectiveApproval();
+
+        StartGenerationRequest request = new StartGenerationRequest(
+                Set.of(DocumentPurpose.CV),
+                List.of(new DocumentEvidenceSelection(
+                        DocumentPurpose.CV,
+                        List.of(CV_EVIDENCE_ID),
+                        List.of(EvidenceSection.PROJECT))));
+
+        GenerationOperationResponse waiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "select-cv-only",
+                request);
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                waiting.state());
+        assertEquals(Set.of(DocumentPurpose.CV), waiting.requestedOutputs());
+        assertEquals(CV_DOCUMENT_ID, waiting.cvDocumentId());
+        assertNull(waiting.coverLetterDocumentId());
+        assertEquals(
+                "STORED",
+                ((Map<?, ?>) waiting.outputResults().get("CV"))
+                        .get("status"));
+        assertFalse(waiting.outputResults().containsKey("COVER_LETTER"));
+        assertFalse(waiting.outputResults().toString().contains("CV content"));
+        Map<?, ?> persistedSelectiveRequest = (Map<?, ?>) repository
+                .findByOwnerAndId(waiting.operationId(), OWNER)
+                .orElseThrow()
+                .data()
+                .get("evidenceSelectionRequest");
+        assertEquals(List.of("CV"), persistedSelectiveRequest.get("outputs"));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(downstream);
+        ArgumentCaptor<Map> savedApplication =
+                ArgumentCaptor.forClass(Map.class);
+        order.verify(downstream).createApplication(
+                eq(OWNER), anyString(), savedApplication.capture());
+        assertEquals("SAVED", savedApplication.getValue().get("initialStatus"));
+        assertEquals("EXTERNAL", savedApplication.getValue().get("provenance"));
+        assertFalse(savedApplication.getValue().containsKey("cvDocumentId"));
+        assertFalse(savedApplication.getValue()
+                .containsKey("coverLetterDocumentId"));
+        order.verify(downstream).estimateSelected(
+                eq(OWNER), eq(DocumentPurpose.CV), anyMap());
+        order.verify(downstream).reserveSelected(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), eq(300L));
+        order.verify(downstream).generateSelected(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
+        verify(downstream, never()).estimateSelected(
+                anyString(), eq(DocumentPurpose.COVER_LETTER), anyMap());
+        verify(downstream, never()).reserveSelected(
+                anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyLong());
+        verify(downstream, never()).generateSelected(
+                anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyMap());
+        verify(downstream, never()).estimate(anyString(), anyMap());
+        verify(downstream, never()).reserve(anyString(), any(), anyLong());
+        verify(downstream, never()).generate(anyString(), any(), anyMap());
+
+        GenerationOperationResponse completed = approveAndAwait(
+                OWNER,
+                waiting.operationId(),
+                new ApproveGenerationRequest(CV_DOCUMENT_ID, null));
+        assertEquals(GenerationOperationState.COMPLETED, completed.state());
+        verify(downstream).updateApplicationDocumentSelections(
+                eq(OWNER),
+                eq(APPLICATION_ID),
+                eq(waiting.operationId()
+                        + ":application-document-selections"),
+                eq(1L),
+                eq(CV_DOCUMENT_ID),
+                org.mockito.ArgumentMatchers.isNull());
+        verify(downstream, never()).updateApplicationStatus(
+                anyString(), any(), anyString(), anyLong());
+
+        startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "select-cv-only",
+                request);
+        verify(downstream, times(1)).generateSelected(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
+        verify(downstream, times(1)).commit(
+                eq(OWNER), any(), eq(300L));
+    }
+
+    @Test
+    void generatesOnlyAnExplicitlySelectedCoverLetter() {
+        stubSavedApplicationForSelectiveApproval();
+        StartGenerationRequest request = new StartGenerationRequest(
+                Set.of(DocumentPurpose.COVER_LETTER),
+                List.of(new DocumentEvidenceSelection(
+                        DocumentPurpose.COVER_LETTER,
+                        List.of(COVER_LETTER_EVIDENCE_ID),
+                        List.of(EvidenceSection.VOLUNTEERING))));
+
+        GenerationOperationResponse waiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "select-cover-letter-only",
+                request);
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                waiting.state());
+        assertNull(waiting.cvDocumentId());
+        assertEquals(
+                COVER_LETTER_DOCUMENT_ID,
+                waiting.coverLetterDocumentId());
+        verify(downstream, never()).generateSelected(
+                anyString(), any(), eq(DocumentPurpose.CV), anyMap());
+        verify(downstream).generateSelected(
+                eq(OWNER),
+                any(),
+                eq(DocumentPurpose.COVER_LETTER),
+                anyMap());
+    }
+
+    @Test
+    void preservesSuccessfulCvWhenSelectedCoverLetterFails() {
+        stubSavedApplicationForSelectiveApproval();
+        when(downstream.generateSelected(
+                anyString(),
+                any(),
+                eq(DocumentPurpose.COVER_LETTER),
+                anyMap()))
+                .thenThrow(HttpClientErrorException.create(
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Unprocessable Entity",
+                        org.springframework.http.HttpHeaders.EMPTY,
+                        new byte[0],
+                        java.nio.charset.StandardCharsets.UTF_8));
+
+        GenerationOperationResponse waiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "select-both-partial",
+                new StartGenerationRequest(
+                        Set.of(
+                                DocumentPurpose.CV,
+                                DocumentPurpose.COVER_LETTER),
+                        selectionRequest().documents()));
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                waiting.state());
+        assertEquals("PARTIAL_GENERATION", waiting.failureCode());
+        assertEquals(CV_DOCUMENT_ID, waiting.cvDocumentId());
+        assertNull(waiting.coverLetterDocumentId());
+        assertEquals(
+                "FAILED",
+                ((Map<?, ?>) waiting.outputResults()
+                        .get("COVER_LETTER")).get("status"));
+        verify(downstream).commit(OWNER, RESERVATION_ID, 300L);
+        verify(downstream).release(
+                eq(OWNER), any(), eq("GENERATION_REJECTED"));
+        verify(downstream, times(2)).generateSelected(
+                eq(OWNER), any(), any(DocumentPurpose.class), anyMap());
+        verify(downstream, times(2)).reserveSelected(
+                eq(OWNER), any(), any(DocumentPurpose.class), anyLong());
+
+        GenerationOperationResponse completed = approveAndAwait(
+                OWNER,
+                waiting.operationId(),
+                new ApproveGenerationRequest(CV_DOCUMENT_ID, null));
+        assertEquals(GenerationOperationState.COMPLETED, completed.state());
+        assertEquals("PARTIAL_GENERATION", completed.failureCode());
+    }
+
+    @Test
+    void preservesSuccessfulCvWhenSiblingEvidenceIsInvalid() {
+        stubSavedApplicationForSelectiveApproval();
+        when(downstream.evidenceSnapshot(
+                any(DocumentEvidenceSelection.class)))
+                .thenAnswer(invocation -> {
+                    DocumentEvidenceSelection requested =
+                            invocation.getArgument(0);
+                    if (requested.purpose()
+                            == DocumentPurpose.COVER_LETTER) {
+                        return Map.of("purpose", "COVER_LETTER");
+                    }
+                    return evidenceSnapshot(requested);
+                });
+
+        GenerationOperationResponse waiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "select-both-invalid-sibling-evidence",
+                new StartGenerationRequest(
+                        Set.of(
+                                DocumentPurpose.CV,
+                                DocumentPurpose.COVER_LETTER),
+                        selectionRequest().documents()));
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                waiting.state());
+        assertEquals(CV_DOCUMENT_ID, waiting.cvDocumentId());
+        assertNull(waiting.coverLetterDocumentId());
+        assertEquals("PARTIAL_GENERATION", waiting.failureCode());
+        assertEquals(
+                "FAILED",
+                ((Map<?, ?>) waiting.outputResults()
+                        .get("COVER_LETTER")).get("status"));
+        verify(downstream, never()).estimateSelected(
+                anyString(), eq(DocumentPurpose.COVER_LETTER), anyMap());
+        verify(downstream, never()).reserveSelected(
+                anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyLong());
+        verify(downstream, never()).generateSelected(
+                anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyMap());
+    }
+
+    @Test
+    void rejectsInvalidExplicitSelectionsBeforeAnyDownstreamCall() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.start(
+                        OWNER,
+                        AUTHORIZATION,
+                        SAVED_JOB_ID,
+                        "select-empty",
+                        new StartGenerationRequest(
+                                Set.of(), List.of())));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.start(
+                        OWNER,
+                        AUTHORIZATION,
+                        SAVED_JOB_ID,
+                        "select-mismatch",
+                        new StartGenerationRequest(
+                                Set.of(DocumentPurpose.CV),
+                                List.of(new DocumentEvidenceSelection(
+                                        DocumentPurpose.COVER_LETTER,
+                                        List.of(COVER_LETTER_EVIDENCE_ID),
+                                        List.of(EvidenceSection.VOLUNTEERING))))));
+
+        verify(downstream, never()).savedJob(any(), anyString());
+        verify(downstream, never()).estimateSelected(
+                anyString(), any(), anyMap());
+        verify(downstream, never()).reserveSelected(
+                anyString(), any(), any(), anyLong());
+        verify(downstream, never()).generateSelected(
+                anyString(), any(), any(), anyMap());
     }
 
     @Test
@@ -2241,16 +2504,32 @@ class DurableGenerationServiceTest {
                 "email", "alex@example.com"));
         when(downstream.estimate(anyString(), anyMap()))
                 .thenReturn(1000L);
+        when(downstream.estimateSelected(
+                anyString(), any(DocumentPurpose.class), anyMap()))
+                .thenReturn(300L);
         when(downstream.reserve(
                 anyString(), any(), anyLong()))
                 .thenReturn(Map.of(
                         "reservationId",
                         RESERVATION_ID.toString(),
                         "status", "RESERVED"));
+        when(downstream.reserveSelected(
+                anyString(), any(), any(DocumentPurpose.class), anyLong()))
+                .thenAnswer(invocation -> Map.of(
+                        "reservationId",
+                        (invocation.getArgument(2) == DocumentPurpose.CV
+                                ? RESERVATION_ID
+                                : COVER_LETTER_RESERVATION_ID).toString(),
+                        "status", "RESERVED"));
         when(downstream.generate(
                 anyString(), any(), anyMap()))
                 .thenAnswer(invocation ->
                         generated(invocation.getArgument(1)));
+        when(downstream.generateSelected(
+                anyString(), any(), any(DocumentPurpose.class), anyMap()))
+                .thenAnswer(invocation -> selectedGenerated(
+                        invocation.getArgument(1),
+                        invocation.getArgument(2)));
         when(downstream.createDocument(
                 anyString(), anyString(), anyMap()))
                 .thenAnswer(invocation ->
@@ -2271,6 +2550,33 @@ class DurableGenerationServiceTest {
                 .thenReturn(Map.of(
                         "id", APPLICATION_ID.toString(),
                         "status", "DOCUMENTS_GENERATED"));
+    }
+
+    private void stubSavedApplicationForSelectiveApproval() {
+        when(downstream.createApplication(
+                anyString(), anyString(), anyMap()))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 1));
+        when(downstream.applications(OWNER)).thenReturn(List.of(Map.of(
+                "id", APPLICATION_ID.toString(),
+                "canonicalJobId", "canonical-job-1",
+                "status", "SAVED",
+                "version", 1)));
+        when(downstream.updateApplicationDocumentSelections(
+                eq(OWNER),
+                eq(APPLICATION_ID),
+                anyString(),
+                eq(1L),
+                org.mockito.ArgumentMatchers.nullable(UUID.class),
+                org.mockito.ArgumentMatchers.nullable(UUID.class)))
+                .thenReturn(Map.of(
+                        "id", APPLICATION_ID.toString(),
+                        "canonicalJobId", "canonical-job-1",
+                        "status", "SAVED",
+                        "version", 2));
     }
 
     private GenerationOperationResponse startAndAwait(
@@ -2393,6 +2699,46 @@ class DurableGenerationServiceTest {
                                         "reviewText",
                                         "Grounded cover-letter claim"))),
                 "audit", Map.of("modelId", "fixture"));
+    }
+
+    private Map<String, Object> selectedGenerated(
+            UUID operationId,
+            DocumentPurpose output) {
+        return Map.ofEntries(
+                Map.entry("operationId", operationId.toString()),
+                Map.entry("outputType", output.name()),
+                Map.entry("inputSchemaVersion", "2.0"),
+                Map.entry("title", output == DocumentPurpose.CV
+                        ? "Tailored CV"
+                        : "Cover letter"),
+                Map.entry("content", output == DocumentPurpose.CV
+                        ? "CV content"
+                        : "Letter content"),
+                Map.entry("generationMetadata", Map.of(
+                        "releaseId", "release-1")),
+                Map.entry("usage", Map.of(
+                        "inputTokens", 200,
+                        "outputTokens", 100,
+                        "totalTokens", 300)),
+                Map.entry("claimLedger", Map.of(
+                        "ledgerId",
+                        "a0000000-0000-4000-8000-000000000001",
+                        "ledgerSha256", "c".repeat(64),
+                        "policyVersion", "2.0.0",
+                        "parserVersion", "3.0.0",
+                        "claims", List.of(Map.of(
+                                "claimId", "CLAIM-001",
+                                "disposition", "SUPPORTED",
+                                "evidenceIds", List.of(output
+                                        == DocumentPurpose.CV
+                                                ? "80000000-0000-4000-8000-000000000001"
+                                                : "80000000-0000-4000-8000-000000000002"),
+                                "contentPaths", List.of(output
+                                        == DocumentPurpose.CV
+                                                ? "cv.experience[0]"
+                                                : "coverLetter.paragraphs[1]"),
+                                "reviewText", "Grounded claim")))),
+                Map.entry("audit", Map.of("modelId", "fixture")));
     }
 
     private StartGenerationRequest selectionRequest() {

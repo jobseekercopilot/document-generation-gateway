@@ -27,7 +27,7 @@ PACKAGES = (
         "label": "CV and Cover Letter",
         "artifact_id": "cv-cover-letter-service-client",
         "version_property": "cv-cover-letter-client.version",
-        "version": "4.0.0-rev.6af4144f3292",
+        "version": "4.1.0-rev.2e79ca3963f4",
         "server_id": "github-cv-cover-letter",
         "registry": "https://maven.pkg.github.com/jobseekercopilot/cv-cover-letter-service",
         "generator_id": "generate-cv-cover-letter-client",

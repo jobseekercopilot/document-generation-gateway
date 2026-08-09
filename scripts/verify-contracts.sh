@@ -61,9 +61,9 @@ verify_source() {
 verify_source \
     application-tracker-service \
     jobseekercopilot/application-tracker-service \
-    5f9cfe4ec110a17862031588f5f9f0214b471fd0 \
+    89d231e5c15b9bd4ce3b3d16064439488530b5f0 \
     contracts/openapi.json \
-    cba90d68ee371ba323608243adc231efd17645a40f1b200cc15c82be76f3442d
+    3d106cd0579721d68d683a980f7cdf7dd44b7ba2ce63cf21df158bd32db6fb86
 verify_source \
     authentication-service \
     jobseekercopilot/authentication-service \
@@ -73,9 +73,9 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    6af4144f3292e61d14a25da943604c43a27693d4 \
+    2e79ca3963f49f15ecdfa15b7d288da78dfdf70a \
     contracts/openapi.json \
-    c4896052884cf4d3290afa864ec2747b088817a4164a1715bb5e4cbb7a1e6bea
+    ae08510ff3cd97d2d46922f050a56fd4d109f726bf687682fdf8f6ad23278f6d
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
@@ -146,7 +146,17 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "4.0.0") and
+    (.info.version == "4.1.0") and
+    (.paths["/api/v1/cv-cover-letter/drafts/{outputType}/estimate"].post.operationId
+        == "estimateSelectedDraft") and
+    (.paths["/api/v1/cv-cover-letter/drafts/{outputType}"].post.operationId
+        == "generateSelectedDraft") and
+    (.components.schemas.SelectedDraftGenerationRequest.required
+        | index("inputSchemaVersion") != null and
+          index("profile") != null and index("job") != null and
+          index("evidenceSnapshot") != null) and
+    (.components.schemas.SelectedDraftGenerationRequest.properties.inputSchemaVersion.pattern
+        == "2\\.0") and
     (.paths["/api/v1/cv-cover-letter/drafts/estimate"].post.operationId
         == "estimateDraft") and
     (.paths["/api/v1/cv-cover-letter/drafts"].post.operationId
@@ -328,7 +338,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "4.5.0") and
+    (.info.version == "4.7.0") and
     (.paths["/api/v1/applications/{id}"].get.operationId == "getApplicationById") and
     (.paths["/api/v1/applications/document/{documentId}"].get.operationId
         == "getApplicationByDocumentId") and
@@ -363,6 +373,11 @@ jq -e '
         | index("cvSelection") != null and
           index("coverLetterSelection") != null and
           index("expectedVersion") != null) and
+    (.components.schemas.CreateApplicationRequest.properties.initialStatus.enum
+        | index("SAVED") != null) and
+    (.components.schemas.ApplicationEventResponse.properties.eventType.enum
+        | index("APPLICATION_SAVED") != null and
+          index("APPLICATION_CREATED") != null) and
     (.components.schemas.DocumentSelectionCommand.properties.state.enum
         | index("SELECTED") != null and index("OMITTED") != null) and
     (.components.securitySchemes.serviceToken.type == "apiKey") and

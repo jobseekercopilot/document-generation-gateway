@@ -143,6 +143,59 @@ class RestGenerationDownstreamClientTest {
     }
 
     @Test
+    void selectedOutputEstimateUsesOnlyItsPurposeEndpoint() {
+        Map<String, Object> body = Map.of("inputSchemaVersion", "2.0");
+        when(restTemplate.exchange(
+                eq("http://cv/api/v1/cv-cover-letter/drafts/CV/estimate"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "estimatedTokens", 321L)));
+
+        assertEquals(
+                321L,
+                client.estimateSelected(
+                        OWNER, DocumentPurpose.CV, body));
+
+        HttpEntity<?> request = capturedPost(
+                "http://cv/api/v1/cv-cover-letter/drafts/CV/estimate");
+        assertSingleHeader(request, "X-Service-Token", CV_TOKEN);
+        assertSingleHeader(request, "X-Document-Owner", OWNER);
+        assertEquals(body, request.getBody());
+    }
+
+    @Test
+    void selectedOutputReservationHasAPurposeSpecificStableKey() {
+        UUID operationId = UUID.randomUUID();
+        when(restTemplate.exchange(
+                eq("http://payment/api/v1/payments/reservations"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "reservationId", UUID.randomUUID().toString())));
+
+        client.reserveSelected(
+                OWNER,
+                operationId,
+                DocumentPurpose.COVER_LETTER,
+                456L);
+
+        HttpEntity<?> request = capturedPost(
+                "http://payment/api/v1/payments/reservations");
+        Map<?, ?> body = (Map<?, ?>) request.getBody();
+        assertEquals(
+                operationId + ":cover-letter:reservation",
+                body.get("operationKey"));
+        assertEquals("GENERATION_OUTPUT", body.get("referenceType"));
+        assertEquals(
+                operationId + ":COVER_LETTER",
+                body.get("referenceId"));
+        assertEquals(456L, body.get("estimatedTokens"));
+    }
+
+    @Test
     void recoveryReservationUsesASeparateStableOperationKey() {
         UUID operationId = UUID.randomUUID();
         when(restTemplate.exchange(
@@ -195,6 +248,36 @@ class RestGenerationDownstreamClientTest {
                 "X-Generation-Operation-Id",
                 operationId.toString());
         assertNull(request.getHeaders().getFirst("X-Payment-Owner"));
+    }
+
+    @Test
+    void selectedGenerationBindsPurposeOwnerAndStableProviderIdentity() {
+        UUID providerOperationId = UUID.randomUUID();
+        Map<String, Object> body = Map.of("inputSchemaVersion", "2.0");
+        String url = "http://cv/api/v1/cv-cover-letter/drafts/COVER_LETTER";
+        when(restTemplate.exchange(
+                eq(url),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "operationId", providerOperationId.toString(),
+                        "outputType", "COVER_LETTER")));
+
+        client.generateSelected(
+                OWNER,
+                providerOperationId,
+                DocumentPurpose.COVER_LETTER,
+                body);
+
+        HttpEntity<?> request = capturedPost(url);
+        assertSingleHeader(request, "X-Service-Token", CV_TOKEN);
+        assertSingleHeader(request, "X-Document-Owner", OWNER);
+        assertSingleHeader(
+                request,
+                "X-Generation-Operation-Id",
+                providerOperationId.toString());
+        assertEquals(body, request.getBody());
     }
 
     @Test
@@ -348,6 +431,48 @@ class RestGenerationDownstreamClientTest {
                         "SELECTED",
                         "documentId",
                         coverLetterDocumentId),
+                body.get("coverLetterSelection"));
+    }
+
+    @Test
+    void atomicSelectionsRepresentMissingSiblingAsOmitted() {
+        UUID applicationId = UUID.randomUUID();
+        UUID cvDocumentId = UUID.randomUUID();
+        when(restTemplate.exchange(
+                eq("http://tracker/api/v1/applications/{applicationId}"
+                        + "/document-selections"),
+                eq(HttpMethod.PUT),
+                any(HttpEntity.class),
+                eq(Map.class),
+                eq(applicationId)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "id", applicationId.toString(),
+                        "status", "SAVED",
+                        "version", 8)));
+
+        client.updateApplicationDocumentSelections(
+                OWNER,
+                applicationId,
+                "operation-2:application-document-selections",
+                7,
+                cvDocumentId,
+                null);
+
+        ArgumentCaptor<HttpEntity> request =
+                ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(
+                eq("http://tracker/api/v1/applications/{applicationId}"
+                        + "/document-selections"),
+                eq(HttpMethod.PUT),
+                request.capture(),
+                eq(Map.class),
+                eq(applicationId));
+        Map<?, ?> body = (Map<?, ?>) request.getValue().getBody();
+        assertEquals(
+                Map.of("state", "SELECTED", "documentId", cvDocumentId),
+                body.get("cvSelection"));
+        assertEquals(
+                Map.of("state", "OMITTED"),
                 body.get("coverLetterSelection"));
     }
 
