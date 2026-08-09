@@ -242,6 +242,18 @@ if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/store-owner" >
     exit 1
 fi
 
+copy_contracts "$temporary_dir/store-secure-upload"
+jq 'del(.paths["/api/v1/applications/{applicationId}/documents/{documentType}/uploads"].post)' \
+    "$temporary_dir/store-secure-upload/document-store-service.json" \
+    > "$temporary_dir/store-secure-upload/changed.json"
+mv "$temporary_dir/store-secure-upload/changed.json" \
+   "$temporary_dir/store-secure-upload/document-store-service.json"
+refresh_manifest "$temporary_dir/store-secure-upload"
+if "$repository_root/scripts/verify-contracts.sh" "$temporary_dir/store-secure-upload" >/dev/null 2>&1; then
+    echo "contract policy negative test accepted removal of secure application upload" >&2
+    exit 1
+fi
+
 copy_contracts "$temporary_dir/tracker-security"
 jq 'del(.components.securitySchemes.serviceToken)' \
     "$temporary_dir/tracker-security/application-tracker-service.json" \

@@ -743,6 +743,49 @@ class GenerationOperationRepositoryPostgresTest {
                 () -> migrate(retainedDataSource, schema, null));
     }
 
+    @Test
+    void v4AddsUploadOperationsWithoutChangingRetainedGenerationData() {
+        String schema = "upload_"
+                + UUID.randomUUID().toString().replace("-", "");
+        var retainedDataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(),
+                POSTGRES.getUsername(),
+                POSTGRES.getPassword());
+        migrate(retainedDataSource, schema, MigrationVersion.fromVersion("3"));
+        var retainedJdbc = new JdbcTemplate(retainedDataSource);
+        UUID operationId = UUID.randomUUID();
+        insertOperation(
+                retainedJdbc,
+                schema,
+                operationId,
+                "upload-retained-owner",
+                "upload-retained-key",
+                UUID.randomUUID(),
+                "f".repeat(64));
+
+        migrate(retainedDataSource, schema, null);
+
+        assertEquals(
+                1,
+                retainedJdbc.queryForObject(
+                        "SELECT COUNT(*) FROM " + schema
+                                + ".generation_operations WHERE id = ?",
+                        Integer.class,
+                        operationId));
+        assertEquals(
+                1,
+                retainedJdbc.queryForObject(
+                        """
+                        SELECT COUNT(*)
+                          FROM information_schema.tables
+                         WHERE table_schema = ?
+                           AND table_name =
+                               'application_document_upload_operations'
+                        """,
+                        Integer.class,
+                        schema));
+    }
+
     private void migrate(
             DriverManagerDataSource dataSource,
             String schema,
