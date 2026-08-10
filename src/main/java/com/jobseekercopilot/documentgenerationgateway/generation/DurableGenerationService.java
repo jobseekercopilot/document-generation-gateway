@@ -1150,6 +1150,9 @@ public class DurableGenerationService {
                         documentRequest(
                                 operation.ownerId(),
                                 jobId,
+                                requiredUuid(
+                                        operation.data(),
+                                        "applicationId"),
                                 output.name(),
                                 requiredText(generated, "title"),
                                 requiredText(generated, "content"),
@@ -1700,6 +1703,7 @@ public class DurableGenerationService {
                         documentRequest(
                                 operation.ownerId(),
                                 jobId,
+                                null,
                                 "CV",
                                 requiredText(generated, "cvTitle"),
                                 requiredText(generated, "cvContent"),
@@ -1717,6 +1721,7 @@ public class DurableGenerationService {
                         documentRequest(
                                 operation.ownerId(),
                                 jobId,
+                                null,
                                 "COVER_LETTER",
                                 requiredText(generated, "coverLetterTitle"),
                                 requiredText(generated, "coverLetterContent"),
@@ -2827,6 +2832,7 @@ public class DurableGenerationService {
     private Map<String, Object> documentRequest(
             String ownerId,
             String jobId,
+            UUID applicationId,
             String documentType,
             String title,
             String content,
@@ -2835,6 +2841,9 @@ public class DurableGenerationService {
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("userId", ownerId);
         request.put("jobId", jobId);
+        if (applicationId != null) {
+            request.put("applicationId", applicationId);
+        }
         request.put("documentType", documentType);
         request.put("title", title);
         request.put("content", content);
