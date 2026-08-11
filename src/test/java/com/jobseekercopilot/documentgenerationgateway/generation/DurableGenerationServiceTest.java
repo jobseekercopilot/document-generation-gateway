@@ -250,6 +250,12 @@ class DurableGenerationServiceTest {
                 eq(OWNER), any(), eq(DocumentPurpose.CV), eq(300L));
         order.verify(downstream).generateSelected(
                 eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
+        ArgumentCaptor<Map> storedDocument =
+                ArgumentCaptor.forClass(Map.class);
+        order.verify(downstream).createDocument(
+                eq(OWNER), anyString(), storedDocument.capture());
+        assertEquals(APPLICATION_ID.toString(),
+                storedDocument.getValue().get("applicationId"));
         verify(downstream, never()).estimateSelected(
                 anyString(), eq(DocumentPurpose.COVER_LETTER), anyMap());
         verify(downstream, never()).reserveSelected(
