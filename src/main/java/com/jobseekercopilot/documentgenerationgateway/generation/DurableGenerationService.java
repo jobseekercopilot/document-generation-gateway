@@ -1150,7 +1150,9 @@ public class DurableGenerationService {
                         documentRequest(
                                 operation.ownerId(),
                                 jobId,
-                                uuid(operation.data(), "applicationId"),
+                                requiredUuid(
+                                        operation.data(),
+                                        "applicationId"),
                                 output.name(),
                                 requiredText(generated, "title"),
                                 requiredText(generated, "content"),
@@ -2840,7 +2842,7 @@ public class DurableGenerationService {
         request.put("userId", ownerId);
         request.put("jobId", jobId);
         if (applicationId != null) {
-            request.put("applicationId", applicationId.toString());
+            request.put("applicationId", applicationId);
         }
         request.put("documentType", documentType);
         request.put("title", title);
