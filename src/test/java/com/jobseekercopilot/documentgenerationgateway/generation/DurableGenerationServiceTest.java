@@ -296,6 +296,127 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void reconcilesAmbiguousSelectedCvFromRetainedResponseWithoutSecondProviderCall() {
+        stubSavedApplicationForSelectiveApproval();
+        AtomicReference<Runnable> reconciliation = new AtomicReference<>();
+        when(workScheduler.submitAfter(
+                any(), anyString(), any(Duration.class), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    reconciliation.set(invocation.getArgument(3));
+                    return true;
+                });
+        doThrow(new ResourceAccessException("response lost"))
+                .when(downstream)
+                .generateSelected(
+                        anyString(), any(), eq(DocumentPurpose.CV), anyMap());
+        when(downstream.replayRejectedSelectedGeneration(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap()))
+                .thenAnswer(invocation -> Map.of(
+                        "outcome", "ACCEPTED",
+                        "providerInvocationCount", 0,
+                        "draft", selectedGenerated(
+                                invocation.getArgument(1),
+                                DocumentPurpose.CV)));
+        DurableGenerationService recoveryEnabled =
+                recoveryEnabledService(3);
+        StartGenerationRequest request = cvOnlyRequest();
+
+        GenerationOperationResponse accepted = recoveryEnabled.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "selected-retained-reconciliation",
+                request);
+        GenerationOperationResponse pending = recoveryEnabled.get(
+                OWNER, accepted.operationId());
+
+        assertEquals(GenerationOperationState.APPLICATION_SAVED,
+                pending.state());
+        assertFalse(pending.manualActionRequired());
+        assertNotNull(reconciliation.get());
+        reconciliation.get().run();
+
+        GenerationOperationResponse recovered = recoveryEnabled.get(
+                OWNER, accepted.operationId());
+        assertEquals(GenerationOperationState.AWAITING_APPROVAL,
+                recovered.state());
+        assertEquals(CV_DOCUMENT_ID, recovered.cvDocumentId());
+        verify(downstream, times(1)).generateSelected(
+                anyString(), any(), eq(DocumentPurpose.CV), anyMap());
+        verify(downstream, times(1))
+                .replayRejectedSelectedGeneration(
+                        anyString(), any(), eq(DocumentPurpose.CV), anyMap());
+        verify(downstream).commit(OWNER, RESERVATION_ID, 300L);
+    }
+
+    @Test
+    void releasesWalletReservationWhenReconciliationUsesFreeDeterministicCvFallback() {
+        stubSavedApplicationForSelectiveApproval();
+        AtomicReference<Runnable> reconciliation = new AtomicReference<>();
+        when(workScheduler.submitAfter(
+                any(), anyString(), any(Duration.class), any(Runnable.class)))
+                .thenAnswer(invocation -> {
+                    reconciliation.set(invocation.getArgument(3));
+                    return true;
+                });
+        doThrow(new ResourceAccessException("response lost"))
+                .when(downstream)
+                .generateSelected(
+                        anyString(), any(), eq(DocumentPurpose.CV), anyMap());
+        when(downstream.replayRejectedSelectedGeneration(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap()))
+                .thenThrow(HttpClientErrorException.create(
+                        HttpStatus.NOT_FOUND,
+                        "Not Found",
+                        org.springframework.http.HttpHeaders.EMPTY,
+                        new byte[0],
+                        java.nio.charset.StandardCharsets.UTF_8));
+        when(downstream.deterministicSelectedFallback(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap()))
+                .thenAnswer(invocation -> {
+                    Map<String, Object> fallback = new LinkedHashMap<>(
+                            selectedGenerated(
+                                    invocation.getArgument(1),
+                                    DocumentPurpose.CV));
+                    fallback.put("billableTokens", 0L);
+                    fallback.put("usage", Map.of(
+                            "inputTokens", 0,
+                            "outputTokens", 0,
+                            "totalTokens", 0));
+                    fallback.put("recovery", Map.of(
+                            "finalSource", "DETERMINISTIC_FALLBACK",
+                            "fallbackUsed", true));
+                    return fallback;
+                });
+        DurableGenerationService recoveryEnabled =
+                recoveryEnabledService(1);
+
+        GenerationOperationResponse accepted = recoveryEnabled.start(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "selected-fallback-reconciliation",
+                cvOnlyRequest());
+        assertNotNull(reconciliation.get());
+        reconciliation.get().run();
+
+        GenerationOperationResponse recovered = recoveryEnabled.get(
+                OWNER, accepted.operationId());
+        assertEquals(GenerationOperationState.AWAITING_APPROVAL,
+                recovered.state());
+        Map<?, ?> cv = (Map<?, ?>) recovered.outputResults().get("CV");
+        assertEquals(0L, ((Number) cv.get("actualTokens")).longValue());
+        assertEquals("RELEASED_NO_CHARGE", cv.get("billingOutcome"));
+        verify(downstream, never()).commit(anyString(), any(), anyLong());
+        verify(downstream).release(
+                OWNER,
+                RESERVATION_ID,
+                "DETERMINISTIC_FALLBACK_NO_CHARGE");
+        verify(downstream, times(1)).generateSelected(
+                anyString(), any(), eq(DocumentPurpose.CV), anyMap());
+    }
+
+    @Test
     void generatesOnlyAnExplicitlySelectedCoverLetter() {
         stubSavedApplicationForSelectiveApproval();
         StartGenerationRequest request = new StartGenerationRequest(
@@ -2752,6 +2873,31 @@ class DurableGenerationServiceTest {
         return selectionRequest(
                 CV_EVIDENCE_ID,
                 COVER_LETTER_EVIDENCE_ID);
+    }
+
+    private StartGenerationRequest cvOnlyRequest() {
+        return new StartGenerationRequest(
+                Set.of(DocumentPurpose.CV),
+                List.of(new DocumentEvidenceSelection(
+                        DocumentPurpose.CV,
+                        List.of(CV_EVIDENCE_ID),
+                        List.of(EvidenceSection.PROJECT))));
+    }
+
+    private DurableGenerationService recoveryEnabledService(
+            int maxAttempts) {
+        return new DurableGenerationService(
+                repository,
+                downstream,
+                objectMapper,
+                deadlineGuard,
+                workScheduler,
+                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(1),
+                true,
+                Duration.ofMillis(1),
+                maxAttempts);
     }
 
     private StartGenerationRequest selectionRequest(

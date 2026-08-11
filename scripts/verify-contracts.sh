@@ -73,9 +73,9 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    2e79ca3963f49f15ecdfa15b7d288da78dfdf70a \
+    f14716e29d3e9746e97fd16f57cbe3b659c9bbeb \
     contracts/openapi.json \
-    ae08510ff3cd97d2d46922f050a56fd4d109f726bf687682fdf8f6ad23278f6d
+    42fbb50a75dcf0ad8aa9f746fecd1b48d0ccba736e4277b48c8daf7d4bdbadf9
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
@@ -157,6 +157,25 @@ jq -e '
           index("evidenceSnapshot") != null) and
     (.components.schemas.SelectedDraftGenerationRequest.properties.inputSchemaVersion.pattern
         == "2\\.0") and
+    (.components.schemas.SelectedDraftGenerationResponse.required
+        | index("billableTokens") != null and
+          index("recovery") != null) and
+    (.components.schemas.SelectedDraftGenerationResponse.properties.recovery["$ref"]
+        == "#/components/schemas/DraftRecoveryMetadata") and
+    (.components.schemas.DraftRecoveryMetadata.required
+        | index("finalSource") != null and
+          index("structuralRepairAttempted") != null and
+          index("structuralRepairSucceeded") != null and
+          index("duplicateItemsRemoved") != null and
+          index("retainedResponseReplay") != null and
+          index("fallbackUsed") != null and
+          index("fallbackVersion") != null) and
+    (.components.schemas.DraftGenerationAudit.properties.providerAttemptCount.type
+        == "integer") and
+    (.components.schemas.DraftGenerationAudit.properties.automaticRetryCount.type
+        == "integer") and
+    (.components.schemas.DraftGenerationAudit.properties.retryReason.type
+        == "string") and
     (.paths["/api/v1/cv-cover-letter/drafts/estimate"].post.operationId
         == "estimateDraft") and
     (.paths["/api/v1/cv-cover-letter/drafts"].post.operationId

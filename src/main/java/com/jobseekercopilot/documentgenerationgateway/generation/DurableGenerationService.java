@@ -73,6 +73,9 @@ public class DurableGenerationService {
     private final GenerationWorkScheduler workScheduler;
     private final Duration deadline;
     private final Duration leaseDuration;
+    private final boolean retainedResponseRecoveryEnabled;
+    private final Duration outcomeReconciliationInterval;
+    private final int maxOutcomeReconciliationAttempts;
 
     @Autowired
     public DurableGenerationService(
@@ -83,7 +86,13 @@ public class DurableGenerationService {
             GenerationWorkScheduler workScheduler,
             @Value("${document-generation.operation.deadline}") Duration deadline,
             @Value("${document-generation.operation.lease}") Duration leaseDuration,
-            @Value("${document-generation.downstream.read-timeout}") Duration readTimeout) {
+            @Value("${document-generation.downstream.read-timeout}") Duration readTimeout,
+            @Value("${document-generation.retained-response-recovery.enabled:false}")
+            boolean retainedResponseRecoveryEnabled,
+            @Value("${document-generation.retained-response-recovery.reconciliation-interval:PT2S}")
+            Duration outcomeReconciliationInterval,
+            @Value("${document-generation.retained-response-recovery.max-reconciliation-attempts:30}")
+            int maxOutcomeReconciliationAttempts) {
         this.repository = repository;
         this.downstream = downstream;
         this.objectMapper = objectMapper;
@@ -98,6 +107,18 @@ public class DurableGenerationService {
                     "Document generation operation lease must be longer than "
                             + "the downstream read timeout.");
         }
+        this.retainedResponseRecoveryEnabled =
+                retainedResponseRecoveryEnabled;
+        this.outcomeReconciliationInterval = requirePositive(
+                outcomeReconciliationInterval,
+                "outcome reconciliation interval");
+        if (maxOutcomeReconciliationAttempts < 1
+                || maxOutcomeReconciliationAttempts > 60) {
+            throw new IllegalStateException(
+                    "Outcome reconciliation attempts must be between 1 and 60.");
+        }
+        this.maxOutcomeReconciliationAttempts =
+                maxOutcomeReconciliationAttempts;
     }
 
     public DurableGenerationService(
@@ -134,7 +155,10 @@ public class DurableGenerationService {
                 },
                 deadline,
                 leaseDuration,
-                readTimeout);
+                readTimeout,
+                false,
+                Duration.ofSeconds(2),
+                30);
     }
 
     public GenerationOperationResponse start(
@@ -226,6 +250,9 @@ public class DurableGenerationService {
                         == GenerationOperationState.AWAITING_APPROVAL
                 && operation.data().containsKey("approvalRequest")) {
             submitApproval(operation, ownerId);
+        }
+        if (outcomeReconciliationPending(operation)) {
+            scheduleOutcomeReconciliation(operation, ownerId);
         }
         return response(operation);
     }
@@ -632,6 +659,11 @@ public class DurableGenerationService {
                     case SNAPSHOTS_RESOLVED -> operation =
                             ensureSavedApplication(operation, leaseToken);
                     case APPLICATION_SAVED -> {
+                        if (outcomeReconciliationPending(operation)) {
+                            scheduleOutcomeReconciliation(
+                                    operation, operation.ownerId());
+                            return operation;
+                        }
                         DocumentPurpose next = nextOutput(operation);
                         if (next == null) {
                             operation = finishSelectiveGeneration(
@@ -670,6 +702,11 @@ public class DurableGenerationService {
                                 null);
                         operation = invokeSelectedGeneration(
                                 operation, leaseToken);
+                        if (outcomeReconciliationPending(operation)) {
+                            scheduleOutcomeReconciliation(
+                                    operation, operation.ownerId());
+                            return operation;
+                        }
                     }
                     case GENERATION_IN_PROGRESS -> operation =
                             markCurrentOutputUnknown(
@@ -1048,10 +1085,13 @@ public class DurableGenerationService {
                 throw new IllegalStateException(
                         "CV Service returned a mismatched selected-output identity.");
             }
-            long actualTokens = number(
+            long providerTokens = number(
                     map(generated.get("usage"), "generation usage"),
                     "totalTokens").longValue();
-            if (actualTokens < 1) {
+            long billableTokens = generated.get("billableTokens") == null
+                    ? providerTokens
+                    : number(generated, "billableTokens").longValue();
+            if (providerTokens < 0 || billableTokens < 0) {
                 throw new IllegalStateException(
                         "CV Service returned invalid selected-output usage.");
             }
@@ -1060,7 +1100,8 @@ public class DurableGenerationService {
             result.put("status", "DRAFT_GENERATED");
             result.put("generation", generated);
             result.put("generationCompletedAt", Instant.now().toString());
-            result.put("actualTokens", actualTokens);
+            result.put("actualTokens", billableTokens);
+            result.put("providerTokens", providerTokens);
             saveOutputResult(data, output, result);
             return checkpoint(
                     operation,
@@ -1106,13 +1147,27 @@ public class DurableGenerationService {
         DocumentPurpose output = requiredCurrentOutput(operation);
         Map<String, Object> selectedResult =
                 outputResult(operation.data(), output);
-        bounded(operation, () -> downstream.commit(
-                operation.ownerId(),
-                requiredUuid(selectedResult, "reservationId"),
-                number(selectedResult, "actualTokens").longValue()));
+        long billableTokens = number(
+                selectedResult, "actualTokens").longValue();
+        UUID reservationId = requiredUuid(
+                selectedResult, "reservationId");
+        if (billableTokens == 0) {
+            bounded(operation, () -> downstream.release(
+                    operation.ownerId(),
+                    reservationId,
+                    "DETERMINISTIC_FALLBACK_NO_CHARGE"));
+        } else {
+            bounded(operation, () -> downstream.commit(
+                    operation.ownerId(),
+                    reservationId,
+                    billableTokens));
+        }
         Map<String, Object> data = data(operation);
         Map<String, Object> result = outputResult(data, output);
         result.put("status", "CREDIT_COMMITTED");
+        result.put("billingOutcome", billableTokens == 0
+                ? "RELEASED_NO_CHARGE"
+                : "COMMITTED");
         saveOutputResult(data, output, result);
         return checkpoint(
                 operation,
@@ -1231,6 +1286,270 @@ public class DurableGenerationService {
         result.put("status", "OUTCOME_UNKNOWN");
         result.put("failureCode", "GENERATION_OUTCOME_UNKNOWN");
         result.put("failureMessage", message);
+        if (retainedResponseRecoveryEnabled) {
+            result.put("outcomeReconciliation", Map.of(
+                    "status", "PENDING",
+                    "attempts", 0,
+                    "startedAt", Instant.now().toString()));
+        }
+        saveOutputResult(data, output, result);
+        if (!retainedResponseRecoveryEnabled) {
+            data.remove("currentOutput");
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.APPLICATION_SAVED,
+                data,
+                null,
+                null);
+    }
+
+    private boolean outcomeReconciliationPending(
+            GenerationOperation operation) {
+        if (!retainedResponseRecoveryEnabled
+                || !selectiveWorkflow(operation)) {
+            return false;
+        }
+        return requestedOutputs(operation).stream().anyMatch(output -> {
+            Map<String, Object> result = outputResult(
+                    operation.data(), output);
+            Map<String, Object> reconciliation = optionalMap(
+                    result.get("outcomeReconciliation"));
+            return "OUTCOME_UNKNOWN".equals(text(result.get("status")))
+                    && "PENDING".equals(text(
+                            reconciliation.get("status")));
+        });
+    }
+
+    private void scheduleOutcomeReconciliation(
+            GenerationOperation operation,
+            String ownerId) {
+        if (!outcomeReconciliationPending(operation)) {
+            return;
+        }
+        boolean submitted = workScheduler.submitAfter(
+                operation.id(),
+                correlationId(operation),
+                outcomeReconciliationInterval,
+                () -> resumeOutcomeReconciliation(
+                        operation.id(), ownerId));
+        if (!submitted) {
+            log.warn(
+                    "generation outcome reconciliation remains pending operationId={} reason=EXECUTOR_CAPACITY",
+                    operation.id());
+        }
+    }
+
+    private void resumeOutcomeReconciliation(
+            UUID operationId,
+            String ownerId) {
+        GenerationOperation operation = required(operationId, ownerId);
+        if (!outcomeReconciliationPending(operation)) {
+            return;
+        }
+        UUID leaseToken = UUID.randomUUID();
+        if (!repository.tryAcquire(
+                operation.id(), ownerId, leaseToken, leaseDuration)) {
+            scheduleOutcomeReconciliation(
+                    required(operation.id(), ownerId), ownerId);
+            return;
+        }
+        boolean reschedule = false;
+        try {
+            operation = required(operation.id(), ownerId);
+            if (!outcomeReconciliationPending(operation)) {
+                return;
+            }
+            DocumentPurpose output = requiredCurrentOutput(operation);
+            Map<String, Object> result = outputResult(
+                    operation.data(), output);
+            Map<String, Object> reconciliation = optionalMap(
+                    result.get("outcomeReconciliation"));
+            int attempt = reconciliation.get("attempts")
+                    instanceof Number previousAttempts
+                    ? previousAttempts.intValue() + 1
+                    : 1;
+            UUID providerOperationId = requiredUuid(
+                    result, "providerOperationId");
+            Map<String, Object> request = map(
+                    result.get("generationRequest"),
+                    "selected generation request");
+            Map<String, Object> generated = null;
+            String source = null;
+            try {
+                Map<String, Object> replay =
+                        downstream.replayRejectedSelectedGeneration(
+                                ownerId,
+                                providerOperationId,
+                                output,
+                                request);
+                if ("ACCEPTED".equals(requiredText(replay, "outcome"))
+                        && number(replay, "providerInvocationCount")
+                                        .longValue()
+                                == 0) {
+                    generated = map(
+                            replay.get("draft"),
+                            "reconciled selected draft");
+                    source = "RETAINED_RESPONSE";
+                }
+            } catch (HttpStatusCodeException notReady) {
+                if (notReady.getStatusCode() != HttpStatus.NOT_FOUND) {
+                    log.warn(
+                            "generation outcome reconciliation call failed operationId={} output={} attempt={} failureStatus={}",
+                            operationId,
+                            output,
+                            attempt,
+                            notReady.getStatusCode().value());
+                }
+            } catch (RestClientException unavailable) {
+                log.warn(
+                        "generation outcome reconciliation call failed operationId={} output={} attempt={} failureType={}",
+                        operationId,
+                        output,
+                        attempt,
+                        unavailable.getClass().getSimpleName());
+            }
+
+            if (generated == null
+                    && attempt >= maxOutcomeReconciliationAttempts
+                    && output == DocumentPurpose.CV) {
+                generated = downstream.deterministicSelectedFallback(
+                        ownerId,
+                        providerOperationId,
+                        output,
+                        request);
+                source = "DETERMINISTIC_FALLBACK";
+            }
+
+            if (generated != null) {
+                operation = acceptReconciledSelectedDraft(
+                        operation,
+                        leaseToken,
+                        output,
+                        providerOperationId,
+                        generated,
+                        attempt,
+                        source);
+                operation = advanceSelectiveToApproval(
+                        operation, leaseToken, null);
+            } else if (attempt >= maxOutcomeReconciliationAttempts) {
+                operation = failReconciledSelectedOutput(
+                        operation,
+                        leaseToken,
+                        output,
+                        attempt);
+                operation = advanceSelectiveToApproval(
+                        operation, leaseToken, null);
+            } else {
+                Map<String, Object> data = data(operation);
+                result = outputResult(data, output);
+                reconciliation = new LinkedHashMap<>(optionalMap(
+                        result.get("outcomeReconciliation")));
+                reconciliation.put("attempts", attempt);
+                reconciliation.put("lastCheckedAt", Instant.now().toString());
+                result.put("outcomeReconciliation", reconciliation);
+                saveOutputResult(data, output, result);
+                operation = checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.APPLICATION_SAVED,
+                        data,
+                        null,
+                        null);
+                reschedule = true;
+            }
+        } finally {
+            repository.release(operationId, ownerId, leaseToken);
+        }
+        if (reschedule) {
+            scheduleOutcomeReconciliation(
+                    required(operationId, ownerId), ownerId);
+        }
+    }
+
+    private GenerationOperation acceptReconciledSelectedDraft(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            UUID providerOperationId,
+            Map<String, Object> generated,
+            int attempt,
+            String source) {
+        if (!providerOperationId.equals(
+                requiredUuid(generated, "operationId"))
+                || !output.name().equals(
+                        requiredText(generated, "outputType"))) {
+            throw new IllegalStateException(
+                    "Reconciled selected draft identity did not match the original provider operation.");
+        }
+        long providerTokens = number(
+                map(generated.get("usage"), "generation usage"),
+                "totalTokens").longValue();
+        long billableTokens = generated.get("billableTokens") == null
+                ? providerTokens
+                : number(generated, "billableTokens").longValue();
+        if (billableTokens < 0 || providerTokens < 0) {
+            throw new IllegalStateException(
+                    "Reconciled selected draft returned invalid usage.");
+        }
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "DRAFT_GENERATED");
+        result.put("generation", generated);
+        result.put("generationCompletedAt", Instant.now().toString());
+        result.put("actualTokens", billableTokens);
+        result.put("providerTokens", providerTokens);
+        result.remove("failureCode");
+        result.remove("failureMessage");
+        result.put("outcomeReconciliation", Map.of(
+                "status", "RECOVERED",
+                "attempts", attempt,
+                "source", source,
+                "providerInvocationCount", 0,
+                "completedAt", Instant.now().toString()));
+        saveOutputResult(data, output, result);
+        data.put("currentOutput", output.name());
+        log.info(
+                "generation outcome reconciled operationId={} output={} attempt={} source={} providerInvocationCount=0 providerTokens={} billableTokens={}",
+                operation.id(),
+                output,
+                attempt,
+                source,
+                providerTokens,
+                billableTokens);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFT_GENERATED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation failReconciledSelectedOutput(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            int attempt) {
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        UUID reservationId = uuid(result, "reservationId");
+        if (reservationId != null) {
+            downstream.release(
+                    operation.ownerId(),
+                    reservationId,
+                    "GENERATION_OUTCOME_RECONCILIATION_EXHAUSTED");
+        }
+        result.put("status", "FAILED");
+        result.put("failureCode",
+                "GENERATION_OUTCOME_RECONCILIATION_EXHAUSTED");
+        result.put("failureMessage",
+                "No retained response became available within the bounded reconciliation window.");
+        result.put("outcomeReconciliation", Map.of(
+                "status", "EXHAUSTED",
+                "attempts", attempt,
+                "completedAt", Instant.now().toString()));
         saveOutputResult(data, output, result);
         data.remove("currentOutput");
         return checkpoint(
@@ -3142,7 +3461,8 @@ public class DurableGenerationService {
                 == GenerationOperationState.RECOVERY_REQUIRED
                 || (selectiveWorkflow(operation)
                         && hasOutputStatus(
-                                operation, "OUTCOME_UNKNOWN"));
+                                operation, "OUTCOME_UNKNOWN")
+                        && !outcomeReconciliationPending(operation));
         Map<String, Object> downloads = new LinkedHashMap<>();
         if (operation.data().containsKey("cvDownloads")) {
             downloads.put("cv", operation.data().get("cvDownloads"));
@@ -3185,6 +3505,9 @@ public class DurableGenerationService {
             copyIfPresent(result, projection, "documentId");
             copyIfPresent(result, projection, "estimatedTokens");
             copyIfPresent(result, projection, "actualTokens");
+            copyIfPresent(result, projection, "providerTokens");
+            copyIfPresent(result, projection, "billingOutcome");
+            copyIfPresent(result, projection, "outcomeReconciliation");
             copyIfPresent(result, projection, "failureCode");
             copyIfPresent(result, projection, "failureMessage");
             publicResults.put(output, projection);
