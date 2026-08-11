@@ -11,12 +11,14 @@ See the central [document journey](https://docs.jobseekercopilot.com/journeys/do
 Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
-This service is **not beta-ready**. A new durable saved-job operation API now
-resolves canonical snapshots, coordinates AI Credit, stores drafts and waits
-for exact-version approval before export and Tracker creation. Version 2.0
+The durable saved-job operation API is implemented, composed with PostgreSQL,
+and exercised in controlled private-beta/manual journeys. It resolves canonical
+snapshots, coordinates AI Credit, stores drafts and waits for exact-version
+approval before export and Tracker creation. Version 2.0
 removes the unsafe browser-supplied Job route: all new generation now requires
 a saved canonical job and explicit CV and cover-letter evidence selections.
-Runtime database and cross-user E2E evidence remain outstanding. See
+This is not a production availability claim; the repository audit retains the
+remaining deployment and operational controls. See
 [`docs/BETA_READINESS_AUDIT.md`](docs/BETA_READINESS_AUDIT.md).
 
 The cross-repository document ownership boundary is defined by the accepted
