@@ -117,13 +117,22 @@ public class ApplicationUploadService {
         try {
             Map<String, Object> stored = downstream.upload(operation, bytes, filename);
             String storeState = text(stored, "state");
-            if (terminalStoreFailure(storeState)) {
+            if ("REJECTED".equals(storeState)) {
                 return repository.markFailure(
                         operation,
                         ApplicationUploadState.REJECTED,
                         storeState,
                         optionalText(stored, "failureCode", "UPLOAD_REJECTED"),
                         "The uploaded document did not pass secure processing.");
+            }
+            if ("FAILED".equals(storeState)
+                    || "SCAN_UNAVAILABLE".equals(storeState)) {
+                return repository.markFailure(
+                        operation,
+                        ApplicationUploadState.RECOVERY_REQUIRED,
+                        storeState,
+                        optionalText(stored, "failureCode", "UPLOAD_PROCESSING_UNAVAILABLE"),
+                        "Secure document processing is temporarily unavailable. Retry this file.");
             }
             if (!"READY".equals(storeState)) {
                 return repository.markFailure(
@@ -306,12 +315,6 @@ public class ApplicationUploadService {
         return uuid(application.get(type == DocumentKind.CV
                 ? "cvDocumentId"
                 : "coverLetterDocumentId"));
-    }
-
-    private boolean terminalStoreFailure(String state) {
-        return "REJECTED".equals(state)
-                || "FAILED".equals(state)
-                || "SCAN_UNAVAILABLE".equals(state);
     }
 
     private ApplicationDocumentUploadOperationResponse response(

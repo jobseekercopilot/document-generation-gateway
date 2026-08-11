@@ -1703,7 +1703,7 @@ public class DurableGenerationService {
                         documentRequest(
                                 operation.ownerId(),
                                 jobId,
-                                null,
+                                uuid(operation.data(), "applicationId"),
                                 "CV",
                                 requiredText(generated, "cvTitle"),
                                 requiredText(generated, "cvContent"),
@@ -1721,7 +1721,7 @@ public class DurableGenerationService {
                         documentRequest(
                                 operation.ownerId(),
                                 jobId,
-                                null,
+                                uuid(operation.data(), "applicationId"),
                                 "COVER_LETTER",
                                 requiredText(generated, "coverLetterTitle"),
                                 requiredText(generated, "coverLetterContent"),

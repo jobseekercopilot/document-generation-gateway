@@ -166,6 +166,38 @@ class ApplicationUploadServiceTest {
     }
 
     @Test
+    void scannerUnavailableIsRetryableWhileSafetyRejectionIsPermanent() {
+        when(downstream.application(OWNER, applicationId))
+                .thenReturn(application(1, null, null));
+        when(downstream.upload(any(), eq(PDF), eq("cv.pdf")))
+                .thenReturn(storeFailure(
+                        "SCAN_UNAVAILABLE", "SCANNER_UNAVAILABLE"))
+                .thenReturn(storeFailure(
+                        "REJECTED", "VALIDATION_REJECTED"));
+
+        var unavailable = service.upload(
+                OWNER, applicationId, JOB, DocumentKind.CV, UploadFormat.PDF,
+                "scanner-retry", file(PDF));
+        var rejectedAfterRetry = service.upload(
+                OWNER, applicationId, JOB, DocumentKind.CV, UploadFormat.PDF,
+                "scanner-retry", file(PDF));
+
+        assertThat(unavailable.state())
+                .isEqualTo(ApplicationUploadState.RECOVERY_REQUIRED);
+        assertThat(unavailable.failureCode()).isEqualTo("SCANNER_UNAVAILABLE");
+        assertThat(unavailable.failureMessage())
+                .isEqualTo("Secure document processing is temporarily unavailable. Retry this file.");
+        assertThat(rejectedAfterRetry.state())
+                .isEqualTo(ApplicationUploadState.REJECTED);
+        assertThat(rejectedAfterRetry.failureCode())
+                .isEqualTo("VALIDATION_REJECTED");
+        assertThat(rejectedAfterRetry.failureMessage())
+                .isEqualTo("The uploaded document did not pass secure processing.");
+        verify(downstream, times(2)).upload(any(), eq(PDF), eq("cv.pdf"));
+        verify(downstream, never()).saveSelections(any(), any(Long.class), any(), any());
+    }
+
+    @Test
     void mismatchedApplicationIsDeniedBeforeDocumentStore() {
         when(downstream.application(OWNER, applicationId)).thenReturn(Map.of(
                 "id", applicationId,
@@ -269,6 +301,20 @@ class ApplicationUploadServiceTest {
                 "originalSha256", sha256(PDF),
                 "originalSize", PDF.length,
                 "documentId", documentId.toString());
+    }
+
+    private Map<String, Object> storeFailure(String state, String failureCode) {
+        return Map.of(
+                "operationId", storeOperationId.toString(),
+                "applicationId", applicationId.toString(),
+                "jobId", JOB,
+                "documentType", DocumentKind.CV.name(),
+                "fileType", "PDF",
+                "state", state,
+                "originalSha256", sha256(PDF),
+                "originalSize", PDF.length,
+                "failureCode", failureCode,
+                "failureMessage", "Private downstream detail");
     }
 
     private String sha256(byte[] bytes) {
