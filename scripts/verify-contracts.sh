@@ -157,6 +157,25 @@ jq -e '
           index("evidenceSnapshot") != null) and
     (.components.schemas.SelectedDraftGenerationRequest.properties.inputSchemaVersion.pattern
         == "2\\.0") and
+    (.components.schemas.SelectedDraftGenerationResponse.required
+        | index("billableTokens") != null and
+          index("recovery") != null) and
+    (.components.schemas.SelectedDraftGenerationResponse.properties.recovery["$ref"]
+        == "#/components/schemas/DraftRecoveryMetadata") and
+    (.components.schemas.DraftRecoveryMetadata.required
+        | index("finalSource") != null and
+          index("structuralRepairAttempted") != null and
+          index("structuralRepairSucceeded") != null and
+          index("duplicateItemsRemoved") != null and
+          index("retainedResponseReplay") != null and
+          index("fallbackUsed") != null and
+          index("fallbackVersion") != null) and
+    (.components.schemas.DraftGenerationAudit.properties.providerAttemptCount.type
+        == "integer") and
+    (.components.schemas.DraftGenerationAudit.properties.automaticRetryCount.type
+        == "integer") and
+    (.components.schemas.DraftGenerationAudit.properties.retryReason.type
+        == "string") and
     (.paths["/api/v1/cv-cover-letter/drafts/estimate"].post.operationId
         == "estimateDraft") and
     (.paths["/api/v1/cv-cover-letter/drafts"].post.operationId

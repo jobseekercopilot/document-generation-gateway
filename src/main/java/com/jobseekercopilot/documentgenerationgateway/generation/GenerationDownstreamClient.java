@@ -54,6 +54,18 @@ public interface GenerationDownstreamClient {
             UUID operationId,
             Map<String, Object> request);
 
+    Map<String, Object> replayRejectedSelectedGeneration(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request);
+
+    Map<String, Object> deterministicSelectedFallback(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request);
+
     void commit(String ownerId, UUID reservationId, long actualTokens);
 
     void release(String ownerId, UUID reservationId, String reason);

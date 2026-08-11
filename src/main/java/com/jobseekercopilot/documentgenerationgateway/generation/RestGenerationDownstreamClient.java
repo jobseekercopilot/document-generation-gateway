@@ -288,6 +288,44 @@ public class RestGenerationDownstreamClient
     }
 
     @Override
+    public Map<String, Object> replayRejectedSelectedGeneration(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Operator-Token", rejectedGenerationOperatorToken);
+        headers.set(DOCUMENT_OWNER, ownerId);
+        return post(
+                cvBaseUrl
+                        + "/internal/v1/cv-cover-letter/rejected-generations/"
+                        + operationId
+                        + "/replay/"
+                        + output.name(),
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> deterministicSelectedFallback(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Operator-Token", rejectedGenerationOperatorToken);
+        headers.set(DOCUMENT_OWNER, ownerId);
+        return post(
+                cvBaseUrl
+                        + "/internal/v1/cv-cover-letter/rejected-generations/"
+                        + operationId
+                        + "/fallback/"
+                        + output.name(),
+                headers,
+                request);
+    }
+
+    @Override
     public void commit(
             String ownerId,
             UUID reservationId,

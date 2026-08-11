@@ -305,6 +305,39 @@ class RestGenerationDownstreamClientTest {
     }
 
     @Test
+    void selectedReconciliationAndFallbackUseOperatorIdentityWithoutServiceToken() {
+        UUID operationId = UUID.randomUUID();
+        Map<String, Object> body = Map.of("inputSchemaVersion", "2.0");
+        for (String action : List.of("replay", "fallback")) {
+            String url = "http://cv/internal/v1/cv-cover-letter/"
+                    + "rejected-generations/" + operationId + "/"
+                    + action + "/CV";
+            when(restTemplate.exchange(
+                    eq(url),
+                    eq(HttpMethod.POST),
+                    any(HttpEntity.class),
+                    eq(Map.class)))
+                    .thenReturn(ResponseEntity.ok(Map.of(
+                            "outcome", "ACCEPTED")));
+
+            if ("replay".equals(action)) {
+                client.replayRejectedSelectedGeneration(
+                        OWNER, operationId, DocumentPurpose.CV, body);
+            } else {
+                client.deterministicSelectedFallback(
+                        OWNER, operationId, DocumentPurpose.CV, body);
+            }
+
+            HttpEntity<?> request = capturedPost(url);
+            assertSingleHeader(
+                    request, "X-Operator-Token", OPERATOR_TOKEN);
+            assertSingleHeader(request, "X-Document-Owner", OWNER);
+            assertNull(request.getHeaders().getFirst("X-Service-Token"));
+            assertEquals(body, request.getBody());
+        }
+    }
+
+    @Test
     void exportBindsOwnerAndStableReplayKey() {
         UUID documentId = UUID.randomUUID();
         String replayKey = UUID.randomUUID() + ":cv-export";
