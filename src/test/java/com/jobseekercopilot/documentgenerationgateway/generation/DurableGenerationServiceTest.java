@@ -26,6 +26,8 @@ import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelect
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import com.jobseekercopilot.documentgenerationgateway.dto.EvidenceSection;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOutputResultResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationRecoverySummaryResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
@@ -198,7 +200,7 @@ class DurableGenerationServiceTest {
     }
 
     @Test
-    void generatesAndChargesOnlyTheExplicitlySelectedCv() {
+    void generatesAndChargesOnlyTheExplicitlySelectedCv() throws Exception {
         stubSavedApplicationForSelectiveApproval();
 
         StartGenerationRequest request = new StartGenerationRequest(
@@ -223,10 +225,27 @@ class DurableGenerationServiceTest {
         assertNull(waiting.coverLetterDocumentId());
         assertEquals(
                 "STORED",
-                ((Map<?, ?>) waiting.outputResults().get("CV"))
-                        .get("status"));
+                waiting.outputResults().get("CV").status());
         assertFalse(waiting.outputResults().containsKey("COVER_LETTER"));
         assertFalse(waiting.outputResults().toString().contains("CV content"));
+        GenerationRecoverySummaryResponse recovery = waiting
+                .outputResults().get("CV").recoverySummary();
+        assertEquals("LLM", recovery.generationSource());
+        assertEquals("APPLIED", recovery.structuralRepairStatus());
+        assertEquals(1, recovery.duplicateItemsRemoved());
+        assertEquals(2, recovery.providerAttemptCount());
+        assertEquals(1, recovery.automaticRetryCount());
+        assertTrue(recovery.retried());
+        assertEquals("RATE_LIMITED", recovery.retryReason());
+        assertEquals("COMMITTED", recovery.billingStatus());
+        assertTrue(recovery.charged());
+        assertFalse(recovery.released());
+        String publicJson = objectMapper.writeValueAsString(
+                waiting.outputResults());
+        assertFalse(publicJson.contains("CV content"));
+        assertFalse(publicJson.contains("generationMetadata"));
+        assertFalse(publicJson.contains("claimLedger"));
+        assertFalse(publicJson.contains("evidenceIds"));
         Map<?, ?> persistedSelectiveRequest = (Map<?, ?>) repository
                 .findByOwnerAndId(waiting.operationId(), OWNER)
                 .orElseThrow()
@@ -244,12 +263,28 @@ class DurableGenerationServiceTest {
         assertFalse(savedApplication.getValue().containsKey("cvDocumentId"));
         assertFalse(savedApplication.getValue()
                 .containsKey("coverLetterDocumentId"));
+        ArgumentCaptor<Map> selectedEstimateRequest =
+                ArgumentCaptor.forClass(Map.class);
         order.verify(downstream).estimateSelected(
-                eq(OWNER), eq(DocumentPurpose.CV), anyMap());
+                eq(OWNER), eq(DocumentPurpose.CV),
+                selectedEstimateRequest.capture());
         order.verify(downstream).reserveSelected(
                 eq(OWNER), any(), eq(DocumentPurpose.CV), eq(300L));
+        ArgumentCaptor<Map> selectedGenerationRequest =
+                ArgumentCaptor.forClass(Map.class);
         order.verify(downstream).generateSelected(
-                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
+                eq(OWNER), any(), eq(DocumentPurpose.CV),
+                selectedGenerationRequest.capture());
+        for (Map<?, ?> providerRequest : List.of(
+                selectedEstimateRequest.getValue(),
+                selectedGenerationRequest.getValue())) {
+            Map<?, ?> providerProfile = (Map<?, ?>) providerRequest
+                    .get("profile");
+            assertFalse(providerProfile.containsKey(
+                    "professionalContact"));
+            assertFalse(providerRequest.toString().contains("7946"));
+            assertFalse(providerRequest.toString().contains("github.com"));
+        }
         ArgumentCaptor<Map> storedDocument =
                 ArgumentCaptor.forClass(Map.class);
         order.verify(downstream).createDocument(
@@ -272,6 +307,18 @@ class DurableGenerationServiceTest {
                 waiting.operationId(),
                 new ApproveGenerationRequest(CV_DOCUMENT_ID, null));
         assertEquals(GenerationOperationState.COMPLETED, completed.state());
+        ArgumentCaptor<Map> selectedExportContact =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).exportDocument(
+                eq(OWNER), eq(CV_DOCUMENT_ID), anyString(),
+                selectedExportContact.capture());
+        assertEquals(
+                "+44 20 7946 0958",
+                selectedExportContact.getValue().get("phone"));
+        assertEquals(
+                "https://github.com/example",
+                ((Map<?, ?>) ((List<?>) selectedExportContact.getValue()
+                        .get("links")).get(0)).get("url"));
         verify(downstream).updateApplicationDocumentSelections(
                 eq(OWNER),
                 eq(APPLICATION_ID),
@@ -293,6 +340,50 @@ class DurableGenerationServiceTest {
                 eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
         verify(downstream, times(1)).commit(
                 eq(OWNER), any(), eq(300L));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void publicRecoverySummaryDropsRawGenerationAndUnknownCategories()
+            throws Exception {
+        stubSavedApplicationForSelectiveApproval();
+        when(downstream.generateSelected(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap()))
+                .thenAnswer(invocation -> {
+                    Map<String, Object> generated = new LinkedHashMap<>(
+                            selectedGenerated(
+                                    invocation.getArgument(1),
+                                    DocumentPurpose.CV));
+                    generated.put("content",
+                            "private-prompt-evidence-sentinel");
+                    Map<String, Object> recovery = new LinkedHashMap<>(
+                            (Map<String, Object>) generated.get("recovery"));
+                    recovery.put("retryReason",
+                            "private-provider-error-sentinel");
+                    recovery.put("fallbackReason",
+                            "private-model-output-sentinel");
+                    generated.put("recovery", recovery);
+                    return generated;
+                });
+
+        GenerationOperationResponse waiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "selected-public-recovery-allowlist",
+                cvOnlyRequest());
+
+        String publicJson = objectMapper.writeValueAsString(
+                waiting.outputResults());
+        assertFalse(publicJson.contains("private-prompt-evidence-sentinel"));
+        assertFalse(publicJson.contains("private-provider-error-sentinel"));
+        assertFalse(publicJson.contains("private-model-output-sentinel"));
+        GenerationRecoverySummaryResponse summary = waiting
+                .outputResults().get("CV").recoverySummary();
+        assertNull(summary.retryReason());
+        assertNull(summary.fallbackReason());
+        verify(downstream, times(1)).commit(
+                OWNER, RESERVATION_ID, 300L);
     }
 
     @Test
@@ -347,6 +438,15 @@ class DurableGenerationServiceTest {
                 .replayRejectedSelectedGeneration(
                         anyString(), any(), eq(DocumentPurpose.CV), anyMap());
         verify(downstream).commit(OWNER, RESERVATION_ID, 300L);
+        GenerationRecoverySummaryResponse summary = recovered
+                .outputResults().get("CV").recoverySummary();
+        assertEquals("RECOVERED", summary.reconciliationStatus());
+        assertEquals("RETAINED_RESPONSE",
+                summary.reconciliationSource());
+        assertTrue(summary.retainedResponseReplayed());
+        assertEquals(1, summary.reconciliationAttempts());
+        assertEquals("COMMITTED", summary.billingStatus());
+        assertTrue(summary.charged());
     }
 
     @Test
@@ -404,9 +504,23 @@ class DurableGenerationServiceTest {
                 OWNER, accepted.operationId());
         assertEquals(GenerationOperationState.AWAITING_APPROVAL,
                 recovered.state());
-        Map<?, ?> cv = (Map<?, ?>) recovered.outputResults().get("CV");
-        assertEquals(0L, ((Number) cv.get("actualTokens")).longValue());
-        assertEquals("RELEASED_NO_CHARGE", cv.get("billingOutcome"));
+        GenerationOutputResultResponse cv = recovered
+                .outputResults().get("CV");
+        assertEquals(0L, cv.actualTokens());
+        assertEquals("RELEASED_NO_CHARGE", cv.billingOutcome());
+        GenerationRecoverySummaryResponse summary = cv.recoverySummary();
+        assertEquals("DETERMINISTIC_FALLBACK",
+                summary.generationSource());
+        assertTrue(summary.deterministicFallbackUsed());
+        assertEquals("RECOVERED", summary.reconciliationStatus());
+        assertEquals("DETERMINISTIC_FALLBACK",
+                summary.reconciliationSource());
+        assertEquals("RECONCILIATION_EXHAUSTED",
+                summary.fallbackReason());
+        assertEquals("RELEASED_NO_CHARGE",
+                summary.billingStatus());
+        assertFalse(summary.charged());
+        assertTrue(summary.released());
         verify(downstream, never()).commit(anyString(), any(), anyLong());
         verify(downstream).release(
                 OWNER,
@@ -483,8 +597,15 @@ class DurableGenerationServiceTest {
         assertNull(waiting.coverLetterDocumentId());
         assertEquals(
                 "FAILED",
-                ((Map<?, ?>) waiting.outputResults()
-                        .get("COVER_LETTER")).get("status"));
+                waiting.outputResults().get("COVER_LETTER").status());
+        GenerationRecoverySummaryResponse failedRecovery = waiting
+                .outputResults().get("COVER_LETTER").recoverySummary();
+        assertEquals("NOT_AVAILABLE",
+                failedRecovery.generationSource());
+        assertEquals("RELEASED_AFTER_FAILURE",
+                failedRecovery.billingStatus());
+        assertFalse(failedRecovery.charged());
+        assertTrue(failedRecovery.released());
         verify(downstream).commit(OWNER, RESERVATION_ID, 300L);
         verify(downstream).release(
                 eq(OWNER), any(), eq("GENERATION_REJECTED"));
@@ -535,8 +656,7 @@ class DurableGenerationServiceTest {
         assertEquals("PARTIAL_GENERATION", waiting.failureCode());
         assertEquals(
                 "FAILED",
-                ((Map<?, ?>) waiting.outputResults()
-                        .get("COVER_LETTER")).get("status"));
+                waiting.outputResults().get("COVER_LETTER").status());
         verify(downstream, never()).estimateSelected(
                 anyString(), eq(DocumentPurpose.COVER_LETTER), anyMap());
         verify(downstream, never()).reserveSelected(
@@ -1282,6 +1402,54 @@ class DurableGenerationServiceTest {
         assertEquals(
                 cvProvenance.get("generatedAt"),
                 coverProvenance.get("generatedAt"));
+    }
+
+    @Test
+    void keepsRevisionedProfessionalContactOutOfGenerationAndCarriesItToExport() {
+        var waiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "professional-contact-pipeline-1",
+                selectionRequest());
+
+        ArgumentCaptor<Map> generationRequest =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).generate(
+                eq(OWNER), any(), generationRequest.capture());
+        Map<?, ?> profile = (Map<?, ?>) generationRequest
+                .getValue().get("profile");
+        assertFalse(profile.containsKey("professionalContact"));
+        assertFalse(generationRequest.getValue().toString()
+                .contains("7946"));
+        assertFalse(generationRequest.getValue().toString()
+                .contains("github.com"));
+        ArgumentCaptor<Map> estimateRequest =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).estimate(eq(OWNER), estimateRequest.capture());
+        assertFalse(estimateRequest.getValue().toString().contains("7946"));
+        assertFalse(estimateRequest.getValue().toString()
+                .contains("github.com"));
+
+        approveAndAwait(
+                OWNER,
+                waiting.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+        ArgumentCaptor<Map> exportedContact =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream, times(2)).exportDocument(
+                eq(OWNER), any(), anyString(), exportedContact.capture());
+        for (Map<?, ?> professionalContact : exportedContact.getAllValues()) {
+            assertEquals(
+                    "+44 20 7946 0958",
+                    professionalContact.get("phone"));
+            assertEquals(
+                    "https://github.com/example",
+                    ((Map<?, ?>) ((List<?>) professionalContact
+                            .get("links")).get(0)).get("url"));
+        }
     }
 
     @Test
@@ -2263,7 +2431,7 @@ class DurableGenerationServiceTest {
         doThrow(new ResourceAccessException(
                         "connection closed after export"))
                 .when(downstream)
-                .exportDocument(anyString(), any(), anyString());
+                .exportDocument(anyString(), any(), anyString(), anyMap());
 
         var retryable = approveAndAwait(
                 OWNER,
@@ -2287,7 +2455,7 @@ class DurableGenerationServiceTest {
                                 Map.of("format", "DOCX"),
                                 Map.of("format", "PDF"))))
                 .when(downstream)
-                .exportDocument(anyString(), any(), anyString());
+                .exportDocument(anyString(), any(), anyString(), anyMap());
         var completed = approveAndAwait(
                 OWNER,
                 awaiting.operationId(),
@@ -2299,9 +2467,10 @@ class DurableGenerationServiceTest {
                 GenerationOperationState.COMPLETED,
                 completed.state());
         verify(downstream, times(2)).exportDocument(
-                OWNER,
-                CV_DOCUMENT_ID,
-                awaiting.operationId() + ":cv-export");
+                eq(OWNER),
+                eq(CV_DOCUMENT_ID),
+                eq(awaiting.operationId() + ":cv-export"),
+                anyMap());
     }
 
     @Test
@@ -2615,6 +2784,11 @@ class DurableGenerationServiceTest {
                 "aspirations", Map.of(
                         "targetRoles",
                         List.of("Backend Developer")),
+                "professionalContact", Map.of(
+                        "phone", "+44 20 7946 0958",
+                        "links", List.of(Map.of(
+                                "label", "GitHub",
+                                "url", "https://github.com/example"))),
                 "qualifications", List.of(Map.of(
                         "qualificationName", "BSc Computing",
                         "status", "COMPLETED")),
@@ -2667,7 +2841,7 @@ class DurableGenerationServiceTest {
                 "id", invocation.getArgument(1).toString(),
                 "lifecycleState", "APPROVED"));
         when(downstream.exportDocument(
-                anyString(), any(), anyString())).thenAnswer(invocation -> Map.of(
+                anyString(), any(), anyString(), anyMap())).thenAnswer(invocation -> Map.of(
                 "documentId",
                 invocation.getArgument(1).toString(),
                 "exports", List.of(
@@ -2866,7 +3040,23 @@ class DurableGenerationServiceTest {
                                                 ? "cv.experience[0]"
                                                 : "coverLetter.paragraphs[1]"),
                                 "reviewText", "Grounded claim")))),
-                Map.entry("audit", Map.of("modelId", "fixture")));
+                Map.entry("audit", Map.of(
+                        "modelId", "fixture",
+                        "providerAttemptCount", 2,
+                        "automaticRetryCount", 1,
+                        "retryReason", "RATE_LIMITED")),
+                Map.entry("recovery", Map.ofEntries(
+                        Map.entry("finalSource", "LLM"),
+                        Map.entry("structuralRepairAttempted", true),
+                        Map.entry("structuralRepairSucceeded", true),
+                        Map.entry("duplicateItemsRemoved", 1),
+                        Map.entry("retainedResponseReplay", false),
+                        Map.entry("fallbackUsed", false),
+                        Map.entry("fallbackVersion", "none"),
+                        Map.entry("providerAttemptCount", 2),
+                        Map.entry("automaticRetryCount", 1),
+                        Map.entry("retried", true),
+                        Map.entry("retryReason", "RATE_LIMITED"))));
     }
 
     private StartGenerationRequest selectionRequest() {

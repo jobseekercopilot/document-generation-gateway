@@ -40,6 +40,8 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `2.7.0` adds the closed, typed, content-free per-output recovery
+contract described below without changing the operation or wallet lifecycle.
 Version `2.6.0` adds a durable owner/job/application/type-scoped free upload
 operation for one PDF or DOCX. It sends bytes only to Document Store's secure
 containerised scan/extraction path, retains no document content in the Gateway,
@@ -82,6 +84,22 @@ response. The Gateway reserves a Tracker operation before Store writes, creates
 the new version in the existing document family, uses stable idempotency keys
 for Store and Export, and returns `202` with operation/recovery state whenever
 completion is still pending. Tracker alone commits the application reference.
+
+Selective-operation `outputResults` include an additive, content-free
+`recoverySummary` for each requested output. It exposes only stable generation,
+repair, retry, reconciliation and billing categories plus bounded counts and
+`charged`/`released` booleans. Prompt text, evidence, document content, raw
+provider errors and hidden reasoning remain excluded. The summary is projected
+from the existing durable operation and does not add provider or Payment calls;
+same-owner idempotent replay therefore returns the same operation and cannot
+double-charge the wallet.
+`generationSource` is `LLM`, `DETERMINISTIC_FALLBACK`, or `NOT_AVAILABLE`
+when no provider output exists. Reconciliation sources are exactly
+`RETAINED_RESPONSE` and `DETERMINISTIC_FALLBACK`; absent reconciliation has no
+source. Revisioned `professionalContact` phone and labelled HTTPS links are
+captured in the immutable generation-operation profile snapshot, deliberately
+excluded from estimation and model requests, and copied unchanged only into
+approved export requests. They are never inferred or logged.
 
 The User Profile, CV/Cover Letter and Document Export clients resolve
 as immutable, producer-owned private Maven packages

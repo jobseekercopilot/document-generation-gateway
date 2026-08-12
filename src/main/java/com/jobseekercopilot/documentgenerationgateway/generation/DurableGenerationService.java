@@ -6,11 +6,15 @@ import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationReque
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOutputResultResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationRecoverySummaryResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationDeadlineExceededException;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
 import com.jobseekercopilot.documentgenerationgateway.logging.CorrelationIds;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -65,6 +69,20 @@ public class DurableGenerationService {
             "retainedResponseRecovery";
     private static final String RETAINED_RESPONSE_AUTO_APPROVAL =
             "retainedResponseAutoApproval";
+    private static final Set<String> SAFE_GENERATION_SOURCES = Set.of(
+            "LLM", "DETERMINISTIC_FALLBACK", "NOT_AVAILABLE");
+    private static final Set<String> SAFE_RECONCILIATION_STATUSES = Set.of(
+            "NOT_REQUIRED", "PENDING", "RECOVERED", "EXHAUSTED");
+    private static final Set<String> SAFE_RECONCILIATION_SOURCES = Set.of(
+            "RETAINED_RESPONSE", "DETERMINISTIC_FALLBACK");
+    private static final Set<String> SAFE_BILLING_OUTCOMES = Set.of(
+            "NOT_RESERVED",
+            "RESERVED",
+            "RESERVED_PENDING_RECONCILIATION",
+            "COMMITTED",
+            "RELEASED_NO_CHARGE",
+            "RELEASED_AFTER_FAILURE",
+            "RELEASED_AFTER_RECONCILIATION");
 
     private final GenerationOperationRepository repository;
     private final GenerationDownstreamClient downstream;
@@ -981,9 +999,9 @@ public class DurableGenerationService {
                 evidenceSnapshot);
         Map<String, Object> generationRequest = new LinkedHashMap<>();
         generationRequest.put("inputSchemaVersion", "2.0");
-        generationRequest.put("profile",
+        generationRequest.put("profile", generationProfile(
                 map(operation.data().get("profileSnapshot"),
-                        "profile snapshot"));
+                        "profile snapshot")));
         generationRequest.put("job",
                 map(operation.data().get("jobSnapshot"),
                         "job snapshot"));
@@ -1265,6 +1283,9 @@ public class DurableGenerationService {
         result.put("status", "FAILED");
         result.put("failureCode", code);
         result.put("failureMessage", message);
+        result.put("billingOutcome", reservationId == null
+                ? "NOT_RESERVED"
+                : "RELEASED_AFTER_FAILURE");
         saveOutputResult(data, output, result);
         data.remove("currentOutput");
         return checkpoint(
@@ -1286,6 +1307,10 @@ public class DurableGenerationService {
         result.put("status", "OUTCOME_UNKNOWN");
         result.put("failureCode", "GENERATION_OUTCOME_UNKNOWN");
         result.put("failureMessage", message);
+        if (uuid(result, "reservationId") != null) {
+            result.put("billingOutcome",
+                    "RESERVED_PENDING_RECONCILIATION");
+        }
         if (retainedResponseRecoveryEnabled) {
             result.put("outcomeReconciliation", Map.of(
                     "status", "PENDING",
@@ -1546,6 +1571,9 @@ public class DurableGenerationService {
                 "GENERATION_OUTCOME_RECONCILIATION_EXHAUSTED");
         result.put("failureMessage",
                 "No retained response became available within the bounded reconciliation window.");
+        result.put("billingOutcome", reservationId == null
+                ? "NOT_RESERVED"
+                : "RELEASED_AFTER_RECONCILIATION");
         result.put("outcomeReconciliation", Map.of(
                 "status", "EXHAUSTED",
                 "attempts", attempt,
@@ -1786,7 +1814,7 @@ public class DurableGenerationService {
                         capturedAt);
         Map<String, Object> generationRequest = new LinkedHashMap<>();
         generationRequest.put("inputSchemaVersion", "2.0");
-        generationRequest.put("profile", profileSnapshot);
+        generationRequest.put("profile", generationProfile(profileSnapshot));
         generationRequest.put("job", jobSnapshot);
         generationRequest.put("evidenceSnapshots", Map.of(
                 "cv", cvEvidenceSnapshot,
@@ -1794,6 +1822,7 @@ public class DurableGenerationService {
 
         Map<String, Object> data = data(operation);
         data.put("savedJob", savedJob);
+        data.put("profileSnapshot", profileSnapshot);
         data.put("generationRequest", generationRequest);
         data.put("jobSnapshotSha256", sha256Json(jobSnapshot));
         data.put("profileSnapshotSha256", sha256Json(profileSnapshot));
@@ -2125,7 +2154,8 @@ public class DurableGenerationService {
                                     () -> downstream.exportDocument(
                                             current.ownerId(),
                                             cvDocumentId,
-                                            current.id() + ":cv-export"));
+                                            current.id() + ":cv-export",
+                                            professionalContact(current)));
                             data.put("cvDownloads", exported);
                         }
                         operation = checkpoint(
@@ -2156,7 +2186,8 @@ public class DurableGenerationService {
                                             current.ownerId(),
                                             coverLetterDocumentId,
                                             current.id()
-                                                    + ":cover-letter-export"));
+                                                    + ":cover-letter-export",
+                                            professionalContact(current)));
                             data.put("coverLetterDownloads", exported);
                         }
                         operation = checkpoint(
@@ -2353,7 +2384,8 @@ public class DurableGenerationService {
                 () -> downstream.exportDocument(
                         operation.ownerId(),
                         requiredUuid(operation.data(), "cvDocumentId"),
-                        operation.id() + ":cv-export"));
+                        operation.id() + ":cv-export",
+                        professionalContact(operation)));
         Map<String, Object> data = data(operation);
         data.put("cvDownloads", exported);
         return checkpoint(
@@ -2375,7 +2407,8 @@ public class DurableGenerationService {
                         requiredUuid(
                                 operation.data(),
                                 "coverLetterDocumentId"),
-                        operation.id() + ":cover-letter-export"));
+                        operation.id() + ":cover-letter-export",
+                        professionalContact(operation)));
         Map<String, Object> data = data(operation);
         data.put("coverLetterDownloads", exported);
         return checkpoint(
@@ -2713,7 +2746,99 @@ public class DurableGenerationService {
             putBounded(contact, "email", email, 254);
             result.put("contact", contact);
         }
+        Map<String, Object> professionalContact = professionalContactSnapshot(
+                profile.get("professionalContact"));
+        if (!professionalContact.isEmpty()) {
+            result.put("professionalContact", professionalContact);
+        }
         return result;
+    }
+
+    private Map<String, Object> professionalContactSnapshot(Object value) {
+        Map<String, Object> source = optionalMap(value);
+        if (source.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        String phone = text(source.get("phone"));
+        if (phone != null) {
+            long digits = phone.chars().filter(Character::isDigit).count();
+            if (phone.length() > 40
+                    || !phone.matches("[0-9+() .-]+")
+                    || digits < 7
+                    || digits > 15) {
+                throw new IllegalStateException(
+                        "User Profile Service returned an invalid professional phone number.");
+            }
+            result.put("phone", phone);
+        }
+        List<?> sourceLinks = list(source.get("links"));
+        if (sourceLinks.size() > 8) {
+            throw new IllegalStateException(
+                    "User Profile Service returned too many professional links.");
+        }
+        List<Map<String, Object>> links = new ArrayList<>();
+        Set<String> labels = new HashSet<>();
+        Set<String> urls = new HashSet<>();
+        for (Object valueLink : sourceLinks) {
+            Map<String, Object> sourceLink = optionalMap(valueLink);
+            String label = text(sourceLink.get("label"));
+            String url = text(sourceLink.get("url"));
+            if (!validProfessionalLabel(label)
+                    || !validProfessionalUrl(url)
+                    || !labels.add(label.toLowerCase(Locale.ROOT))
+                    || !urls.add(url)) {
+                throw new IllegalStateException(
+                        "User Profile Service returned an invalid professional link.");
+            }
+            links.add(Map.of("label", label, "url", url));
+        }
+        if (!links.isEmpty()) {
+            result.put("links", List.copyOf(links));
+        }
+        return Map.copyOf(result);
+    }
+
+    private boolean validProfessionalLabel(String value) {
+        return value != null
+                && value.length() <= 40
+                && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    private boolean validProfessionalUrl(String value) {
+        if (value == null
+                || value.length() < 9
+                || value.length() > 512
+                || !value.startsWith("https://")
+                || value.codePoints().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        try {
+            URI uri = new URI(value);
+            return "https".equals(uri.getScheme())
+                    && uri.getHost() != null
+                    && uri.getRawUserInfo() == null;
+        } catch (URISyntaxException exception) {
+            return false;
+        }
+    }
+
+    private Map<String, Object> professionalContact(
+            GenerationOperation operation) {
+        Map<String, Object> profileSnapshot = optionalMap(
+                operation.data().get("profileSnapshot"));
+        if (profileSnapshot.isEmpty()) {
+            profileSnapshot = optionalMap(optionalMap(
+                    operation.data().get("generationRequest")).get("profile"));
+        }
+        return optionalMap(profileSnapshot.get("professionalContact"));
+    }
+
+    private Map<String, Object> generationProfile(
+            Map<String, Object> profileSnapshot) {
+        Map<String, Object> projection = new LinkedHashMap<>(profileSnapshot);
+        projection.remove("professionalContact");
+        return projection;
     }
 
     private StartGenerationRequest selectionRequest(
@@ -3495,24 +3620,174 @@ public class DurableGenerationService {
                         : Map.of());
     }
 
-    private Map<String, Object> publicOutputResults(
+    private Map<String, GenerationOutputResultResponse> publicOutputResults(
             Map<String, Object> data) {
-        Map<String, Object> publicResults = new LinkedHashMap<>();
+        Map<String, GenerationOutputResultResponse> publicResults =
+                new LinkedHashMap<>();
         outputResults(data).forEach((output, rawResult) -> {
             Map<String, Object> result = optionalMap(rawResult);
-            Map<String, Object> projection = new LinkedHashMap<>();
-            copyIfPresent(result, projection, "status");
-            copyIfPresent(result, projection, "documentId");
-            copyIfPresent(result, projection, "estimatedTokens");
-            copyIfPresent(result, projection, "actualTokens");
-            copyIfPresent(result, projection, "providerTokens");
-            copyIfPresent(result, projection, "billingOutcome");
-            copyIfPresent(result, projection, "outcomeReconciliation");
-            copyIfPresent(result, projection, "failureCode");
-            copyIfPresent(result, projection, "failureMessage");
-            publicResults.put(output, projection);
+            publicResults.put(output, new GenerationOutputResultResponse(
+                    text(result.get("status")),
+                    uuid(result, "documentId"),
+                    optionalLong(result.get("estimatedTokens")),
+                    optionalLong(result.get("actualTokens")),
+                    optionalLong(result.get("providerTokens")),
+                    text(result.get("billingOutcome")),
+                    result.containsKey("outcomeReconciliation")
+                            ? optionalMap(result.get("outcomeReconciliation"))
+                            : null,
+                    text(result.get("failureCode")),
+                    text(result.get("failureMessage")),
+                    recoverySummary(result)));
         });
-        return publicResults;
+        return Map.copyOf(publicResults);
+    }
+
+    private GenerationRecoverySummaryResponse recoverySummary(
+            Map<String, Object> result) {
+        Map<String, Object> generated = optionalMap(
+                result.get("generation"));
+        Map<String, Object> recovery = optionalMap(
+                generated.get("recovery"));
+        Map<String, Object> audit = optionalMap(generated.get("audit"));
+        Map<String, Object> reconciliation = optionalMap(
+                result.get("outcomeReconciliation"));
+
+        String generationSource = safeEnum(
+                recovery.get("finalSource"),
+                SAFE_GENERATION_SOURCES,
+                generated.isEmpty() ? "NOT_AVAILABLE" : "LLM");
+        boolean repairAttempted = booleanValue(
+                recovery.get("structuralRepairAttempted"));
+        boolean repairSucceeded = booleanValue(
+                recovery.get("structuralRepairSucceeded"));
+        int duplicatesRemoved = boundedCount(
+                recovery.get("duplicateItemsRemoved"), 200);
+        int providerAttempts = boundedCount(
+                firstPresent(
+                        recovery.get("providerAttemptCount"),
+                        audit.get("providerAttemptCount")),
+                2);
+        int automaticRetries = boundedCount(
+                firstPresent(
+                        recovery.get("automaticRetryCount"),
+                        audit.get("automaticRetryCount")),
+                1);
+
+        String retryReason = safeEnum(
+                firstPresent(
+                        recovery.get("retryReason"),
+                        audit.get("retryReason")),
+                Set.of("RATE_LIMITED"),
+                null);
+        String reconciliationStatus = safeEnum(
+                reconciliation.get("status"),
+                SAFE_RECONCILIATION_STATUSES,
+                "NOT_REQUIRED");
+        int reconciliationAttempts = boundedCount(
+                reconciliation.get("attempts"),
+                maxOutcomeReconciliationAttempts);
+        String reconciliationSource = safeEnum(
+                reconciliation.get("source"),
+                SAFE_RECONCILIATION_SOURCES,
+                null);
+        String fallbackReason = safeFallbackReason(
+                recovery.get("fallbackReason"));
+        if (fallbackReason == null
+                && "DETERMINISTIC_FALLBACK".equals(
+                        reconciliationSource)) {
+            fallbackReason = "RECONCILIATION_EXHAUSTED";
+        }
+
+        String billingStatus = safeEnum(
+                result.get("billingOutcome"),
+                SAFE_BILLING_OUTCOMES,
+                inferredBillingStatus(result));
+        return new GenerationRecoverySummaryResponse(
+                generationSource,
+                repairSucceeded ? "APPLIED"
+                        : repairAttempted ? "CHECKED" : "NOT_REQUIRED",
+                duplicatesRemoved,
+                providerAttempts,
+                automaticRetries,
+                automaticRetries > 0,
+                retryReason,
+                booleanValue(recovery.get("retainedResponseReplay"))
+                        || "RETAINED_RESPONSE".equals(
+                                reconciliationSource),
+                "DETERMINISTIC_FALLBACK".equals(generationSource)
+                        || booleanValue(recovery.get("fallbackUsed")),
+                fallbackReason,
+                reconciliationStatus,
+                reconciliationAttempts,
+                reconciliationSource,
+                billingStatus,
+                "COMMITTED".equals(billingStatus),
+                billingStatus.startsWith("RELEASED_"));
+    }
+
+    private Long optionalLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        throw new IllegalStateException(
+                "A downstream response contains an invalid token count.");
+    }
+
+    private Object firstPresent(Object preferred, Object fallback) {
+        return preferred == null ? fallback : preferred;
+    }
+
+    private boolean booleanValue(Object value) {
+        return value instanceof Boolean flag && flag;
+    }
+
+    private int boundedCount(Object value, int maximum) {
+        if (!(value instanceof Number number)) {
+            return 0;
+        }
+        long count = number.longValue();
+        return count < 0 || count > maximum ? 0 : (int) count;
+    }
+
+    private String safeEnum(
+            Object value,
+            Set<String> allowed,
+            String fallback) {
+        String candidate = value instanceof String text ? text : null;
+        return candidate != null && allowed.contains(candidate)
+                ? candidate : fallback;
+    }
+
+    private String safeFallbackReason(Object value) {
+        if (!(value instanceof String reason)) {
+            return null;
+        }
+        if ("PROVIDER_FAILURE".equals(reason)
+                || "EMPTY_PROVIDER_RESPONSE".equals(reason)
+                || "RECONCILIATION_EXHAUSTED".equals(reason)) {
+            return reason;
+        }
+        if (reason.startsWith("MODEL_OUTPUT_REJECTED_")) {
+            return "MODEL_OUTPUT_REJECTED";
+        }
+        if (reason.startsWith("RETAINED_MODEL_OUTPUT_REJECTED_")) {
+            return "RETAINED_MODEL_OUTPUT_REJECTED";
+        }
+        return null;
+    }
+
+    private String inferredBillingStatus(Map<String, Object> result) {
+        if (uuid(result, "reservationId") == null) {
+            return "NOT_RESERVED";
+        }
+        if ("OUTCOME_UNKNOWN".equals(text(result.get("status")))) {
+            return "RESERVED_PENDING_RECONCILIATION";
+        }
+        return "RESERVED";
     }
 
     private void copyIfPresent(

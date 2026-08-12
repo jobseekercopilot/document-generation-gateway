@@ -12,8 +12,8 @@ import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelect
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import com.jobseekercopilot.documentgenerationgateway.dto.EvidenceSection;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
+import com.jobseekercopilot.documentgenerationgateway.security.CurrentAccessTokenSupplier;
 import com.jobseekercopilot.generated.userprofileservice.api.EvidenceSnapshotsApi;
-import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
 import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshot;
 import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotRequest;
 import java.util.List;
@@ -43,8 +43,8 @@ class RestGenerationDownstreamClientTest {
             "operator-token-000000000000000000000001";
 
     @Mock private RestTemplate restTemplate;
-    @Mock private UserProfilesApi profilesApi;
     @Mock private EvidenceSnapshotsApi evidenceSnapshotsApi;
+    @Mock private CurrentAccessTokenSupplier accessTokenSupplier;
 
     private RestGenerationDownstreamClient client;
 
@@ -52,8 +52,8 @@ class RestGenerationDownstreamClientTest {
     void setUp() {
         client = new RestGenerationDownstreamClient(
                 restTemplate,
-                profilesApi,
                 evidenceSnapshotsApi,
+                accessTokenSupplier,
                 new ObjectMapper().findAndRegisterModules(),
                 new DownstreamServiceCredentials(
                         "auth-token-0000000000000000000000000001",
@@ -62,8 +62,9 @@ class RestGenerationDownstreamClientTest {
                         EXPORT_TOKEN,
                         "store-producer-00000000000000000000001",
                         "store-reader-0000000000000000000000001",
-                        PAYMENT_TOKEN),
+                PAYMENT_TOKEN),
                 "http://job",
+                "http://profile",
                 "http://auth",
                 "http://cv",
                 "http://payment",
@@ -115,6 +116,40 @@ class RestGenerationDownstreamClientTest {
                 request.getValue().getSectionOrder().stream()
                         .map(Enum::name)
                         .toList());
+    }
+
+    @Test
+    void profileUsesRawOwnerResponseSoRevisionedProfessionalContactIsPreserved() {
+        when(accessTokenSupplier.get())
+                .thenReturn("validated-user-access-token");
+        Map<String, Object> profile = Map.of(
+                "revisionId", UUID.randomUUID().toString(),
+                "professionalContact", Map.of(
+                        "phone", "+44 20 7946 0958",
+                        "links", List.of(Map.of(
+                                "label", "GitHub",
+                                "url", "https://github.com/example"))));
+        when(restTemplate.exchange(
+                eq("http://profile/api/profiles/me"),
+                eq(HttpMethod.GET),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(profile));
+
+        assertEquals(profile, client.profile());
+
+        ArgumentCaptor<HttpEntity> captured =
+                ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(
+                eq("http://profile/api/profiles/me"),
+                eq(HttpMethod.GET),
+                captured.capture(),
+                eq(Map.class));
+        HttpEntity<?> request = captured.getValue();
+        assertSingleHeader(
+                request,
+                "Authorization",
+                "Bearer validated-user-access-token");
     }
 
     @Test
@@ -350,7 +385,15 @@ class RestGenerationDownstreamClientTest {
                 .thenReturn(ResponseEntity.ok(Map.of(
                         "documentId", documentId.toString())));
 
-        client.exportDocument(OWNER, documentId, replayKey);
+        client.exportDocument(
+                OWNER,
+                documentId,
+                replayKey,
+                Map.of(
+                        "phone", "+44 20 7946 0958",
+                        "links", List.of(Map.of(
+                                "label", "GitHub",
+                                "url", "https://github.com/example"))));
 
         HttpEntity<?> request = capturedPost(
                 "http://export/api/v1/document-exports/documents/"
@@ -362,6 +405,10 @@ class RestGenerationDownstreamClientTest {
         assertEquals(
                 java.util.List.of("DOCX", "PDF"),
                 ((Map<?, ?>) request.getBody()).get("formats"));
+        assertEquals(
+                "+44 20 7946 0958",
+                ((Map<?, ?>) ((Map<?, ?>) request.getBody())
+                        .get("professionalContact")).get("phone"));
     }
 
     @Test

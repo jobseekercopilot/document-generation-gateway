@@ -22,7 +22,7 @@ public record GenerationOperationResponse(
         Instant createdAt,
         Instant updatedAt,
         Set<DocumentPurpose> requestedOutputs,
-        Map<String, Object> outputResults) {
+        Map<String, GenerationOutputResultResponse> outputResults) {
 
     public GenerationOperationResponse(
             UUID operationId,
