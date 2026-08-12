@@ -103,16 +103,16 @@ approved export requests. They are never inferred or logged.
 
 The User Profile, CV/Cover Letter and Document Export clients resolve
 as immutable, producer-owned private Maven packages
-`1.3.0-rev.85ac64be8c54`, `3.4.0-rev.fed6400b706b` and
-`2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
+`2.3.0-rev.a880add6e5c7`, `4.2.0-rev.3129864cca5c` and
+`3.1.0-rev.cda9a2af811b`. The Gateway no longer generates Java clients inside
 the consumer build. The new durable flow uses focused handwritten adapters for
 Job `2.0.0` and Payment `3.0.0`, plus producer-owned clients for User Profile
-`1.3.0` and CV/Cover Letter `3.4.0`. The raw
+`2.3.0` and CV/Cover Letter `4.2.0`. The raw
 Authentication, Document Store, Application Tracker and replacement-upload
 adapters are also checked against their pinned producer contracts. The durable
-path consumes Store `4.0.0`, Application Tracker `4.7.0` and Export `3.0.0`
+path consumes Store `4.0.0`, Application Tracker `4.7.0` and Export `3.1.0`
 through focused handwritten
-adapters, while replacement flows retain the immutable Export `2.0.0` client.
+adapters, while replacement flows use the immutable Export `3.1.0` client.
 Generated sources and binaries are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 

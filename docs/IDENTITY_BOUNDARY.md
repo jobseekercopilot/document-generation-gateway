@@ -24,7 +24,7 @@ wrong-purpose and subjectless tokens receive the same redacted
 | Application Tracker owner operations | Runtime `APPLICATION_TRACKER_PRODUCER_TOKEN` plus `X-Application-Owner` set to validated JWT `sub` | Enforced by the producer |
 | CV and Cover Letter | Runtime `CV_COVER_LETTER_GATEWAY_TOKEN` plus exactly one `X-Document-Owner` set to validated JWT `sub` and the durable operation ID | Enforced by CV/Cover Letter 3.2.0 and the gateway |
 | Payment reservations | Runtime `DOCUMENT_GENERATION_GATEWAY_TO_PAYMENT_SERVICE_TOKEN` plus exactly one `X-Payment-Owner` set to validated JWT `sub` | Enforced by Payment Service 3.0.0 and the gateway |
-| Document Export generation/replacement | Runtime `DOCUMENT_EXPORT_GATEWAY_TOKEN` plus exactly one `X-Document-Owner` set to validated JWT `sub`; generation also carries a stable replay key | Enforced by Export 3.0.0 and the gateway |
+| Document Export generation/replacement | Runtime `DOCUMENT_EXPORT_GATEWAY_TOKEN` plus exactly one `X-Document-Owner` set to validated JWT `sub`; generation also carries a stable replay key | Enforced by Export 3.1.0 and the gateway |
 | Document Store download/read | Runtime `DOCUMENT_STORE_READER_TOKEN` plus exactly one `X-Document-Owner` set to validated JWT `sub` | Enforced by Store 2.3.0 and the gateway |
 | Document Store create/approve | Runtime `DOCUMENT_STORE_PRODUCER_TOKEN` plus exactly one `X-Document-Owner` set to validated JWT `sub` | Enforced by Store 2.3.0 and the gateway |
 

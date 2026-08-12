@@ -73,15 +73,15 @@ verify_source \
 verify_source \
     cv-cover-letter-service \
     jobseekercopilot/cv-cover-letter-service \
-    f14716e29d3e9746e97fd16f57cbe3b659c9bbeb \
+    3129864cca5c0eca8fcf9a4df59ce4bda91ef1a1 \
     contracts/openapi.json \
-    42fbb50a75dcf0ad8aa9f746fecd1b48d0ccba736e4277b48c8daf7d4bdbadf9
+    72f997ab962e4cc2dc2d41f8c4c7df852de06d1c2cab66569851f2351c586a1d
 verify_source \
     document-export-service \
     jobseekercopilot/document-export-service \
-    b71014fe72d5b3660a95e55facd3d627078d892f \
+    cda9a2af811bafe99ecd686faab14db67f21ae32 \
     contracts/openapi.json \
-    17d37926cc6c9dedacb526e018577cb3c1aaf976fdcda24a588d541f9ec4f042
+    2848a72e78c2bfaa48ac5879e99528be0daaee6371cd6bd8a99c59e3131d585a
 verify_source \
     document-store-service \
     jobseekercopilot/document-store-service \
@@ -103,9 +103,9 @@ verify_source \
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
-    806ed6064d10b2de9171b14bd252477c4646de35 \
+    a880add6e5c7106a2f3abec08a147823f88edf20 \
     api/openapi.json \
-    1770e3aed76aa69f16015b496947e9ed2d28fb93f48e21fd4abcb03ec38d680d
+    3326ffc4c3f78fbd97325fe071d3848fdb3319ea997571f98cd792619905fc04
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
@@ -127,14 +127,15 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "2.1.0") and
+    (.info.version == "2.3.0") and
     (.paths["/api/profiles/me"].get.operationId == "getMyProfile") and
     (.paths["/api/profiles/me"].get.security | any(has("bearerAuth"))) and
     (.components.securitySchemes.bearerAuth.type == "http") and
     (.components.securitySchemes.bearerAuth.scheme == "bearer") and
     (.components.schemas.UserProfile.properties
         | has("userId") and has("skills") and has("aspirations") and
-          has("workPreferences") and has("qualifications") and has("roles")) and
+          has("workPreferences") and has("qualifications") and has("roles") and
+          has("professionalContact")) and
     (.paths["/api/evidence/snapshots"].post.operationId
         == "createEvidenceSnapshot") and
     (.paths["/api/evidence/snapshots/{snapshotId}"].get.operationId
@@ -146,7 +147,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "4.1.0") and
+    (.info.version == "4.2.0") and
     (.paths["/api/v1/cv-cover-letter/drafts/{outputType}/estimate"].post.operationId
         == "estimateSelectedDraft") and
     (.paths["/api/v1/cv-cover-letter/drafts/{outputType}"].post.operationId
@@ -235,7 +236,7 @@ grep -F "        contentSha256:" \
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.0.0") and
+    (.info.version == "3.1.0") and
     (.paths["/api/v1/document-exports/documents/{documentId}"].post.operationId
         == "exportDocument") and
     (.paths["/api/v1/document-exports/documents/{documentId}/upload"].post.operationId

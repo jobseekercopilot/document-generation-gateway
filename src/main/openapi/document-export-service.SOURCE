@@ -1,4 +1,4 @@
 repository=jobseekercopilot/document-export-service
-revision=b71014fe72d5b3660a95e55facd3d627078d892f
+revision=cda9a2af811bafe99ecd686faab14db67f21ae32
 path=contracts/openapi.json
-sha256=17d37926cc6c9dedacb526e018577cb3c1aaf976fdcda24a588d541f9ec4f042
+sha256=2848a72e78c2bfaa48ac5879e99528be0daaee6371cd6bd8a99c59e3131d585a

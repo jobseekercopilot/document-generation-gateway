@@ -95,7 +95,7 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         pom = root / "pom.xml"
         pom.write_text(
             pom.read_text().replace(
-                "4.1.0-rev.2e79ca3963f4", "4.1.0-rev.000000000000"
+                "4.2.0-rev.3129864cca5c", "4.2.0-rev.000000000000"
             ),
             encoding="utf-8",
         )
@@ -108,7 +108,7 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         pom = root / "pom.xml"
         pom.write_text(
             pom.read_text().replace(
-                "2.1.0-rev.806ed6064d10", "2.1.0-rev.000000000000"
+                "2.3.0-rev.a880add6e5c7", "2.3.0-rev.000000000000"
             ),
             encoding="utf-8",
         )
@@ -128,7 +128,7 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         pom = root / "pom.xml"
         pom.write_text(
             pom.read_text().replace(
-                "2.0.0-rev.a35fff34f86b", "2.0.0-rev.000000000000"
+                "3.1.0-rev.cda9a2af811b", "3.1.0-rev.000000000000"
             ),
             encoding="utf-8",
         )
