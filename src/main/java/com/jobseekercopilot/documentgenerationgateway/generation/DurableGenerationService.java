@@ -2154,7 +2154,11 @@ public class DurableGenerationService {
                                     () -> downstream.exportDocument(
                                             current.ownerId(),
                                             cvDocumentId,
-                                            current.id() + ":cv-export",
+                                            ExportIdempotencyKeys
+                                                    .forOperationOutput(
+                                                            current.id(),
+                                                            ExportIdempotencyKeys
+                                                                    .Output.CV),
                                             professionalContact(current)));
                             data.put("cvDownloads", exported);
                         }
@@ -2185,8 +2189,11 @@ public class DurableGenerationService {
                                     () -> downstream.exportDocument(
                                             current.ownerId(),
                                             coverLetterDocumentId,
-                                            current.id()
-                                                    + ":cover-letter-export",
+                                            ExportIdempotencyKeys
+                                                    .forOperationOutput(
+                                                            current.id(),
+                                                            ExportIdempotencyKeys
+                                                                    .Output.COVER_LETTER),
                                             professionalContact(current)));
                             data.put("coverLetterDownloads", exported);
                         }
@@ -2384,7 +2391,9 @@ public class DurableGenerationService {
                 () -> downstream.exportDocument(
                         operation.ownerId(),
                         requiredUuid(operation.data(), "cvDocumentId"),
-                        operation.id() + ":cv-export",
+                        ExportIdempotencyKeys.forOperationOutput(
+                                operation.id(),
+                                ExportIdempotencyKeys.Output.CV),
                         professionalContact(operation)));
         Map<String, Object> data = data(operation);
         data.put("cvDownloads", exported);
@@ -2407,7 +2416,10 @@ public class DurableGenerationService {
                         requiredUuid(
                                 operation.data(),
                                 "coverLetterDocumentId"),
-                        operation.id() + ":cover-letter-export",
+                        ExportIdempotencyKeys.forOperationOutput(
+                                operation.id(),
+                                ExportIdempotencyKeys
+                                        .Output.COVER_LETTER),
                         professionalContact(operation)));
         Map<String, Object> data = data(operation);
         data.put("coverLetterDownloads", exported);

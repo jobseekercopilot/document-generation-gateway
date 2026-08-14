@@ -2474,6 +2474,44 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void cvAndCoverLetterExportsUseDistinctDurableReplayKeys() {
+        var awaiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "distinct-export-keys-1",
+                selectionRequest());
+
+        var completed = approveAndAwait(
+                OWNER,
+                awaiting.operationId(),
+                new ApproveGenerationRequest(
+                        CV_DOCUMENT_ID,
+                        COVER_LETTER_DOCUMENT_ID));
+
+        assertEquals(
+                GenerationOperationState.COMPLETED,
+                completed.state());
+        ArgumentCaptor<UUID> documentIds =
+                ArgumentCaptor.forClass(UUID.class);
+        ArgumentCaptor<String> replayKeys =
+                ArgumentCaptor.forClass(String.class);
+        verify(downstream, times(2)).exportDocument(
+                eq(OWNER),
+                documentIds.capture(),
+                replayKeys.capture(),
+                anyMap());
+        assertEquals(
+                List.of(CV_DOCUMENT_ID, COVER_LETTER_DOCUMENT_ID),
+                documentIds.getAllValues());
+        assertEquals(
+                List.of(
+                        awaiting.operationId() + ":cv-export",
+                        awaiting.operationId() + ":cover-letter-export"),
+                replayKeys.getAllValues());
+    }
+
+    @Test
     void rejectsExpiredSavedJobBeforeEstimateOrCreditReservation() {
         when(downstream.savedJob(
                 SAVED_JOB_ID, AUTHORIZATION))
