@@ -898,7 +898,7 @@ class GenerationOperationRepositoryPostgresTest {
                 "id", invocation.getArgument(1).toString(),
                 "lifecycleState", "APPROVED"));
         when(downstream.exportDocument(
-                anyString(), any(), anyString())).thenAnswer(invocation -> Map.of(
+                anyString(), any(), anyString(), anyMap())).thenAnswer(invocation -> Map.of(
                 "documentId",
                 invocation.getArgument(1).toString(),
                 "exports",

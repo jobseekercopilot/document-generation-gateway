@@ -9,6 +9,7 @@ import com.jobseekercopilot.documentgenerationgateway.dto.ExportFileItem;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportLatestFiles;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
+import com.jobseekercopilot.documentgenerationgateway.generation.ExportIdempotencyKeys;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportItem;
@@ -324,12 +325,13 @@ public class DocumentGenerationService {
         }
     }
 
-    private DocumentDownloadsResponse exportDocument(UUID documentId, String userId) {
+    DocumentDownloadsResponse exportDocument(UUID documentId, String userId) {
         long startedAt = System.nanoTime();
         log.info("Calling document-export-service documentId={}", documentId);
         DocumentExportResponse response = documentExportsApi.exportDocument(
                 requireDocumentOwner(userId),
                 documentId,
+                ExportIdempotencyKeys.forDocument(documentId),
                 new DocumentExportRequest()
                         .formats(List.of(
                                 DocumentExportRequest.FormatsEnum.DOCX,

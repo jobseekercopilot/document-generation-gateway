@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Job Seeker Copilot User Profile API",
-    "version": "2.1.0",
-    "description": "Producer-owned contract for authenticated current-user profile, personal-data export, versioned evidence and immutable purpose-bound snapshot operations."
+    "version": "2.3.0",
+    "description": "Producer-owned contract for authenticated current-user profile, private professional contact, personal-data export, versioned evidence and immutable purpose-bound snapshot operations."
   },
   "tags": [
     {
@@ -379,133 +379,253 @@
     },
     "/api/evidence/{entryId}/confirm": {
       "post": {
-        "tags": ["Evidence Library"],
+        "tags": [
+          "Evidence Library"
+        ],
         "operationId": "confirmEvidence",
         "summary": "Confirm the latest draft as a new immutable revision",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
-          {"$ref": "#/components/parameters/EvidenceEntryId"},
-          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+          {
+            "$ref": "#/components/parameters/EvidenceEntryId"
+          },
+          {
+            "$ref": "#/components/parameters/EvidenceIfMatch"
+          }
         ],
         "responses": {
-          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Entry does not exist or is owned by another claimant"},
-          "409": {"description": "Stale version or latest revision is not a draft"}
+          "200": {
+            "$ref": "#/components/responses/EvidenceEntryResponse"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          },
+          "409": {
+            "description": "Stale version or latest revision is not a draft"
+          }
         }
       }
     },
     "/api/evidence/{entryId}/hide": {
       "post": {
-        "tags": ["Evidence Library"],
+        "tags": [
+          "Evidence Library"
+        ],
         "operationId": "hideEvidence",
         "summary": "Hide an evidence entry from routine selectors",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
-          {"$ref": "#/components/parameters/EvidenceEntryId"},
-          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+          {
+            "$ref": "#/components/parameters/EvidenceEntryId"
+          },
+          {
+            "$ref": "#/components/parameters/EvidenceIfMatch"
+          }
         ],
         "responses": {
-          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Entry does not exist or is owned by another claimant"},
-          "409": {"description": "Stale version"}
+          "200": {
+            "$ref": "#/components/responses/EvidenceEntryResponse"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          },
+          "409": {
+            "description": "Stale version"
+          }
         }
       }
     },
     "/api/evidence/{entryId}/show": {
       "post": {
-        "tags": ["Evidence Library"],
+        "tags": [
+          "Evidence Library"
+        ],
         "operationId": "showEvidence",
         "summary": "Show an evidence entry in routine selectors",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
-          {"$ref": "#/components/parameters/EvidenceEntryId"},
-          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+          {
+            "$ref": "#/components/parameters/EvidenceEntryId"
+          },
+          {
+            "$ref": "#/components/parameters/EvidenceIfMatch"
+          }
         ],
         "responses": {
-          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Entry does not exist or is owned by another claimant"},
-          "409": {"description": "Stale version"}
+          "200": {
+            "$ref": "#/components/responses/EvidenceEntryResponse"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          },
+          "409": {
+            "description": "Stale version"
+          }
         }
       }
     },
     "/api/evidence/{entryId}/archive": {
       "post": {
-        "tags": ["Evidence Library"],
+        "tags": [
+          "Evidence Library"
+        ],
         "operationId": "archiveEvidence",
         "summary": "Archive evidence while retaining immutable history",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
-          {"$ref": "#/components/parameters/EvidenceEntryId"},
-          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+          {
+            "$ref": "#/components/parameters/EvidenceEntryId"
+          },
+          {
+            "$ref": "#/components/parameters/EvidenceIfMatch"
+          }
         ],
         "responses": {
-          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Entry does not exist or is owned by another claimant"},
-          "409": {"description": "Stale version or lifecycle conflict"}
+          "200": {
+            "$ref": "#/components/responses/EvidenceEntryResponse"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          },
+          "409": {
+            "description": "Stale version or lifecycle conflict"
+          }
         }
       }
     },
     "/api/evidence/{entryId}/restore": {
       "post": {
-        "tags": ["Evidence Library"],
+        "tags": [
+          "Evidence Library"
+        ],
         "operationId": "restoreEvidence",
         "summary": "Restore archived evidence",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
-          {"$ref": "#/components/parameters/EvidenceEntryId"},
-          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+          {
+            "$ref": "#/components/parameters/EvidenceEntryId"
+          },
+          {
+            "$ref": "#/components/parameters/EvidenceIfMatch"
+          }
         ],
         "responses": {
-          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Entry does not exist or is owned by another claimant"},
-          "409": {"description": "Stale version or lifecycle conflict"}
+          "200": {
+            "$ref": "#/components/responses/EvidenceEntryResponse"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          },
+          "409": {
+            "description": "Stale version or lifecycle conflict"
+          }
         }
       }
     },
     "/api/evidence/{entryId}/supersede": {
       "post": {
-        "tags": ["Evidence Library"],
+        "tags": [
+          "Evidence Library"
+        ],
         "operationId": "supersedeEvidence",
         "summary": "Supersede evidence with another owned active entry",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
-          {"$ref": "#/components/parameters/EvidenceEntryId"},
-          {"$ref": "#/components/parameters/EvidenceIfMatch"}
+          {
+            "$ref": "#/components/parameters/EvidenceEntryId"
+          },
+          {
+            "$ref": "#/components/parameters/EvidenceIfMatch"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": {"$ref": "#/components/schemas/EvidenceSupersedeRequest"}
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceSupersedeRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": {"$ref": "#/components/responses/EvidenceEntryResponse"},
-          "400": {"description": "Invalid replacement entry"},
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Entry does not exist or is owned by another claimant"},
-          "409": {"description": "Stale version or lifecycle conflict"}
+          "200": {
+            "$ref": "#/components/responses/EvidenceEntryResponse"
+          },
+          "400": {
+            "description": "Invalid replacement entry"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Entry does not exist or is owned by another claimant"
+          },
+          "409": {
+            "description": "Stale version or lifecycle conflict"
+          }
         }
       }
     },
     "/api/evidence/snapshots": {
       "post": {
-        "tags": ["Evidence snapshots"],
+        "tags": [
+          "Evidence snapshots"
+        ],
         "operationId": "createEvidenceSnapshot",
         "summary": "Create an immutable purpose-bound snapshot from explicitly selected evidence",
         "description": "The server derives the owner and resolves only the latest visible, active, user-confirmed revision for each ordered server-issued entry ID. Evidence is never included automatically.",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": {"$ref": "#/components/schemas/EvidenceSnapshotRequest"}
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceSnapshotRequest"
+              }
             }
           }
         },
@@ -514,23 +634,39 @@
             "description": "Immutable evidence snapshot created",
             "content": {
               "application/json": {
-                "schema": {"$ref": "#/components/schemas/EvidenceSnapshot"}
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceSnapshot"
+                }
               }
             }
           },
-          "400": {"description": "Snapshot request validation failed"},
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Profile or selected entry does not exist for the authenticated claimant"},
-          "409": {"description": "Duplicate, stale, draft, hidden, review-required, archived or superseded evidence"}
+          "400": {
+            "description": "Snapshot request validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Profile or selected entry does not exist for the authenticated claimant"
+          },
+          "409": {
+            "description": "Duplicate, stale, draft, hidden, review-required, archived or superseded evidence"
+          }
         }
       }
     },
     "/api/evidence/snapshots/{snapshotId}": {
       "get": {
-        "tags": ["Evidence snapshots"],
+        "tags": [
+          "Evidence snapshots"
+        ],
         "operationId": "getEvidenceSnapshot",
         "summary": "Get an immutable evidence snapshot owned by the authenticated claimant",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "name": "snapshotId",
@@ -547,38 +683,123 @@
             "description": "Owned immutable evidence snapshot",
             "content": {
               "application/json": {
-                "schema": {"$ref": "#/components/schemas/EvidenceSnapshot"}
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceSnapshot"
+                }
               }
             }
           },
-          "401": {"description": "Missing or invalid access token"},
-          "404": {"description": "Snapshot does not exist or is owned by another claimant"}
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Snapshot does not exist or is owned by another claimant"
+          }
         }
       }
     },
     "/api/profiles/me/export": {
       "get": {
-        "tags": ["User Profiles"],
+        "tags": [
+          "User Profiles"
+        ],
         "operationId": "exportMyProfileData",
         "summary": "Export all profile-owned personal data for the authenticated user",
         "description": "Returns a synchronous machine-readable export. No server-side export artifact is stored.",
-        "security": [{"bearerAuth": []}],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Complete profile and evidence export",
             "headers": {
               "Cache-Control": {
                 "description": "Export responses are never stored by shared or browser caches",
-                "schema": {"type": "string", "example": "no-store"}
+                "schema": {
+                  "type": "string",
+                  "example": "no-store"
+                }
               }
             },
             "content": {
               "application/json": {
-                "schema": {"$ref": "#/components/schemas/ProfilePersonalDataExport"}
+                "schema": {
+                  "$ref": "#/components/schemas/ProfilePersonalDataExport"
+                }
               }
             }
           },
-          "401": {"description": "Missing or invalid access token"}
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        }
+      }
+    },
+    "/api/profiles/me/professional-contact": {
+      "patch": {
+        "tags": [
+          "User Profiles"
+        ],
+        "operationId": "updateMyProfessionalContact",
+        "summary": "Replace the authenticated owner professional contact without replacing other profile content",
+        "description": "Stores only explicitly user-declared phone and labelled HTTPS professional links; no values are inferred from CV content.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "description": "Optional quoted profile revision for optimistic concurrency.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\\"?[0-9]+\\\"?$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfessionalContact"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Professional contact saved without replacing other profile content",
+            "headers": {
+              "ETag": {
+                "description": "Quoted resulting profile revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Professional contact validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "409": {
+            "description": "Stale profile revision"
+          }
         }
       }
     }
@@ -644,7 +865,9 @@
         "properties": {
           "schemaVersion": {
             "type": "string",
-            "enum": ["profile-personal-data.v1"]
+            "enum": [
+              "profile-personal-data.v1"
+            ]
           },
           "generatedAt": {
             "type": "string",
@@ -652,15 +875,23 @@
           },
           "profile": {
             "nullable": true,
-            "allOf": [{"$ref": "#/components/schemas/UserProfile"}]
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserProfile"
+              }
+            ]
           },
           "evidenceEntries": {
             "type": "array",
-            "items": {"$ref": "#/components/schemas/EvidenceEntry"}
+            "items": {
+              "$ref": "#/components/schemas/EvidenceEntry"
+            }
           },
           "evidenceSnapshots": {
             "type": "array",
-            "items": {"$ref": "#/components/schemas/EvidenceSnapshot"}
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSnapshot"
+            }
           }
         }
       },
@@ -724,6 +955,9 @@
             "items": {
               "$ref": "#/components/schemas/Role"
             }
+          },
+          "professionalContact": {
+            "$ref": "#/components/schemas/ProfessionalContact"
           }
         }
       },
@@ -763,6 +997,24 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 500
+          },
+          "commuteTravelModes": {
+            "type": "array",
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/CommuteTravelMode"
+            }
+          },
+          "maximumDrivingMinutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 180
+          },
+          "maximumTransitMinutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 180
           },
           "employmentTypes": {
             "type": "array",
@@ -853,9 +1105,30 @@
           "REMOTE"
         ]
       },
+      "CommuteTravelMode": {
+        "type": "string",
+        "enum": [
+          "DRIVE",
+          "TRANSIT"
+        ]
+      },
       "PostcodeLocation": {
         "type": "object",
         "properties": {
+          "locationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "countryCode": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 2,
+            "pattern": "^[A-Z]{2}$"
+          },
           "postcode": {
             "type": "string",
             "maxLength": 16,
@@ -880,8 +1153,76 @@
             "format": "double",
             "minimum": -180,
             "maximum": 180
+          },
+          "locationType": {
+            "$ref": "#/components/schemas/CanonicalLocationType"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/LocationPrecision"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/LocationConfidence"
+          },
+          "googlePlaceId": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Provider reference only; Google display/address content is not persisted"
+          },
+          "postcodesIoPlaceId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "displayNameSource": {
+            "$ref": "#/components/schemas/LocationSource"
+          },
+          "postcodeSource": {
+            "$ref": "#/components/schemas/LocationSource"
+          },
+          "coordinatesSource": {
+            "$ref": "#/components/schemas/LocationSource"
           }
         }
+      },
+      "CanonicalLocationType": {
+        "type": "string",
+        "enum": [
+          "POSTCODE",
+          "LOCALITY",
+          "ADDRESS",
+          "WORKPLACE",
+          "REMOTE",
+          "UNKNOWN"
+        ]
+      },
+      "LocationPrecision": {
+        "type": "string",
+        "enum": [
+          "EXACT_ADDRESS",
+          "POSTCODE_CENTROID",
+          "LOCALITY_CENTROID",
+          "PROVIDER_COORDINATE",
+          "NONE"
+        ]
+      },
+      "LocationConfidence": {
+        "type": "string",
+        "enum": [
+          "VERIFIED",
+          "PROVIDED",
+          "INFERRED",
+          "AMBIGUOUS",
+          "UNKNOWN"
+        ]
+      },
+      "LocationSource": {
+        "type": "string",
+        "enum": [
+          "GOOGLE_PLACES",
+          "POSTCODES_IO",
+          "JOB_PROVIDER",
+          "USER",
+          "LEGACY"
+        ]
       },
       "Qualification": {
         "type": "object",
@@ -1434,7 +1775,9 @@
           },
           "category": {
             "allOf": [
-              {"$ref": "#/components/schemas/EvidenceCategory"}
+              {
+                "$ref": "#/components/schemas/EvidenceCategory"
+              }
             ],
             "readOnly": true
           },
@@ -1593,6 +1936,47 @@
           "ARCHIVED",
           "SUPERSEDED"
         ]
+      },
+      "ProfessionalContact": {
+        "type": "object",
+        "description": "Private user-declared professional contact available only through owner-authorised profile and document workflows",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "maxLength": 40,
+            "pattern": "^\\s*$|^(?=(?:\\D*\\d){7,15}\\D*$)[+0-9() .-]+$",
+            "description": "Optional user-declared professional telephone number; blank input is normalised to absent"
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "$ref": "#/components/schemas/ProfessionalLink"
+            }
+          }
+        }
+      },
+      "ProfessionalLink": {
+        "type": "object",
+        "required": [
+          "label",
+          "url"
+        ],
+        "description": "A user-declared labelled professional HTTPS link",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[^\\p{Cc}]+$"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 512,
+            "pattern": "^https://"
+          }
+        }
       }
     }
   }

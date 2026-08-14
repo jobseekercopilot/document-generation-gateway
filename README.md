@@ -40,6 +40,8 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
+Version `2.7.0` adds the closed, typed, content-free per-output recovery
+contract described below without changing the operation or wallet lifecycle.
 Version `2.6.0` adds a durable owner/job/application/type-scoped free upload
 operation for one PDF or DOCX. It sends bytes only to Document Store's secure
 containerised scan/extraction path, retains no document content in the Gateway,
@@ -83,18 +85,34 @@ the new version in the existing document family, uses stable idempotency keys
 for Store and Export, and returns `202` with operation/recovery state whenever
 completion is still pending. Tracker alone commits the application reference.
 
+Selective-operation `outputResults` include an additive, content-free
+`recoverySummary` for each requested output. It exposes only stable generation,
+repair, retry, reconciliation and billing categories plus bounded counts and
+`charged`/`released` booleans. Prompt text, evidence, document content, raw
+provider errors and hidden reasoning remain excluded. The summary is projected
+from the existing durable operation and does not add provider or Payment calls;
+same-owner idempotent replay therefore returns the same operation and cannot
+double-charge the wallet.
+`generationSource` is `LLM`, `DETERMINISTIC_FALLBACK`, or `NOT_AVAILABLE`
+when no provider output exists. Reconciliation sources are exactly
+`RETAINED_RESPONSE` and `DETERMINISTIC_FALLBACK`; absent reconciliation has no
+source. Revisioned `professionalContact` phone and labelled HTTPS links are
+captured in the immutable generation-operation profile snapshot, deliberately
+excluded from estimation and model requests, and copied unchanged only into
+approved export requests. They are never inferred or logged.
+
 The User Profile, CV/Cover Letter and Document Export clients resolve
 as immutable, producer-owned private Maven packages
-`1.3.0-rev.85ac64be8c54`, `3.4.0-rev.fed6400b706b` and
-`2.0.0-rev.a35fff34f86b`. The Gateway no longer generates Java clients inside
+`2.3.0-rev.a880add6e5c7`, `4.2.0-rev.3129864cca5c` and
+`3.1.0-rev.cda9a2af811b`. The Gateway no longer generates Java clients inside
 the consumer build. The new durable flow uses focused handwritten adapters for
 Job `2.0.0` and Payment `3.0.0`, plus producer-owned clients for User Profile
-`1.3.0` and CV/Cover Letter `3.4.0`. The raw
+`2.3.0` and CV/Cover Letter `4.2.0`. The raw
 Authentication, Document Store, Application Tracker and replacement-upload
 adapters are also checked against their pinned producer contracts. The durable
-path consumes Store `4.0.0`, Application Tracker `4.7.0` and Export `3.0.0`
+path consumes Store `4.0.0`, Application Tracker `4.7.0` and Export `3.1.0`
 through focused handwritten
-adapters, while replacement flows retain the immutable Export `2.0.0` client.
+adapters, while replacement flows use the immutable Export `3.1.0` client.
 Generated sources and binaries are build output and are not committed. See
 [`docs/CONTRACT_GOVERNANCE.md`](docs/CONTRACT_GOVERNANCE.md).
 

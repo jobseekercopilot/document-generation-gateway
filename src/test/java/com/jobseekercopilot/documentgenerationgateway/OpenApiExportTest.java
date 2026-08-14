@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.6.0", contract.path("info").path("version").asText());
+        assertEquals("2.7.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -183,6 +183,50 @@ class OpenApiExportTest {
                 .path("properties").has("requestedOutputs"));
         assertTrue(schemas.path("GenerationOperationResponse")
                 .path("properties").has("outputResults"));
+        assertEquals(
+                "#/components/schemas/GenerationOutputResultResponse",
+                schemas.path("GenerationOperationResponse")
+                        .path("properties")
+                        .path("outputResults")
+                        .path("additionalProperties")
+                        .path("$ref")
+                        .asText());
+        JsonNode outputResult = schemas.path(
+                "GenerationOutputResultResponse");
+        JsonNode recovery = schemas.path(
+                "GenerationRecoverySummaryResponse");
+        assertFalse(outputResult.path("additionalProperties")
+                .asBoolean(true));
+        assertFalse(recovery.path("additionalProperties")
+                .asBoolean(true));
+        assertEquals(
+                "#/components/schemas/GenerationRecoverySummaryResponse",
+                outputResult.path("properties")
+                        .path("recoverySummary")
+                        .path("$ref")
+                        .asText());
+        assertEquals(
+                "[\"LLM\",\"DETERMINISTIC_FALLBACK\",\"NOT_AVAILABLE\"]",
+                recovery.path("properties")
+                        .path("generationSource")
+                        .path("enum")
+                        .toString());
+        assertEquals(
+                "[\"NOT_RESERVED\",\"RESERVED\",\"RESERVED_PENDING_RECONCILIATION\","
+                        + "\"COMMITTED\",\"RELEASED_NO_CHARGE\",\"RELEASED_AFTER_FAILURE\","
+                        + "\"RELEASED_AFTER_RECONCILIATION\"]",
+                recovery.path("properties")
+                        .path("billingStatus")
+                        .path("enum")
+                        .toString());
+        assertEquals(60, recovery.path("properties")
+                .path("reconciliationAttempts")
+                .path("maximum")
+                .asInt());
+        assertFalse(recovery.path("properties").has("content"));
+        assertFalse(recovery.path("properties").has("prompt"));
+        assertFalse(recovery.path("properties").has("evidence"));
+        assertFalse(recovery.path("properties").has("providerError"));
         assertEquals(
                 java.util.Set.of("purpose", "entryIds", "sectionOrder"),
                 new java.util.HashSet<>(objectMapper.convertValue(

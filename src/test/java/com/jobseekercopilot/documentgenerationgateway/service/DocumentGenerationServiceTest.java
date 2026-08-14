@@ -36,6 +36,56 @@ class DocumentGenerationServiceTest {
     private RestTemplate uploadRestTemplate;
 
     @Test
+    void directExportReplaysWithTheSameDocumentDerivedKey() {
+        var profiles = Mockito.mock(UserProfilesApi.class);
+        var exporter = Mockito.mock(DocumentExportsApi.class);
+        var restTemplate = Mockito.mock(RestTemplate.class);
+        UUID documentId = UUID.randomUUID();
+        when(exporter.exportDocument(
+                Mockito.eq("alice"),
+                Mockito.eq(documentId),
+                Mockito.anyString(),
+                Mockito.any(DocumentExportRequest.class)))
+                .thenReturn(exportResponse(
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        "cv.docx",
+                        "cv.pdf"));
+        var service = new DocumentGenerationService(
+                profiles,
+                exporter,
+                new ObjectMapper(),
+                restTemplate,
+                "http://cv",
+                "http://auth",
+                "http://export",
+                "http://store",
+                "http://tracker",
+                "test-only-authentication-service-token-32-bytes",
+                "test-only-application-producer-token-32-bytes",
+                "test-only-cv-cover-letter-service-token-32-bytes",
+                "test-only-document-export-service-token-32-bytes",
+                "test-only-document-store-producer-token-32-bytes",
+                "test-only-document-store-reader-token-32-bytes",
+                "test-only-payment-service-token-0000000000001");
+
+        service.exportDocument(documentId, "alice");
+        service.exportDocument(documentId, "alice");
+
+        ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
+        verify(exporter, Mockito.times(2)).exportDocument(
+                Mockito.eq("alice"),
+                Mockito.eq(documentId),
+                keys.capture(),
+                Mockito.any(DocumentExportRequest.class));
+        assertEquals(
+                java.util.List.of(
+                        documentId + ":document-export",
+                        documentId + ":document-export"),
+                keys.getAllValues());
+    }
+
+    @Test
     void uploadReplacementAllowsDocumentsGeneratedApplications() {
         var service = uploadServiceWithStatus("DOCUMENTS_GENERATED");
         UUID generatedDocumentId = UUID.randomUUID();

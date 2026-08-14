@@ -1,11 +1,11 @@
 package com.jobseekercopilot.documentgenerationgateway.generation;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobseekercopilot.documentgenerationgateway.security.CurrentAccessTokenSupplier;
 import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import com.jobseekercopilot.generated.userprofileservice.api.EvidenceSnapshotsApi;
-import com.jobseekercopilot.generated.userprofileservice.api.UserProfilesApi;
 import com.jobseekercopilot.generated.userprofileservice.model.EvidenceCategory;
 import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotPurpose;
 import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotRequest;
@@ -31,11 +31,12 @@ public class RestGenerationDownstreamClient
     private static final String APPLICATION_OWNER = "X-Application-Owner";
 
     private final RestTemplate restTemplate;
-    private final UserProfilesApi profilesApi;
     private final EvidenceSnapshotsApi evidenceSnapshotsApi;
+    private final CurrentAccessTokenSupplier accessTokenSupplier;
     private final ObjectMapper objectMapper;
     private final DownstreamServiceCredentials credentials;
     private final String jobBaseUrl;
+    private final String userProfileBaseUrl;
     private final String authenticationBaseUrl;
     private final String cvBaseUrl;
     private final String paymentBaseUrl;
@@ -46,11 +47,13 @@ public class RestGenerationDownstreamClient
 
     public RestGenerationDownstreamClient(
             RestTemplate restTemplate,
-            UserProfilesApi profilesApi,
             EvidenceSnapshotsApi evidenceSnapshotsApi,
+            CurrentAccessTokenSupplier accessTokenSupplier,
             ObjectMapper objectMapper,
             DownstreamServiceCredentials credentials,
             @Value("${services.job-service.base-url}") String jobBaseUrl,
+            @Value("${services.user-profile-service.base-url}")
+            String userProfileBaseUrl,
             @Value("${services.authentication-service.base-url}")
             String authenticationBaseUrl,
             @Value("${services.cv-cover-letter-service.base-url}")
@@ -65,11 +68,12 @@ public class RestGenerationDownstreamClient
             @Value("${document-generation.retained-response-recovery.operator-token:}")
             String rejectedGenerationOperatorToken) {
         this.restTemplate = restTemplate;
-        this.profilesApi = profilesApi;
         this.evidenceSnapshotsApi = evidenceSnapshotsApi;
+        this.accessTokenSupplier = accessTokenSupplier;
         this.objectMapper = objectMapper;
         this.credentials = credentials;
         this.jobBaseUrl = jobBaseUrl;
+        this.userProfileBaseUrl = userProfileBaseUrl;
         this.authenticationBaseUrl = authenticationBaseUrl;
         this.cvBaseUrl = cvBaseUrl;
         this.paymentBaseUrl = paymentBaseUrl;
@@ -96,10 +100,13 @@ public class RestGenerationDownstreamClient
 
     @Override
     public Map<String, Object> profile() {
-        Object profile = Objects.requireNonNull(
-                profilesApi.getMyProfile(),
-                "User Profile Service returned no profile.");
-        return objectMapper.convertValue(profile, LinkedHashMap.class);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(accessTokenSupplier.get());
+        return body(restTemplate.exchange(
+                userProfileBaseUrl + "/api/profiles/me",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                Map.class));
     }
 
     @Override
@@ -396,18 +403,24 @@ public class RestGenerationDownstreamClient
     public Map<String, Object> exportDocument(
             String ownerId,
             UUID documentId,
-            String idempotencyKey) {
+            String idempotencyKey,
+            Map<String, Object> professionalContact) {
         HttpHeaders headers = serviceHeaders(
                 credentials.documentExportServiceToken(),
                 DOCUMENT_OWNER,
                 ownerId);
         headers.set("Idempotency-Key", idempotencyKey);
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("formats", List.of("DOCX", "PDF"));
+        if (professionalContact != null && !professionalContact.isEmpty()) {
+            request.put("professionalContact", professionalContact);
+        }
         return post(
                 exportBaseUrl
                         + "/api/v1/document-exports/documents/"
                         + documentId,
                 headers,
-                Map.of("formats", List.of("DOCX", "PDF")));
+                request);
     }
 
     @Override

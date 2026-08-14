@@ -80,7 +80,8 @@ public interface GenerationDownstreamClient {
     Map<String, Object> exportDocument(
             String ownerId,
             UUID documentId,
-            String idempotencyKey);
+            String idempotencyKey,
+            Map<String, Object> professionalContact);
 
     Map<String, Object> createApplication(
             String ownerId,
