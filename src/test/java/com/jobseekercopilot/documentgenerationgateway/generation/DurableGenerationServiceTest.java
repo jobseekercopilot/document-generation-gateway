@@ -344,6 +344,92 @@ class DurableGenerationServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void preservesNhsSourceMetadataWhenReusingAnExistingSavedApplication() {
+        String externalJobId = "nhs-fixture-1";
+        String listingUrl =
+                "https://beta.jobs.nhs.uk/candidate/jobadvert/nhs-fixture-1";
+        Map<String, Object> savedJob = new LinkedHashMap<>(
+                savedJobResponse("SNAPSHOT"));
+        Map<String, Object> job = new LinkedHashMap<>(
+                (Map<String, Object>) savedJob.get("job"));
+        job.put("provider", "NHS_JOBS");
+        job.put("primarySource", "NHS_JOBS");
+        job.put("externalJobId", externalJobId);
+        job.put("sources", List.of(
+                Map.of(
+                        "provider", "NHS_JOBS",
+                        "externalJobId", "different-vacancy",
+                        "publisher", "Wrong source",
+                        "listingUrl",
+                        "https://wrong.example.test/listing",
+                        "applyUrl",
+                        "https://wrong.example.test/apply"),
+                Map.of(
+                        "integrationProvider", "NHS_JOBS",
+                        "externalJobId", externalJobId,
+                        "publisher", "NHS Jobs",
+                        "listingUrl", listingUrl,
+                        "applyUrl", listingUrl)));
+        savedJob.put("job", job);
+        when(downstream.savedJob(SAVED_JOB_ID, AUTHORIZATION))
+                .thenReturn(savedJob);
+
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.CONFLICT,
+                "Conflict",
+                org.springframework.http.HttpHeaders.EMPTY,
+                new byte[0],
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .createApplication(
+                        anyString(), anyString(), anyMap());
+        when(downstream.applications(OWNER)).thenReturn(List.of(Map.of(
+                "id", APPLICATION_ID.toString(),
+                "canonicalJobId", "canonical-job-1",
+                "status", "SAVED",
+                "version", 1)));
+
+        GenerationOperationResponse waiting = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "nhs-existing-application",
+                cvOnlyRequest());
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                waiting.state());
+        assertEquals(APPLICATION_ID, waiting.applicationId());
+        ArgumentCaptor<Map> application =
+                ArgumentCaptor.forClass(Map.class);
+        verify(downstream).createApplication(
+                eq(OWNER), anyString(), application.capture());
+        assertEquals("NHS_JOBS", application.getValue().get("provider"));
+        assertEquals(
+                externalJobId,
+                application.getValue().get("externalJobId"));
+        assertEquals(listingUrl, application.getValue().get("listingUrl"));
+        assertEquals(listingUrl, application.getValue().get("applyUrl"));
+        assertEquals(
+                "Vacancy source: NHS Jobs",
+                application.getValue().get("attributionLabel"));
+        assertEquals(
+                "https://www.jobs.nhs.uk/",
+                application.getValue().get("attributionSourceUrl"));
+        assertEquals(
+                "https://www.nationalarchives.gov.uk/doc/"
+                        + "open-government-licence/version/3/",
+                application.getValue().get("licenceUrl"));
+        assertEquals(
+                "NHS Jobs does not endorse Job Seeker Copilot.",
+                application.getValue().get("disclaimer"));
+        verify(downstream).applications(OWNER);
+        verify(downstream).generateSelected(
+                eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void publicRecoverySummaryDropsRawGenerationAndUnknownCategories()
             throws Exception {
         stubSavedApplicationForSelectiveApproval();

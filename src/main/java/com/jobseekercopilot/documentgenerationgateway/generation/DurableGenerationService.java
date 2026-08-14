@@ -65,6 +65,17 @@ public class DurableGenerationService {
             Pattern.compile("(?<=[\\p{L}\\p{N}])\\.(?=\\s|$)");
     private static final Pattern SKILL_MATCH_WHITESPACE =
             Pattern.compile("\\s+");
+    private static final int MAX_APPLICATION_URL_LENGTH = 2_048;
+    private static final String NHS_JOBS_PROVIDER = "NHS_JOBS";
+    private static final String NHS_JOBS_ATTRIBUTION_LABEL =
+            "Vacancy source: NHS Jobs";
+    private static final String NHS_JOBS_ATTRIBUTION_URL =
+            "https://www.jobs.nhs.uk/";
+    private static final String NHS_JOBS_LICENCE_URL =
+            "https://www.nationalarchives.gov.uk/doc/"
+                    + "open-government-licence/version/3/";
+    private static final String NHS_JOBS_DISCLAIMER =
+            "NHS Jobs does not endorse Job Seeker Copilot.";
     private static final String RETAINED_RESPONSE_RECOVERY =
             "retainedResponseRecovery";
     private static final String RETAINED_RESPONSE_AUTO_APPROVAL =
@@ -968,20 +979,115 @@ public class DurableGenerationService {
         request.put("jobId", firstText(job.get("id"), canonicalJobId));
         request.put("canonicalJobId", canonicalJobId);
         String provider = firstText(
-                job.get("provider"), savedJob.get("provider"), "JOB_SERVICE");
+                job.get("primarySource"),
+                job.get("provider"),
+                savedJob.get("provider"),
+                "JOB_SERVICE");
         request.put("provider", provider);
-        request.put("externalJobId", firstText(
-                job.get("externalJobId"), job.get("id"), canonicalJobId));
+        String externalJobId = firstText(
+                job.get("externalJobId"), job.get("id"), canonicalJobId);
+        request.put("externalJobId", externalJobId);
         request.put("jobTitle", requiredJobText(job, "title", "jobTitle"));
         request.put("companyName",
                 requiredJobText(job, "company", "companyName"));
         putIfText(request, "location", job.get("location"));
+        addApplicationSourceMetadata(
+                request, job, provider, externalJobId);
         request.put("provenance",
                 "MANUAL".equalsIgnoreCase(provider)
                         ? "MANUAL"
                         : "EXTERNAL");
         request.put("initialStatus", "SAVED");
         return request;
+    }
+
+    private void addApplicationSourceMetadata(
+            Map<String, Object> request,
+            Map<String, Object> job,
+            String provider,
+            String externalJobId) {
+        Map<String, Object> source = matchingJobSource(
+                job, provider, externalJobId);
+        String listingUrl = firstSafeApplicationUrl(
+                source.get("listingUrl"),
+                job.get("sourceUrl"),
+                job.get("url"));
+        String applyUrl = firstSafeApplicationUrl(
+                source.get("applyUrl"), job.get("applyUrl"));
+        putIfText(request, "listingUrl", listingUrl);
+        putIfText(request, "applyUrl", applyUrl);
+
+        if (NHS_JOBS_PROVIDER.equalsIgnoreCase(provider)) {
+            request.put("attributionLabel", NHS_JOBS_ATTRIBUTION_LABEL);
+            request.put("attributionSourceUrl", NHS_JOBS_ATTRIBUTION_URL);
+            request.put("licenceUrl", NHS_JOBS_LICENCE_URL);
+            request.put("disclaimer", NHS_JOBS_DISCLAIMER);
+            return;
+        }
+
+        String publisher = text(source.get("publisher"));
+        if (publisher != null) {
+            putBounded(
+                    request,
+                    "attributionLabel",
+                    "Vacancy source: " + publisher,
+                    255);
+        }
+    }
+
+    private Map<String, Object> matchingJobSource(
+            Map<String, Object> job,
+            String provider,
+            String externalJobId) {
+        for (Object value : list(job.get("sources"))) {
+            Map<String, Object> source = optionalMap(value);
+            String sourceExternalJobId = text(source.get("externalJobId"));
+            if (sourceProviderMatches(source, provider)
+                    && Objects.equals(sourceExternalJobId, externalJobId)) {
+                return source;
+            }
+        }
+        return Map.of();
+    }
+
+    private boolean sourceProviderMatches(
+            Map<String, Object> source,
+            String provider) {
+        String sourceProvider = text(source.get("provider"));
+        String integrationProvider = text(
+                source.get("integrationProvider"));
+        return (sourceProvider != null
+                        && sourceProvider.equalsIgnoreCase(provider))
+                || (integrationProvider != null
+                        && integrationProvider.equalsIgnoreCase(provider));
+    }
+
+    private String firstSafeApplicationUrl(Object... values) {
+        for (Object value : values) {
+            String candidate = text(value);
+            if (validApplicationUrl(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private boolean validApplicationUrl(String value) {
+        if (value == null
+                || value.length() > MAX_APPLICATION_URL_LENGTH
+                || value.codePoints().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        try {
+            URI uri = new URI(value);
+            return ("http".equalsIgnoreCase(uri.getScheme())
+                            || "https".equalsIgnoreCase(uri.getScheme()))
+                    && uri.getHost() != null
+                    && !uri.getHost().isBlank()
+                    && uri.getRawUserInfo() == null;
+        } catch (URISyntaxException exception) {
+            return false;
+        }
     }
 
     private GenerationOperation prepareSelectedOutput(
