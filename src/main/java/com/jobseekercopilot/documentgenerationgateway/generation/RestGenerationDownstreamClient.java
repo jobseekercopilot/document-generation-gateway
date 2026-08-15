@@ -227,6 +227,53 @@ public class RestGenerationDownstreamClient
     }
 
     @Override
+    public Map<String, Object> reserveStoredSelectedRecovery(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            boolean regeneration) {
+        String outputKey = output == DocumentPurpose.CV
+                ? "cv"
+                : "cover-letter";
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 1,
+                        "regeneration", regeneration,
+                        "operationKey",
+                        operationId + ":" + outputKey
+                                + ":stored-delivery-recovery",
+                        "referenceType", "GENERATION_OUTPUT",
+                        "referenceId", operationId + ":" + output.name()));
+    }
+
+    @Override
+    public Map<String, Object> reserveStoredLegacyRecovery(
+            String ownerId,
+            UUID operationId,
+            boolean regeneration) {
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 2,
+                        "regeneration", regeneration,
+                        "operationKey",
+                        operationId + ":stored-delivery-recovery",
+                        "referenceType", "GENERATION_OPERATION",
+                        "referenceId", operationId.toString()));
+    }
+
+    @Override
     public Map<String, Object> reserveRetainedResponseRecovery(
             String ownerId,
             UUID operationId,

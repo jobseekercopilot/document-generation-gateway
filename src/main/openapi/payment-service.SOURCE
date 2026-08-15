@@ -1,4 +1,4 @@
 repository=jobseekercopilot/payment-service
-revision=0430cd09fd390a09d5445672504560ffde64cbe4
+revision=0c628cf81b8d91bebf127513bc39c950423a728b
 path=contracts/openapi.json
-sha256=08312957171b34df832b5b3e62ffba93d68007981ac7c284e8b0bff7de22295a
+sha256=acf21be9eff02aced215fdfce68d7577dfc79695877d4ee0dfc188fcaa1a779a

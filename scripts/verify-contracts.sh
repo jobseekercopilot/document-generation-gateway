@@ -97,9 +97,9 @@ verify_source \
 verify_source \
     payment-service \
     jobseekercopilot/payment-service \
-    0430cd09fd390a09d5445672504560ffde64cbe4 \
+    0c628cf81b8d91bebf127513bc39c950423a728b \
     contracts/openapi.json \
-    08312957171b34df832b5b3e62ffba93d68007981ac7c284e8b0bff7de22295a
+    acf21be9eff02aced215fdfce68d7577dfc79695877d4ee0dfc188fcaa1a779a
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
@@ -215,7 +215,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.0.0") and
+    (.info.version == "3.2.1") and
     (.paths["/api/v1/payments/reservations"].post.parameters
         | any(.name == "X-Payment-Owner" and .required == true)) and
     (.paths["/api/v1/payments/reservations/{reservationId}"].get != null) and

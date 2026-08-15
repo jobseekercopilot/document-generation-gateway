@@ -236,6 +236,60 @@ class RestGenerationDownstreamClientTest {
     }
 
     @Test
+    void storedSelectedRecoveryUsesOneCreditAndASeparateStableKey() {
+        UUID operationId = UUID.randomUUID();
+        when(restTemplate.exchange(
+                eq("http://payment/api/v2/payments/document-credit-reservations"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "reservationId", UUID.randomUUID().toString())));
+
+        client.reserveStoredSelectedRecovery(
+                OWNER,
+                operationId,
+                DocumentPurpose.CV,
+                true);
+
+        HttpEntity<?> request = capturedPost(
+                "http://payment/api/v2/payments/document-credit-reservations");
+        Map<?, ?> body = (Map<?, ?>) request.getBody();
+        assertEquals(
+                operationId + ":cv:stored-delivery-recovery",
+                body.get("operationKey"));
+        assertEquals("GENERATION_OUTPUT", body.get("referenceType"));
+        assertEquals(operationId + ":CV", body.get("referenceId"));
+        assertEquals(1, body.get("documentCredits"));
+        assertEquals(true, body.get("regeneration"));
+    }
+
+    @Test
+    void storedLegacyRecoveryUsesTwoCreditsAndASeparateStableKey() {
+        UUID operationId = UUID.randomUUID();
+        when(restTemplate.exchange(
+                eq("http://payment/api/v2/payments/document-credit-reservations"),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                        "reservationId", UUID.randomUUID().toString())));
+
+        client.reserveStoredLegacyRecovery(OWNER, operationId, false);
+
+        HttpEntity<?> request = capturedPost(
+                "http://payment/api/v2/payments/document-credit-reservations");
+        Map<?, ?> body = (Map<?, ?>) request.getBody();
+        assertEquals(
+                operationId + ":stored-delivery-recovery",
+                body.get("operationKey"));
+        assertEquals("GENERATION_OPERATION", body.get("referenceType"));
+        assertEquals(operationId.toString(), body.get("referenceId"));
+        assertEquals(2, body.get("documentCredits"));
+        assertEquals(false, body.get("regeneration"));
+    }
+
+    @Test
     void recoveryReservationUsesASeparateStableOperationKey() {
         UUID operationId = UUID.randomUUID();
         when(restTemplate.exchange(
