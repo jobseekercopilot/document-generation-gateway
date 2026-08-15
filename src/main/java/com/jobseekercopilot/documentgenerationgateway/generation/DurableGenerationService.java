@@ -219,7 +219,15 @@ public class DurableGenerationService {
                             .map(Enum::name)
                             .toList());
             initialData.put("outputResults", initialOutputResults(
+                    ownerId,
+                    savedJobId,
                     normalizedRequest.outputs()));
+        } else {
+            initialData.put(
+                    "regeneration",
+                    requestedOutputs(request).stream().anyMatch(
+                            output -> repository.hasStoredDocument(
+                                    ownerId, savedJobId, output)));
         }
         initialData.put("correlationId", CorrelationIds.currentOrNew());
         String requestFingerprint = sha256("generation-v2:"
@@ -610,20 +618,7 @@ public class DurableGenerationService {
         if (operation.state() == GenerationOperationState.CANCELLED) {
             return response(operation);
         }
-        if (operation.state() == GenerationOperationState.COMPLETED
-                || operation.state() == GenerationOperationState.APPROVED
-                || operation.state() == GenerationOperationState.CV_EXPORT_IN_PROGRESS
-                || operation.state() == GenerationOperationState.CV_EXPORTED
-                || operation.state() == GenerationOperationState.COVER_LETTER_EXPORT_IN_PROGRESS
-                || operation.state() == GenerationOperationState.EXPORTED
-                || operation.state() == GenerationOperationState.GENERATION_IN_PROGRESS
-                || operation.state() == GenerationOperationState.GENERATION_OUTCOME_UNKNOWN
-                || (selectiveWorkflow(operation)
-                        && hasOutputStatus(
-                                operation, "OUTCOME_UNKNOWN"))) {
-            throw new GenerationConflictException(
-                    "This generation operation can no longer be cancelled safely.");
-        }
+        requireCancellable(operation);
         UUID leaseToken = UUID.randomUUID();
         if (!repository.tryAcquire(
                 operation.id(), ownerId, leaseToken, leaseDuration)) {
@@ -632,6 +627,12 @@ public class DurableGenerationService {
         }
         try {
             operation = required(operation.id(), ownerId);
+            if (operation.state() == GenerationOperationState.CANCELLED) {
+                return response(operation);
+            }
+            // The lease closes the check/use race with generation, storage and
+            // credit-commit checkpoints. Re-read before releasing any hold.
+            requireCancellable(operation);
             UUID reservationId = selectiveWorkflow(operation)
                     && currentOutput(operation) != null
                     ? uuid(
@@ -743,7 +744,19 @@ public class DurableGenerationService {
                                     leaseToken,
                                     "A previous provider invocation was interrupted; automatic retry is disabled to prevent duplicate cost.");
                     case DRAFT_GENERATED -> operation =
-                            commitSelectedCredit(operation, leaseToken);
+                            storeSelectedDraft(operation, leaseToken);
+                    case DRAFTS_STORED_PENDING_CREDIT -> {
+                        operation = commitSelectedCredit(
+                                operation, leaseToken);
+                        if (operation.failureCode() != null
+                                || operation.state()
+                                        == GenerationOperationState
+                                                .RECOVERY_REQUIRED) {
+                            return operation;
+                        }
+                    }
+                    // Compatibility for operations checkpointed by a previous
+                    // release after the credit was already committed.
                     case CREDIT_COMMITTED -> operation =
                             storeSelectedDraft(operation, leaseToken);
                     case DRAFTS_STORED -> {
@@ -1168,7 +1181,8 @@ public class DurableGenerationService {
                         operation.ownerId(),
                         operation.id(),
                         output,
-                        number(selectedResult, "estimatedTokens").longValue()));
+                        number(selectedResult, "estimatedTokens").longValue(),
+                        booleanValue(selectedResult.get("regeneration"))));
         Map<String, Object> data = data(operation);
         Map<String, Object> result = outputResult(data, output);
         result.put("status", "CREDIT_RESERVED");
@@ -1275,31 +1289,167 @@ public class DurableGenerationService {
                 selectedResult, "actualTokens").longValue();
         UUID reservationId = requiredUuid(
                 selectedResult, "reservationId");
+        GenerationOperation creditOperation = operation;
         if (billableTokens == 0) {
-            bounded(operation, () -> downstream.release(
-                    operation.ownerId(),
+            bounded(creditOperation, () -> downstream.release(
+                    creditOperation.ownerId(),
                     reservationId,
                     "DETERMINISTIC_FALLBACK_NO_CHARGE"));
         } else {
-            bounded(operation, () -> downstream.commit(
-                    operation.ownerId(),
-                    reservationId,
-                    billableTokens));
+            try {
+                bounded(creditOperation, () -> downstream.commit(
+                        creditOperation.ownerId(),
+                        reservationId,
+                        billableTokens));
+            } catch (HttpStatusCodeException commitFailure) {
+                if (!recoverableStoredReservation(commitFailure)) {
+                    throw commitFailure;
+                }
+                if (Boolean.TRUE.equals(selectedResult.get(
+                        "storedReservationRecovery"))) {
+                    return exhaustStoredReservationRecovery(
+                            operation,
+                            leaseToken,
+                            output,
+                            reservationId);
+                }
+                operation = replaceExpiredStoredReservation(
+                        operation,
+                        leaseToken,
+                        output,
+                        reservationId);
+                selectedResult = outputResult(operation.data(), output);
+                UUID replacementId = requiredUuid(
+                        selectedResult, "reservationId");
+                GenerationOperation recoveredOperation = operation;
+                try {
+                    bounded(recoveredOperation, () -> downstream.commit(
+                            recoveredOperation.ownerId(),
+                            replacementId,
+                            billableTokens));
+                } catch (HttpStatusCodeException replacementFailure) {
+                    if (recoverableStoredReservation(
+                            replacementFailure)) {
+                        return exhaustStoredReservationRecovery(
+                                recoveredOperation,
+                                leaseToken,
+                                output,
+                                replacementId);
+                    }
+                    return checkpointStoredCommitRetryable(
+                            recoveredOperation, leaseToken);
+                } catch (RestClientException
+                        | GenerationDeadlineExceededException replacementFailure) {
+                    return checkpointStoredCommitRetryable(
+                            recoveredOperation, leaseToken);
+                }
+            }
         }
         Map<String, Object> data = data(operation);
         Map<String, Object> result = outputResult(data, output);
-        result.put("status", "CREDIT_COMMITTED");
+        result.put("status", "STORED");
         result.put("billingOutcome", billableTokens == 0
                 ? "RELEASED_NO_CHARGE"
                 : "COMMITTED");
         saveOutputResult(data, output, result);
+        data.remove("currentOutput");
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.APPLICATION_SAVED,
                 data,
                 null,
                 null);
+    }
+
+    private GenerationOperation checkpointStoredCommitRetryable(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
+                operation.data(),
+                "DOWNSTREAM_RETRYABLE",
+                "The stored output credit commit could not be confirmed and will be replayed using the same reservation.");
+    }
+
+    private GenerationOperation exhaustStoredReservationRecovery(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            UUID replacementReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                replacementReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY_EXHAUSTED"));
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "STORED");
+        result.put("billingOutcome", "RELEASED_RECOVERY_REQUIRED");
+        saveOutputResult(data, output, result);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                data,
+                "STORED_OUTPUT_CREDIT_RECOVERY_REQUIRED",
+                "The stored output was retained without charge after its replacement credit reservation also expired; manual resolution is required.");
+    }
+
+    private GenerationOperation replaceExpiredStoredReservation(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            UUID expiredReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                expiredReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY"));
+        Map<String, Object> currentResult = outputResult(
+                operation.data(), output);
+        boolean regeneration = booleanValue(
+                currentResult.get("regeneration"));
+        Map<String, Object> replacement = bounded(
+                operation,
+                () -> downstream.reserveStoredSelectedRecovery(
+                        operation.ownerId(),
+                        operation.id(),
+                        output,
+                        regeneration));
+        UUID replacementId = requiredUuid(
+                replacement, "reservationId");
+        Map<String, Object> data = data(operation);
+        Map<String, Object> recoveredResult = outputResult(data, output);
+        recoveredResult.put(
+                "supersededReservationId", expiredReservationId.toString());
+        recoveredResult.put("reservationId", replacementId.toString());
+        recoveredResult.put("storedReservationRecovery", true);
+        saveOutputResult(data, output, recoveredResult);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
+                data,
+                null,
+                null);
+    }
+
+    private boolean recoverableStoredReservation(
+            HttpStatusCodeException failure) {
+        if (failure.getStatusCode() != HttpStatus.CONFLICT) {
+            return false;
+        }
+        try {
+            String code = objectMapper.readTree(
+                            failure.getResponseBodyAsString())
+                    .path("code")
+                    .asText();
+            return "RESERVATION_EXPIRED".equals(code)
+                    || "RESERVATION_ALREADY_RELEASED".equals(code);
+        } catch (JsonProcessingException invalidError) {
+            return false;
+        }
     }
 
     private GenerationOperation storeSelectedDraft(
@@ -1347,16 +1497,25 @@ public class DurableGenerationService {
         UUID documentId = requiredUuid(stored, "id");
         Map<String, Object> data = data(operation);
         Map<String, Object> result = outputResult(data, output);
-        result.put("status", "STORED");
+        boolean previouslyCommitted = operation.state()
+                == GenerationOperationState.CREDIT_COMMITTED;
+        result.put("status", previouslyCommitted
+                ? "STORED"
+                : "STORED_PENDING_CREDIT");
         result.put("documentId", documentId.toString());
         result.put("documentEvidence", stored);
         saveOutputResult(data, output, result);
         data.put(documentIdKey(output), documentId.toString());
-        data.remove("currentOutput");
+        if (previouslyCommitted) {
+            data.remove("currentOutput");
+        }
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.APPLICATION_SAVED,
+                previouslyCommitted
+                        ? GenerationOperationState.APPLICATION_SAVED
+                        : GenerationOperationState
+                                .DRAFTS_STORED_PENDING_CREDIT,
                 data,
                 null,
                 null);
@@ -1781,8 +1940,19 @@ public class DurableGenerationService {
                                 "GENERATION_OUTCOME_UNKNOWN",
                                 "A previous provider invocation was interrupted; automatic retry is disabled to prevent duplicate cost.");
                     }
-                    case DRAFT_GENERATED -> operation = commitCredit(
+                    case DRAFT_GENERATED -> operation = storeDrafts(
                             operation, leaseToken);
+                    case DRAFTS_STORED_PENDING_CREDIT -> {
+                        operation = commitCredit(operation, leaseToken);
+                        if (operation.failureCode() != null
+                                || operation.state()
+                                        == GenerationOperationState
+                                                .RECOVERY_REQUIRED) {
+                            return operation;
+                        }
+                    }
+                    // Compatibility for operations checkpointed by a previous
+                    // release after the credit was already committed.
                     case CREDIT_COMMITTED -> operation = storeDrafts(
                             operation, leaseToken);
                     case DRAFTS_STORED -> {
@@ -2032,7 +2202,8 @@ public class DurableGenerationService {
                         operation.ownerId(),
                         operation.id(),
                         number(operation.data(), "estimatedTokens")
-                                .longValue()));
+                                .longValue(),
+                        booleanValue(operation.data().get("regeneration"))));
         UUID reservationId = requiredUuid(reservation, "reservationId");
         Map<String, Object> data = data(operation);
         data.put("reservationId", reservationId.toString());
@@ -2109,17 +2280,110 @@ public class DurableGenerationService {
     private GenerationOperation commitCredit(
             GenerationOperation operation,
             UUID leaseToken) {
-        bounded(operation, () -> downstream.commit(
-                operation.ownerId(),
-                requiredUuid(operation.data(), "reservationId"),
-                number(operation.data(), "actualTokens").longValue()));
+        UUID reservationId = requiredUuid(
+                operation.data(), "reservationId");
+        long actualTokens = number(
+                operation.data(), "actualTokens").longValue();
+        GenerationOperation creditOperation = operation;
+        try {
+            bounded(creditOperation, () -> downstream.commit(
+                    creditOperation.ownerId(),
+                    reservationId,
+                    actualTokens));
+        } catch (HttpStatusCodeException commitFailure) {
+            if (!recoverableStoredReservation(commitFailure)) {
+                throw commitFailure;
+            }
+            if (Boolean.TRUE.equals(operation.data().get(
+                    "storedReservationRecovery"))) {
+                return exhaustStoredLegacyReservationRecovery(
+                        operation,
+                        leaseToken,
+                        reservationId);
+            }
+            operation = replaceExpiredStoredLegacyReservation(
+                    operation,
+                    leaseToken,
+                    reservationId);
+            UUID replacementId = requiredUuid(
+                    operation.data(), "reservationId");
+            GenerationOperation recoveredOperation = operation;
+            try {
+                bounded(recoveredOperation, () -> downstream.commit(
+                        recoveredOperation.ownerId(),
+                        replacementId,
+                        actualTokens));
+            } catch (HttpStatusCodeException replacementFailure) {
+                if (recoverableStoredReservation(
+                        replacementFailure)) {
+                    return exhaustStoredLegacyReservationRecovery(
+                            recoveredOperation,
+                            leaseToken,
+                            replacementId);
+                }
+                return checkpointStoredCommitRetryable(
+                        recoveredOperation, leaseToken);
+            } catch (RestClientException
+                    | GenerationDeadlineExceededException replacementFailure) {
+                return checkpointStoredCommitRetryable(
+                        recoveredOperation, leaseToken);
+            }
+        }
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.DRAFTS_STORED,
                 operation.data(),
                 null,
                 null);
+    }
+
+    private GenerationOperation replaceExpiredStoredLegacyReservation(
+            GenerationOperation operation,
+            UUID leaseToken,
+            UUID expiredReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                expiredReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY"));
+        Map<String, Object> replacement = bounded(
+                operation,
+                () -> downstream.reserveStoredLegacyRecovery(
+                        operation.ownerId(),
+                        operation.id(),
+                        booleanValue(operation.data().get("regeneration"))));
+        UUID replacementId = requiredUuid(
+                replacement, "reservationId");
+        Map<String, Object> data = data(operation);
+        data.put("supersededReservationId", expiredReservationId.toString());
+        data.put("reservationId", replacementId.toString());
+        data.put("storedReservationRecovery", true);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation exhaustStoredLegacyReservationRecovery(
+            GenerationOperation operation,
+            UUID leaseToken,
+            UUID replacementReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                replacementReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY_EXHAUSTED"));
+        Map<String, Object> data = data(operation);
+        data.put("billingOutcome", "RELEASED_RECOVERY_REQUIRED");
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                data,
+                "STORED_OUTPUT_CREDIT_RECOVERY_REQUIRED",
+                "The stored outputs were retained without charge after their replacement credit reservation also expired; manual resolution is required.");
     }
 
     private GenerationOperation storeDrafts(
@@ -2193,10 +2457,15 @@ public class DurableGenerationService {
                 requiredUuid(coverLetter, "id").toString());
         data.put("cvDocumentEvidence", cv);
         data.put("coverLetterDocumentEvidence", coverLetter);
+        GenerationOperationState storedState = operation.state()
+                == GenerationOperationState.CREDIT_COMMITTED
+                        ? GenerationOperationState.DRAFTS_STORED
+                        : GenerationOperationState
+                                .DRAFTS_STORED_PENDING_CREDIT;
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.DRAFTS_STORED,
+                storedState,
                 data,
                 null,
                 null);
@@ -3054,12 +3323,17 @@ public class DurableGenerationService {
     }
 
     private Map<String, Object> initialOutputResults(
+            String ownerId,
+            UUID savedJobId,
             Set<DocumentPurpose> outputs) {
         Map<String, Object> results = new LinkedHashMap<>();
         for (DocumentPurpose output : DocumentPurpose.values()) {
             if (outputs.contains(output)) {
                 results.put(output.name(), new LinkedHashMap<>(Map.of(
-                        "status", "REQUESTED")));
+                        "status", "REQUESTED",
+                        "regeneration",
+                        repository.hasStoredDocument(
+                                ownerId, savedJobId, output))));
             }
         }
         return results;
@@ -3746,6 +4020,9 @@ public class DurableGenerationService {
             Map<String, Object> result = optionalMap(rawResult);
             publicResults.put(output, new GenerationOutputResultResponse(
                     text(result.get("status")),
+                    result.containsKey("regeneration")
+                            ? booleanValue(result.get("regeneration"))
+                            : null,
                     uuid(result, "documentId"),
                     optionalLong(result.get("estimatedTokens")),
                     optionalLong(result.get("actualTokens")),
@@ -4186,6 +4463,34 @@ public class DurableGenerationService {
                 || state == GenerationOperationState.OUTPUT_READY
                 || state == GenerationOperationState.ESTIMATED
                 || state == GenerationOperationState.CREDIT_RESERVED;
+    }
+
+    private void requireCancellable(GenerationOperation operation) {
+        if (!beforeGeneration(operation.state())
+                || hasIrreversibleGenerationEvidence(operation)
+                || (selectiveWorkflow(operation)
+                        && !requestedOutputs(operation).stream()
+                                .map(output -> text(outputResult(
+                                        operation.data(), output).get("status")))
+                                .allMatch(status -> List.of(
+                                                "REQUESTED",
+                                                "READY",
+                                                "ESTIMATED",
+                                                "CREDIT_RESERVED")
+                                        .contains(status)))) {
+            throw new GenerationConflictException(
+                    "This generation operation can no longer be cancelled safely.");
+        }
+    }
+
+    private boolean hasIrreversibleGenerationEvidence(
+            GenerationOperation operation) {
+        Map<String, Object> data = operation.data();
+        return data.containsKey("generation")
+                || data.containsKey("generationCompletedAt")
+                || data.containsKey("cvDocumentId")
+                || data.containsKey("coverLetterDocumentId")
+                || data.containsKey("approvalRequest");
     }
 
     private boolean approvalInProgress(

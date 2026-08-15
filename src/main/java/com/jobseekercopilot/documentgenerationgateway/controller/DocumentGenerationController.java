@@ -63,7 +63,7 @@ public class DocumentGenerationController {
                     + "requested CV or cover-letter output, creates or resolves the saved "
                     + "application before paid work, "
                     + "applies one deadline across downstream calls, "
-                    + "reserves AI Credit per selected output, performs at most one automatic "
+                    + "reserves one document credit per selected output, performs at most one automatic "
                     + "model invocation per output and stores independently usable DRAFT documents. "
                     + "Legacy requests without outputs retain the paired workflow during migration.")
     @ApiResponses({

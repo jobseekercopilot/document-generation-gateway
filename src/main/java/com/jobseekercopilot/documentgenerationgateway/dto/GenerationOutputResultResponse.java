@@ -11,6 +11,7 @@ import java.util.UUID;
         additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
 public record GenerationOutputResultResponse(
         String status,
+        Boolean regeneration,
         UUID documentId,
         Long estimatedTokens,
         Long actualTokens,

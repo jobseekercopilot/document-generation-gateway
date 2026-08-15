@@ -183,16 +183,18 @@ public class RestGenerationDownstreamClient
     public Map<String, Object> reserve(
             String ownerId,
             UUID operationId,
-            long estimatedTokens) {
+            long estimatedTokens,
+            boolean regeneration) {
         return post(
-                paymentBaseUrl + "/api/v1/payments/reservations",
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
                 serviceHeaders(
                         credentials.paymentServiceToken(),
                         PAYMENT_OWNER,
                         ownerId),
                 Map.of(
-                        "feature", "CV_AND_COVER_LETTER_GENERATION",
-                        "estimatedTokens", estimatedTokens,
+                        "documentCredits", 2,
+                        "regeneration", regeneration,
                         "operationKey", operationId + ":reservation",
                         "referenceType", "GENERATION_OPERATION",
                         "referenceId", operationId.toString()));
@@ -203,23 +205,72 @@ public class RestGenerationDownstreamClient
             String ownerId,
             UUID operationId,
             DocumentPurpose output,
-            long estimatedTokens) {
+            long estimatedTokens,
+            boolean regeneration) {
         String outputKey = output == DocumentPurpose.CV
                 ? "cv"
                 : "cover-letter";
         return post(
-                paymentBaseUrl + "/api/v1/payments/reservations",
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
                 serviceHeaders(
                         credentials.paymentServiceToken(),
                         PAYMENT_OWNER,
                         ownerId),
                 Map.of(
-                        "feature", "CV_AND_COVER_LETTER_GENERATION",
-                        "estimatedTokens", estimatedTokens,
+                        "documentCredits", 1,
+                        "regeneration", regeneration,
                         "operationKey",
                         operationId + ":" + outputKey + ":reservation",
                         "referenceType", "GENERATION_OUTPUT",
                         "referenceId", operationId + ":" + output.name()));
+    }
+
+    @Override
+    public Map<String, Object> reserveStoredSelectedRecovery(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            boolean regeneration) {
+        String outputKey = output == DocumentPurpose.CV
+                ? "cv"
+                : "cover-letter";
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 1,
+                        "regeneration", regeneration,
+                        "operationKey",
+                        operationId + ":" + outputKey
+                                + ":stored-delivery-recovery",
+                        "referenceType", "GENERATION_OUTPUT",
+                        "referenceId", operationId + ":" + output.name()));
+    }
+
+    @Override
+    public Map<String, Object> reserveStoredLegacyRecovery(
+            String ownerId,
+            UUID operationId,
+            boolean regeneration) {
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 2,
+                        "regeneration", regeneration,
+                        "operationKey",
+                        operationId + ":stored-delivery-recovery",
+                        "referenceType", "GENERATION_OPERATION",
+                        "referenceId", operationId.toString()));
     }
 
     @Override
@@ -228,14 +279,15 @@ public class RestGenerationDownstreamClient
             UUID operationId,
             long actualTokens) {
         return post(
-                paymentBaseUrl + "/api/v1/payments/reservations",
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
                 serviceHeaders(
                         credentials.paymentServiceToken(),
                         PAYMENT_OWNER,
                         ownerId),
                 Map.of(
-                        "feature", "CV_AND_COVER_LETTER_GENERATION",
-                        "estimatedTokens", actualTokens,
+                        "documentCredits", 2,
+                        "regeneration", false,
                         "operationKey", operationId
                                 + ":retained-response-recovery",
                         "referenceType", "GENERATION_OPERATION_RECOVERY",
@@ -339,14 +391,14 @@ public class RestGenerationDownstreamClient
             long actualTokens) {
         post(
                 paymentBaseUrl
-                        + "/api/v1/payments/reservations/"
+                        + "/api/v2/payments/document-credit-reservations/"
                         + reservationId
                         + "/commit",
                 serviceHeaders(
                         credentials.paymentServiceToken(),
                         PAYMENT_OWNER,
                         ownerId),
-                Map.of("actualTokens", actualTokens));
+                Map.of());
     }
 
     @Override
@@ -356,7 +408,7 @@ public class RestGenerationDownstreamClient
             String reason) {
         post(
                 paymentBaseUrl
-                        + "/api/v1/payments/reservations/"
+                        + "/api/v2/payments/document-credit-reservations/"
                         + reservationId
                         + "/release",
                 serviceHeaders(
