@@ -97,7 +97,7 @@ verify_source \
 verify_source \
     payment-service \
     jobseekercopilot/payment-service \
-    0c628cf81b8d91bebf127513bc39c950423a728b \
+    ec6691d7c069118829243d901e42b2d52eb32c88 \
     contracts/openapi.json \
     acf21be9eff02aced215fdfce68d7577dfc79695877d4ee0dfc188fcaa1a779a
 verify_source \
