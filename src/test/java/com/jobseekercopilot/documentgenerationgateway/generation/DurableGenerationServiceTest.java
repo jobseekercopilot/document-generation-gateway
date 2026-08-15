@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -269,7 +270,8 @@ class DurableGenerationServiceTest {
                 eq(OWNER), eq(DocumentPurpose.CV),
                 selectedEstimateRequest.capture());
         order.verify(downstream).reserveSelected(
-                eq(OWNER), any(), eq(DocumentPurpose.CV), eq(300L));
+                eq(OWNER), any(), eq(DocumentPurpose.CV), eq(300L),
+                eq(false));
         ArgumentCaptor<Map> selectedGenerationRequest =
                 ArgumentCaptor.forClass(Map.class);
         order.verify(downstream).generateSelected(
@@ -289,17 +291,21 @@ class DurableGenerationServiceTest {
                 ArgumentCaptor.forClass(Map.class);
         order.verify(downstream).createDocument(
                 eq(OWNER), anyString(), storedDocument.capture());
+        order.verify(downstream).commit(
+                eq(OWNER), eq(RESERVATION_ID), eq(300L));
         assertEquals(
                 APPLICATION_ID,
                 storedDocument.getValue().get("applicationId"));
         verify(downstream, never()).estimateSelected(
                 anyString(), eq(DocumentPurpose.COVER_LETTER), anyMap());
         verify(downstream, never()).reserveSelected(
-                anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyLong());
+                anyString(), any(), eq(DocumentPurpose.COVER_LETTER),
+                anyLong(), anyBoolean());
         verify(downstream, never()).generateSelected(
                 anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyMap());
         verify(downstream, never()).estimate(anyString(), anyMap());
-        verify(downstream, never()).reserve(anyString(), any(), anyLong());
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(anyString(), any(), anyMap());
 
         GenerationOperationResponse completed = approveAndAwait(
@@ -340,6 +346,45 @@ class DurableGenerationServiceTest {
                 eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
         verify(downstream, times(1)).commit(
                 eq(OWNER), any(), eq(300L));
+    }
+
+    @Test
+    void aLaterDocumentForTheSameSavedJobIsRecordedAsAChargedRegeneration() {
+        stubSavedApplicationForSelectiveApproval();
+
+        GenerationOperationResponse first = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "initial-cv-document",
+                cvOnlyRequest());
+        assertEquals(false, first.outputResults().get("CV").regeneration());
+        GenerationOperationResponse completed = approveAndAwait(
+                OWNER,
+                first.operationId(),
+                new ApproveGenerationRequest(CV_DOCUMENT_ID, null));
+        assertEquals(GenerationOperationState.COMPLETED, completed.state());
+
+        GenerationOperationResponse regenerated = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "regenerated-cv-document",
+                cvOnlyRequest());
+
+        assertEquals(
+                GenerationOperationState.AWAITING_APPROVAL,
+                regenerated.state());
+        assertEquals(true,
+                regenerated.outputResults().get("CV").regeneration());
+        verify(downstream).reserveSelected(
+                eq(OWNER),
+                eq(regenerated.operationId()),
+                eq(DocumentPurpose.CV),
+                eq(300L),
+                eq(true));
+        verify(downstream, times(2)).commit(
+                OWNER, RESERVATION_ID, 300L);
     }
 
     @Test
@@ -698,7 +743,8 @@ class DurableGenerationServiceTest {
         verify(downstream, times(2)).generateSelected(
                 eq(OWNER), any(), any(DocumentPurpose.class), anyMap());
         verify(downstream, times(2)).reserveSelected(
-                eq(OWNER), any(), any(DocumentPurpose.class), anyLong());
+                eq(OWNER), any(), any(DocumentPurpose.class), anyLong(),
+                anyBoolean());
 
         GenerationOperationResponse completed = approveAndAwait(
                 OWNER,
@@ -746,7 +792,8 @@ class DurableGenerationServiceTest {
         verify(downstream, never()).estimateSelected(
                 anyString(), eq(DocumentPurpose.COVER_LETTER), anyMap());
         verify(downstream, never()).reserveSelected(
-                anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyLong());
+                anyString(), any(), eq(DocumentPurpose.COVER_LETTER),
+                anyLong(), anyBoolean());
         verify(downstream, never()).generateSelected(
                 anyString(), any(), eq(DocumentPurpose.COVER_LETTER), anyMap());
     }
@@ -780,7 +827,7 @@ class DurableGenerationServiceTest {
         verify(downstream, never()).estimateSelected(
                 anyString(), any(), anyMap());
         verify(downstream, never()).reserveSelected(
-                anyString(), any(), any(), anyLong());
+                anyString(), any(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generateSelected(
                 anyString(), any(), any(), anyMap());
     }
@@ -979,7 +1026,7 @@ class DurableGenerationServiceTest {
                 service.get(OWNER, accepted.operationId()).state());
         verify(downstream, never()).savedJob(any(), anyString());
         verify(downstream, never()).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(
                 anyString(), any(), anyMap());
 
@@ -1305,7 +1352,7 @@ class DurableGenerationServiceTest {
                 GenerationOperationState.CANCELLED,
                 service.get(OWNER, accepted.operationId()).state());
         verify(downstream, never()).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(
                 anyString(), any(), anyMap());
     }
@@ -1780,7 +1827,7 @@ class DurableGenerationServiceTest {
                 OWNER, AUTHORIZATION, SAVED_JOB_ID, "store-retry-1",
                 selectionRequest());
         assertEquals(
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.DRAFT_GENERATED,
                 interrupted.state());
         assertEquals(
                 "DOWNSTREAM_RETRYABLE",
@@ -1814,14 +1861,14 @@ class DurableGenerationServiceTest {
                 selectionRequest());
         assertEquals(interrupted.operationId(), prepared.operationId());
         assertEquals(
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.DRAFT_GENERATED,
                 prepared.state());
         assertNull(prepared.failureCode());
         assertTrue(prepared.deadlineAt().isAfter(Instant.now()));
         assertNotNull(resumedWork.get());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
-        verify(downstream, times(1))
+        verify(downstream, never())
                 .commit(OWNER, RESERVATION_ID, 600);
 
         resumedWork.get().run();
@@ -1872,7 +1919,7 @@ class DurableGenerationServiceTest {
                 "legacy-deadline-recovery",
                 selectionRequest());
         assertEquals(
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.DRAFT_GENERATED,
                 interrupted.state());
         assertEquals(
                 "DOWNSTREAM_RETRYABLE",
@@ -1932,7 +1979,7 @@ class DurableGenerationServiceTest {
                 documentKeys);
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
-        verify(downstream, times(2))
+        verify(downstream, times(1))
                 .commit(OWNER, RESERVATION_ID, 600);
     }
 
@@ -1956,7 +2003,7 @@ class DurableGenerationServiceTest {
                 "draft-generated-restart-a",
                 selectionRequest());
         assertEquals(
-                GenerationOperationState.DRAFT_GENERATED,
+                GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
                 interrupted.state());
         assertEquals(
                 "DOWNSTREAM_RETRYABLE",
@@ -1985,7 +2032,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1)).reserve(
-                OWNER, resumed.operationId(), 1000);
+                OWNER, resumed.operationId(), 1000, false);
         verify(downstream, times(2))
                 .commit(OWNER, RESERVATION_ID, 600);
     }
@@ -2303,7 +2350,7 @@ class DurableGenerationServiceTest {
         var prepared = service.recoverRejectedGeneration(
                 OWNER, rejected.operationId());
         assertEquals(
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.AWAITING_APPROVAL,
                 prepared.state());
         assertNull(prepared.failureCode());
         assertTrue(prepared.deadlineAt().isAfter(Instant.now()));
@@ -2614,7 +2661,7 @@ class DurableGenerationServiceTest {
         verify(downstream, never()).profile();
         verify(downstream, never()).estimate(anyString(), anyMap());
         verify(downstream, never()).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(
                 anyString(), any(), anyMap());
 
@@ -2629,7 +2676,7 @@ class DurableGenerationServiceTest {
                 GenerationOperationState.AWAITING_APPROVAL,
                 refreshed.state());
         verify(downstream, times(1)).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, times(1)).generate(
                 anyString(), any(), anyMap());
     }
@@ -2655,7 +2702,7 @@ class DurableGenerationServiceTest {
                 failed.failureCode());
         verify(downstream, never()).profile();
         verify(downstream, never()).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(
                 anyString(), any(), anyMap());
 
@@ -2703,7 +2750,7 @@ class DurableGenerationServiceTest {
                 failed.failureCode());
         verify(downstream, never()).profile();
         verify(downstream, never()).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(
                 anyString(), any(), anyMap());
 
@@ -2719,7 +2766,7 @@ class DurableGenerationServiceTest {
                 recovered.state());
         assertNull(recovered.failureCode());
         verify(downstream, times(1)).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, times(1)).generate(
                 anyString(), any(), anyMap());
     }
@@ -2783,7 +2830,7 @@ class DurableGenerationServiceTest {
                             "RESERVED");
                 })
                 .when(downstream)
-                .reserve(anyString(), any(), anyLong());
+                .reserve(anyString(), any(), anyLong(), anyBoolean());
 
         var recovery = startAndAwait(
                 shortDeadlineService,
@@ -2827,7 +2874,8 @@ class DurableGenerationServiceTest {
                 "JOB_DESCRIPTION_REVIEW_REQUIRED",
                 result.failureCode());
         verify(downstream, never()).estimate(anyString(), anyMap());
-        verify(downstream, never()).reserve(anyString(), any(), anyLong());
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(anyString(), any(), anyMap());
     }
 
@@ -2854,7 +2902,8 @@ class DurableGenerationServiceTest {
                 "JOB_DESCRIPTION_REVIEW_REQUIRED",
                 result.failureCode());
         verify(downstream, never()).estimate(anyString(), anyMap());
-        verify(downstream, never()).reserve(anyString(), any(), anyLong());
+        verify(downstream, never()).reserve(
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(anyString(), any(), anyMap());
     }
 
@@ -2889,7 +2938,7 @@ class DurableGenerationServiceTest {
                         "cancel-1",
                         selectionRequest()).state());
         verify(downstream, never()).reserve(
-                anyString(), any(), anyLong());
+                anyString(), any(), anyLong(), anyBoolean());
         verify(downstream, never()).generate(
                 anyString(), any(), anyMap());
     }
@@ -2934,13 +2983,14 @@ class DurableGenerationServiceTest {
                 anyString(), any(DocumentPurpose.class), anyMap()))
                 .thenReturn(300L);
         when(downstream.reserve(
-                anyString(), any(), anyLong()))
+                anyString(), any(), anyLong(), anyBoolean()))
                 .thenReturn(Map.of(
                         "reservationId",
                         RESERVATION_ID.toString(),
                         "status", "RESERVED"));
         when(downstream.reserveSelected(
-                anyString(), any(), any(DocumentPurpose.class), anyLong()))
+                anyString(), any(), any(DocumentPurpose.class), anyLong(),
+                anyBoolean()))
                 .thenAnswer(invocation -> Map.of(
                         "reservationId",
                         (invocation.getArgument(2) == DocumentPurpose.CV

@@ -219,7 +219,15 @@ public class DurableGenerationService {
                             .map(Enum::name)
                             .toList());
             initialData.put("outputResults", initialOutputResults(
+                    ownerId,
+                    savedJobId,
                     normalizedRequest.outputs()));
+        } else {
+            initialData.put(
+                    "regeneration",
+                    requestedOutputs(request).stream().anyMatch(
+                            output -> repository.hasStoredDocument(
+                                    ownerId, savedJobId, output)));
         }
         initialData.put("correlationId", CorrelationIds.currentOrNew());
         String requestFingerprint = sha256("generation-v2:"
@@ -743,7 +751,11 @@ public class DurableGenerationService {
                                     leaseToken,
                                     "A previous provider invocation was interrupted; automatic retry is disabled to prevent duplicate cost.");
                     case DRAFT_GENERATED -> operation =
+                            storeSelectedDraft(operation, leaseToken);
+                    case DRAFTS_STORED_PENDING_CREDIT -> operation =
                             commitSelectedCredit(operation, leaseToken);
+                    // Compatibility for operations checkpointed by a previous
+                    // release after the credit was already committed.
                     case CREDIT_COMMITTED -> operation =
                             storeSelectedDraft(operation, leaseToken);
                     case DRAFTS_STORED -> {
@@ -1168,7 +1180,8 @@ public class DurableGenerationService {
                         operation.ownerId(),
                         operation.id(),
                         output,
-                        number(selectedResult, "estimatedTokens").longValue()));
+                        number(selectedResult, "estimatedTokens").longValue(),
+                        booleanValue(selectedResult.get("regeneration"))));
         Map<String, Object> data = data(operation);
         Map<String, Object> result = outputResult(data, output);
         result.put("status", "CREDIT_RESERVED");
@@ -1288,15 +1301,16 @@ public class DurableGenerationService {
         }
         Map<String, Object> data = data(operation);
         Map<String, Object> result = outputResult(data, output);
-        result.put("status", "CREDIT_COMMITTED");
+        result.put("status", "STORED");
         result.put("billingOutcome", billableTokens == 0
                 ? "RELEASED_NO_CHARGE"
                 : "COMMITTED");
         saveOutputResult(data, output, result);
+        data.remove("currentOutput");
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.APPLICATION_SAVED,
                 data,
                 null,
                 null);
@@ -1347,16 +1361,25 @@ public class DurableGenerationService {
         UUID documentId = requiredUuid(stored, "id");
         Map<String, Object> data = data(operation);
         Map<String, Object> result = outputResult(data, output);
-        result.put("status", "STORED");
+        boolean previouslyCommitted = operation.state()
+                == GenerationOperationState.CREDIT_COMMITTED;
+        result.put("status", previouslyCommitted
+                ? "STORED"
+                : "STORED_PENDING_CREDIT");
         result.put("documentId", documentId.toString());
         result.put("documentEvidence", stored);
         saveOutputResult(data, output, result);
         data.put(documentIdKey(output), documentId.toString());
-        data.remove("currentOutput");
+        if (previouslyCommitted) {
+            data.remove("currentOutput");
+        }
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.APPLICATION_SAVED,
+                previouslyCommitted
+                        ? GenerationOperationState.APPLICATION_SAVED
+                        : GenerationOperationState
+                                .DRAFTS_STORED_PENDING_CREDIT,
                 data,
                 null,
                 null);
@@ -1781,8 +1804,12 @@ public class DurableGenerationService {
                                 "GENERATION_OUTCOME_UNKNOWN",
                                 "A previous provider invocation was interrupted; automatic retry is disabled to prevent duplicate cost.");
                     }
-                    case DRAFT_GENERATED -> operation = commitCredit(
+                    case DRAFT_GENERATED -> operation = storeDrafts(
                             operation, leaseToken);
+                    case DRAFTS_STORED_PENDING_CREDIT -> operation =
+                            commitCredit(operation, leaseToken);
+                    // Compatibility for operations checkpointed by a previous
+                    // release after the credit was already committed.
                     case CREDIT_COMMITTED -> operation = storeDrafts(
                             operation, leaseToken);
                     case DRAFTS_STORED -> {
@@ -2032,7 +2059,8 @@ public class DurableGenerationService {
                         operation.ownerId(),
                         operation.id(),
                         number(operation.data(), "estimatedTokens")
-                                .longValue()));
+                                .longValue(),
+                        booleanValue(operation.data().get("regeneration"))));
         UUID reservationId = requiredUuid(reservation, "reservationId");
         Map<String, Object> data = data(operation);
         data.put("reservationId", reservationId.toString());
@@ -2116,7 +2144,7 @@ public class DurableGenerationService {
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.CREDIT_COMMITTED,
+                GenerationOperationState.DRAFTS_STORED,
                 operation.data(),
                 null,
                 null);
@@ -2193,10 +2221,15 @@ public class DurableGenerationService {
                 requiredUuid(coverLetter, "id").toString());
         data.put("cvDocumentEvidence", cv);
         data.put("coverLetterDocumentEvidence", coverLetter);
+        GenerationOperationState storedState = operation.state()
+                == GenerationOperationState.CREDIT_COMMITTED
+                        ? GenerationOperationState.DRAFTS_STORED
+                        : GenerationOperationState
+                                .DRAFTS_STORED_PENDING_CREDIT;
         return checkpoint(
                 operation,
                 leaseToken,
-                GenerationOperationState.DRAFTS_STORED,
+                storedState,
                 data,
                 null,
                 null);
@@ -3054,12 +3087,17 @@ public class DurableGenerationService {
     }
 
     private Map<String, Object> initialOutputResults(
+            String ownerId,
+            UUID savedJobId,
             Set<DocumentPurpose> outputs) {
         Map<String, Object> results = new LinkedHashMap<>();
         for (DocumentPurpose output : DocumentPurpose.values()) {
             if (outputs.contains(output)) {
                 results.put(output.name(), new LinkedHashMap<>(Map.of(
-                        "status", "REQUESTED")));
+                        "status", "REQUESTED",
+                        "regeneration",
+                        repository.hasStoredDocument(
+                                ownerId, savedJobId, output))));
             }
         }
         return results;
@@ -3746,6 +3784,9 @@ public class DurableGenerationService {
             Map<String, Object> result = optionalMap(rawResult);
             publicResults.put(output, new GenerationOutputResultResponse(
                     text(result.get("status")),
+                    result.containsKey("regeneration")
+                            ? booleanValue(result.get("regeneration"))
+                            : null,
                     uuid(result, "documentId"),
                     optionalLong(result.get("estimatedTokens")),
                     optionalLong(result.get("actualTokens")),

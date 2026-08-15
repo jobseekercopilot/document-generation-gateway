@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.7.0", contract.path("info").path("version").asText());
+        assertEquals("2.8.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -193,6 +193,7 @@ class OpenApiExportTest {
                         .asText());
         JsonNode outputResult = schemas.path(
                 "GenerationOutputResultResponse");
+        assertTrue(outputResult.path("properties").has("regeneration"));
         JsonNode recovery = schemas.path(
                 "GenerationRecoverySummaryResponse");
         assertFalse(outputResult.path("additionalProperties")
@@ -245,5 +246,8 @@ class OpenApiExportTest {
                 path.forEach(operation ->
                         assertTrue(operation.path("security").toString().contains("bearerAuth"))));
         Files.writeString(Path.of("target/openapi.json"), spec);
+        if (Boolean.getBoolean("documentGeneration.updateContract")) {
+            Files.writeString(Path.of("contracts/openapi.json"), spec);
+        }
     }
 }

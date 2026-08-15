@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
@@ -148,6 +149,27 @@ public class GenerationOperationRepository {
                 SELECT_COLUMNS + " WHERE owner_id = ? AND saved_job_id = ?",
                 ownerId,
                 savedJobId);
+    }
+
+    public boolean hasStoredDocument(
+            String ownerId,
+            UUID savedJobId,
+            DocumentPurpose purpose) {
+        String documentKey = purpose == DocumentPurpose.CV
+                ? "cvDocumentId"
+                : "coverLetterDocumentId";
+        Long count = jdbc.queryForObject(
+                """
+                SELECT COUNT(*)
+                  FROM generation_operations
+                 WHERE owner_id = ? AND saved_job_id = ?
+                   AND data_json LIKE ?
+                """,
+                Long.class,
+                ownerId,
+                savedJobId,
+                "%\"" + documentKey + "\"%");
+        return count != null && count > 0;
     }
 
     public Optional<GenerationOperation> findLatestReplaySafe(
@@ -530,6 +552,7 @@ public class GenerationOperationRepository {
             GenerationOperationState state) {
         return switch (state) {
             case DRAFT_GENERATED,
+                    DRAFTS_STORED_PENDING_CREDIT,
                     CREDIT_COMMITTED,
                     DRAFTS_STORED,
                     AWAITING_APPROVAL,

@@ -25,13 +25,15 @@ public interface GenerationDownstreamClient {
     Map<String, Object> reserve(
             String ownerId,
             UUID operationId,
-            long estimatedTokens);
+            long estimatedTokens,
+            boolean regeneration);
 
     Map<String, Object> reserveSelected(
             String ownerId,
             UUID operationId,
             DocumentPurpose output,
-            long estimatedTokens);
+            long estimatedTokens,
+            boolean regeneration);
 
     Map<String, Object> reserveRetainedResponseRecovery(
             String ownerId,

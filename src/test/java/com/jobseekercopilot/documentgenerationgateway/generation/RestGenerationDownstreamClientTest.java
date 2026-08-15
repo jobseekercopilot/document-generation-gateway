@@ -156,17 +156,17 @@ class RestGenerationDownstreamClientTest {
     void reservationUsesOnlyTheDedicatedPaymentIdentityAndOwner() {
         UUID operationId = UUID.randomUUID();
         when(restTemplate.exchange(
-                eq("http://payment/api/v1/payments/reservations"),
+                eq("http://payment/api/v2/payments/document-credit-reservations"),
                 eq(HttpMethod.POST),
                 any(HttpEntity.class),
                 eq(Map.class)))
                 .thenReturn(ResponseEntity.ok(Map.of(
                         "reservationId", UUID.randomUUID().toString())));
 
-        client.reserve(OWNER, operationId, 1200);
+        client.reserve(OWNER, operationId, 1200, false);
 
         HttpEntity<?> request = capturedPost(
-                "http://payment/api/v1/payments/reservations");
+                "http://payment/api/v2/payments/document-credit-reservations");
         assertSingleHeader(request, "X-Service-Token", PAYMENT_TOKEN);
         assertSingleHeader(request, "X-Payment-Owner", OWNER);
         assertNull(request.getHeaders().getFirst("X-Document-Owner"));
@@ -174,7 +174,9 @@ class RestGenerationDownstreamClientTest {
         assertEquals(
                 operationId + ":reservation",
                 body.get("operationKey"));
-        assertEquals(1200L, body.get("estimatedTokens"));
+        assertEquals(2, body.get("documentCredits"));
+        assertEquals(false, body.get("regeneration"));
+        assertNull(body.get("estimatedTokens"));
     }
 
     @Test
@@ -204,7 +206,7 @@ class RestGenerationDownstreamClientTest {
     void selectedOutputReservationHasAPurposeSpecificStableKey() {
         UUID operationId = UUID.randomUUID();
         when(restTemplate.exchange(
-                eq("http://payment/api/v1/payments/reservations"),
+                eq("http://payment/api/v2/payments/document-credit-reservations"),
                 eq(HttpMethod.POST),
                 any(HttpEntity.class),
                 eq(Map.class)))
@@ -215,10 +217,11 @@ class RestGenerationDownstreamClientTest {
                 OWNER,
                 operationId,
                 DocumentPurpose.COVER_LETTER,
-                456L);
+                456L,
+                true);
 
         HttpEntity<?> request = capturedPost(
-                "http://payment/api/v1/payments/reservations");
+                "http://payment/api/v2/payments/document-credit-reservations");
         Map<?, ?> body = (Map<?, ?>) request.getBody();
         assertEquals(
                 operationId + ":cover-letter:reservation",
@@ -227,14 +230,16 @@ class RestGenerationDownstreamClientTest {
         assertEquals(
                 operationId + ":COVER_LETTER",
                 body.get("referenceId"));
-        assertEquals(456L, body.get("estimatedTokens"));
+        assertEquals(1, body.get("documentCredits"));
+        assertEquals(true, body.get("regeneration"));
+        assertNull(body.get("estimatedTokens"));
     }
 
     @Test
     void recoveryReservationUsesASeparateStableOperationKey() {
         UUID operationId = UUID.randomUUID();
         when(restTemplate.exchange(
-                eq("http://payment/api/v1/payments/reservations"),
+                eq("http://payment/api/v2/payments/document-credit-reservations"),
                 eq(HttpMethod.POST),
                 any(HttpEntity.class),
                 eq(Map.class)))
@@ -245,7 +250,7 @@ class RestGenerationDownstreamClientTest {
                 OWNER, operationId, 37_798);
 
         HttpEntity<?> request = capturedPost(
-                "http://payment/api/v1/payments/reservations");
+                "http://payment/api/v2/payments/document-credit-reservations");
         assertSingleHeader(request, "X-Service-Token", PAYMENT_TOKEN);
         assertSingleHeader(request, "X-Payment-Owner", OWNER);
         Map<?, ?> body = (Map<?, ?>) request.getBody();
@@ -255,7 +260,44 @@ class RestGenerationDownstreamClientTest {
         assertEquals(
                 "GENERATION_OPERATION_RECOVERY",
                 body.get("referenceType"));
-        assertEquals(37_798L, body.get("estimatedTokens"));
+        assertEquals(2, body.get("documentCredits"));
+        assertEquals(false, body.get("regeneration"));
+        assertNull(body.get("estimatedTokens"));
+    }
+
+    @Test
+    void commitAndReleaseUseDocumentCreditEndpointsWithoutTokenMetering() {
+        UUID reservationId = UUID.randomUUID();
+        String commitUrl = "http://payment/api/v2/payments/"
+                + "document-credit-reservations/" + reservationId
+                + "/commit";
+        String releaseUrl = "http://payment/api/v2/payments/"
+                + "document-credit-reservations/" + reservationId
+                + "/release";
+        when(restTemplate.exchange(
+                eq(commitUrl),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("status", "COMMITTED")));
+        when(restTemplate.exchange(
+                eq(releaseUrl),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("status", "RELEASED")));
+
+        client.commit(OWNER, reservationId, 99_999L);
+        client.release(OWNER, reservationId, "DELIVERY_FAILED");
+
+        HttpEntity<?> commit = capturedPost(commitUrl);
+        assertSingleHeader(commit, "X-Service-Token", PAYMENT_TOKEN);
+        assertSingleHeader(commit, "X-Payment-Owner", OWNER);
+        assertEquals(Map.of(), commit.getBody());
+        HttpEntity<?> release = capturedPost(releaseUrl);
+        assertEquals(
+                Map.of("reason", "DELIVERY_FAILED"),
+                release.getBody());
     }
 
     @Test

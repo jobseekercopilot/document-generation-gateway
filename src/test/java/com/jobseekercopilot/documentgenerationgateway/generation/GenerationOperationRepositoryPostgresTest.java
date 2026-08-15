@@ -258,7 +258,7 @@ class GenerationOperationRepositoryPostgresTest {
                             "SELECT COUNT(*) FROM generation_operations",
                             Integer.class));
             verify(downstream, times(1)).reserve(
-                    OWNER, firstAccepted.operationId(), 1000);
+                    OWNER, firstAccepted.operationId(), 1000, false);
             verify(downstream, times(1)).generate(
                     org.mockito.ArgumentMatchers.eq(OWNER),
                     org.mockito.ArgumentMatchers.eq(
@@ -875,7 +875,8 @@ class GenerationOperationRepositoryPostgresTest {
         when(downstream.estimate(anyString(), anyMap()))
                 .thenReturn(1000L);
         when(downstream.reserve(
-                anyString(), any(), anyLong()))
+                anyString(), any(), anyLong(),
+                org.mockito.ArgumentMatchers.anyBoolean()))
                 .thenReturn(Map.of(
                         "reservationId",
                         RESERVATION_ID.toString(),
