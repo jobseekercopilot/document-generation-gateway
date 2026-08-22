@@ -1,5 +1,6 @@
 target/
 libs/
+__pycache__/
 *.jar
 *.class
 *.log

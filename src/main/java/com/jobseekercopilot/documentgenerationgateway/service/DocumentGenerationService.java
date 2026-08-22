@@ -3,16 +3,14 @@ package com.jobseekercopilot.documentgenerationgateway.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentKind;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentDownloadsResponse;
-import com.jobseekercopilot.documentgenerationgateway.dto.DocumentGenerationResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DocumentUploadResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.DownloadFileResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportFileItem;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportLatestFiles;
 import com.jobseekercopilot.documentgenerationgateway.dto.ExportUploadResponse;
-import com.jobseekercopilot.documentgenerationgateway.dto.GenerationDownloadsResponse;
 import com.jobseekercopilot.documentgenerationgateway.dto.UploadFormat;
-import com.jobseekercopilot.generated.cvcoverletterservice.model.GenerateCvCoverLetterResponse;
-import com.jobseekercopilot.generated.cvcoverletterservice.model.Job;
+import com.jobseekercopilot.documentgenerationgateway.generation.ExportIdempotencyKeys;
+import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
 import com.jobseekercopilot.generated.documentexportservice.api.DocumentExportsApi;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportItem;
 import com.jobseekercopilot.generated.documentexportservice.model.DocumentExportRequest;
@@ -24,6 +22,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.Locale;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
@@ -49,6 +50,9 @@ import org.springframework.web.multipart.MultipartFile;
 public class DocumentGenerationService {
     private static final Logger log = LoggerFactory.getLogger(DocumentGenerationService.class);
     private static final String DOWNLOAD_URL_TEMPLATE = "/api/v1/document-generation/files/%s/download";
+    private static final String SERVICE_TOKEN_HEADER = "X-Service-Token";
+    private static final String APPLICATION_OWNER_HEADER = "X-Application-Owner";
+    private static final String DOCUMENT_OWNER_HEADER = "X-Document-Owner";
 
     private final UserProfilesApi userProfilesApi;
     private final DocumentExportsApi documentExportsApi;
@@ -59,6 +63,12 @@ public class DocumentGenerationService {
     private final String documentExportBaseUrl;
     private final String documentStoreBaseUrl;
     private final String applicationTrackerBaseUrl;
+    private final String authenticationServiceToken;
+    private final String applicationTrackerProducerToken;
+    private final String cvCoverLetterServiceToken;
+    private final String documentExportServiceToken;
+    private final String documentStoreProducerToken;
+    private final String documentStoreReaderToken;
 
     @Autowired
     public DocumentGenerationService(UserProfilesApi userProfilesApi,
@@ -69,7 +79,8 @@ public class DocumentGenerationService {
                                      @Value("${services.authentication-service.base-url}") String authenticationBaseUrl,
                                      @Value("${services.document-export-service.base-url}") String documentExportBaseUrl,
                                      @Value("${services.document-store-service.base-url}") String documentStoreBaseUrl,
-                                     @Value("${services.application-tracker-service.base-url}") String applicationTrackerBaseUrl) {
+                                     @Value("${services.application-tracker-service.base-url}") String applicationTrackerBaseUrl,
+                                     DownstreamServiceCredentials credentials) {
         this.userProfilesApi = userProfilesApi;
         this.documentExportsApi = documentExportsApi;
         this.objectMapper = objectMapper;
@@ -79,6 +90,12 @@ public class DocumentGenerationService {
         this.documentExportBaseUrl = documentExportBaseUrl;
         this.documentStoreBaseUrl = documentStoreBaseUrl;
         this.applicationTrackerBaseUrl = applicationTrackerBaseUrl;
+        this.authenticationServiceToken = credentials.authenticationServiceToken();
+        this.applicationTrackerProducerToken = credentials.applicationTrackerProducerToken();
+        this.cvCoverLetterServiceToken = credentials.cvCoverLetterServiceToken();
+        this.documentExportServiceToken = credentials.documentExportServiceToken();
+        this.documentStoreProducerToken = credentials.documentStoreProducerToken();
+        this.documentStoreReaderToken = credentials.documentStoreReaderToken();
     }
 
     DocumentGenerationService(UserProfilesApi userProfilesApi,
@@ -88,7 +105,15 @@ public class DocumentGenerationService {
                               String cvCoverLetterBaseUrl,
                               String authenticationBaseUrl,
                               String documentExportBaseUrl,
-                              String applicationTrackerBaseUrl) {
+                              String documentStoreBaseUrl,
+                              String applicationTrackerBaseUrl,
+                              String authenticationServiceToken,
+                              String applicationTrackerProducerToken,
+                              String cvCoverLetterServiceToken,
+                              String documentExportServiceToken,
+                              String documentStoreProducerToken,
+                              String documentStoreReaderToken,
+                              String paymentServiceToken) {
         this(userProfilesApi,
                 documentExportsApi,
                 objectMapper,
@@ -96,59 +121,34 @@ public class DocumentGenerationService {
                 cvCoverLetterBaseUrl,
                 authenticationBaseUrl,
                 documentExportBaseUrl,
-                "http://localhost:8089",
-                applicationTrackerBaseUrl);
+                documentStoreBaseUrl,
+                applicationTrackerBaseUrl,
+                new DownstreamServiceCredentials(
+                        authenticationServiceToken,
+                        applicationTrackerProducerToken,
+                        cvCoverLetterServiceToken,
+                        documentExportServiceToken,
+                        documentStoreProducerToken,
+                        documentStoreReaderToken,
+                        paymentServiceToken));
     }
 
-    public DocumentGenerationResponse generate(String userId, String authorization, Job job) {
-        long startedAt = System.nanoTime();
-        log.info("Document generation request received userId={} jobId={}",
-                userId,
-                job == null ? null : job.getId());
-        long profileStartedAt = System.nanoTime();
-        log.info("Calling user-profile-service for document generation userId={}", userId);
-        var downstreamProfile = userProfilesApi.getMyProfile(userId);
-        if (downstreamProfile == null) {
-            throw new IllegalStateException("User profile service returned no profile");
-        }
-        log.info("user-profile-service returned profile userId={} durationMs={}",
-                userId,
-                (System.nanoTime() - profileStartedAt) / 1_000_000);
-
-        Map<String, Object> profile = objectMapper.convertValue(downstreamProfile, LinkedHashMap.class);
-        enrichContactDetails(profile, authorization);
-        GenerateCvCoverLetterResponse generated = generateCvAndCoverLetter(userId, profile, job);
-        if (generated == null) {
-            throw new IllegalStateException("CV cover letter service returned no generation result");
-        }
-
-        UUID cvDocumentId = parseDocumentId(generated.getCvDocumentId(), "CV");
-        UUID coverLetterDocumentId = parseDocumentId(generated.getCoverLetterDocumentId(), "cover letter");
-
-        DocumentDownloadsResponse cvDownloads = exportDocument(cvDocumentId);
-        DocumentDownloadsResponse coverLetterDownloads = exportDocument(coverLetterDocumentId);
-        log.info("Document generation gateway completed userId={} applicationId={} cvDocumentId={} coverLetterDocumentId={} durationMs={}",
-                userId,
-                generated.getApplicationId(),
-                generated.getCvDocumentId(),
-                generated.getCoverLetterDocumentId(),
-                (System.nanoTime() - startedAt) / 1_000_000);
-
-        return new DocumentGenerationResponse(
-                generated.getApplicationId(),
-                generated.getCvDocumentId(),
-                generated.getCoverLetterDocumentId(),
-                new GenerationDownloadsResponse(cvDownloads, coverLetterDownloads));
-    }
-
-    public DocumentUploadResponse uploadReplacement(UUID generatedDocumentId, MultipartFile file,
+    public DocumentUploadResponse uploadReplacement(UUID generatedDocumentId, String userId, MultipartFile file,
                                                     DocumentKind documentKind, UploadFormat uploadedFormat) {
-        return uploadReplacementFile(generatedDocumentId, file, documentKind, uploadedFormat, true);
+        return uploadReplacementFile(
+                generatedDocumentId,
+                userId,
+                file,
+                documentKind,
+                uploadedFormat,
+                true,
+                null);
     }
 
-    private DocumentUploadResponse uploadReplacementFile(UUID generatedDocumentId, MultipartFile file,
+    private DocumentUploadResponse uploadReplacementFile(UUID generatedDocumentId, String userId, MultipartFile file,
                                                          DocumentKind documentKind, UploadFormat uploadedFormat,
-                                                         boolean validateApplicationLock) {
+                                                         boolean validateApplicationLock,
+                                                         String idempotencyKey) {
         long startedAt = System.nanoTime();
         log.info("Replacement document upload received generatedDocumentId={} documentKind={} uploadedFormat={} sizeBytes={}",
                 generatedDocumentId,
@@ -157,7 +157,7 @@ public class DocumentGenerationService {
                 file == null ? 0 : file.getSize());
         validateUpload(file, documentKind, uploadedFormat);
         if (validateApplicationLock) {
-            validateApplicationAllowsDocumentReplacement(generatedDocumentId);
+            validateApplicationAllowsDocumentReplacement(generatedDocumentId, userId);
         }
         try {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -175,6 +175,11 @@ public class DocumentGenerationService {
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+            headers.set(SERVICE_TOKEN_HEADER, documentExportServiceToken);
+            headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
+            if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+                headers.set("Idempotency-Key", idempotencyKey);
+            }
 
             ExportUploadResponse response = restTemplate.postForObject(
                     documentExportBaseUrl + "/api/v1/document-exports/documents/{generatedDocumentId}/upload",
@@ -198,149 +203,135 @@ public class DocumentGenerationService {
                                                              MultipartFile file, DocumentKind documentKind) {
         long startedAt = System.nanoTime();
         validateDocxUpload(file, documentKind);
-        Map<?, ?> application = fetchApplication(applicationId);
+        Map<?, ?> application = fetchApplication(applicationId, userId);
         validateApplicationOwner(application, userId);
         validateApplicationStatus(application);
-
-        String currentDocumentId = currentDocumentId(application, documentKind);
-        if (currentDocumentId == null || currentDocumentId.isBlank()) {
-            throw new IllegalArgumentException("Active document reference is missing for " + documentKind);
-        }
-
-        Map<?, ?> currentDocument = restTemplate.getForObject(
-                documentStoreBaseUrl + "/api/v1/documents/{documentId}",
-                Map.class,
-                currentDocumentId);
-        String content = extractDocxText(file);
-        String title = firstText(
-                stringValue(currentDocument, "title"),
-                ("%s replacement for %s").formatted(documentKind == DocumentKind.CV ? "CV" : "Cover letter",
-                        stringValue(application, "jobTitle")));
-
-        Map<String, Object> createDocument = new LinkedHashMap<>();
-        createDocument.put("userId", stringValue(application, "userId"));
-        createDocument.put("jobId", stringValue(application, "jobId"));
-        createDocument.put("applicationId", applicationId.toString());
-        createDocument.put("documentType", documentKind.name());
-        createDocument.put("title", title);
-        createDocument.put("content", content);
-        createDocument.put("active", false);
-        createDocument.put("originalFilename", file.getOriginalFilename());
-        createDocument.put("sourceType", "UPLOADED");
-        createDocument.put("createdBy", firstText(userId, stringValue(application, "userId")));
-
-        Map<?, ?> created = restTemplate.postForObject(
-                documentStoreBaseUrl + "/api/v1/documents",
-                createDocument,
-                Map.class);
-        UUID newDocumentId = UUID.fromString(Objects.toString(created.get("id")));
-        Integer version = integerValue(created.get("version"));
-
-        DocumentUploadResponse uploadResponse;
-        try {
-            uploadResponse = uploadReplacementFile(newDocumentId, file, documentKind, UploadFormat.DOCX, false);
-        } catch (RuntimeException exception) {
-            throw new IllegalStateException("DOCUMENT_CONVERSION_FAILED", exception);
-        }
-
-        restTemplate.exchange(
-                documentStoreBaseUrl + "/api/v1/documents/applications/{applicationId}/{documentType}/active/{documentId}",
-                HttpMethod.PATCH,
-                HttpEntity.EMPTY,
-                Map.class,
-                applicationId.toString(),
-                documentKind.name(),
-                newDocumentId);
-
-        Map<String, Object> referenceUpdate = Map.of(
-                "documentType", documentKind.name(),
-                "documentId", newDocumentId.toString());
-        ResponseEntity<Map> updatedApplicationResponse = restTemplate.exchange(
-                applicationTrackerBaseUrl + "/api/v1/applications/{applicationId}/document-reference",
-                HttpMethod.PATCH,
-                new HttpEntity<>(referenceUpdate),
-                Map.class,
-                applicationId);
-        Map<?, ?> updatedApplication = updatedApplicationResponse.getBody();
-
-        log.info("Application document replacement completed applicationId={} documentKind={} newDocumentId={} version={} durationMs={}",
+        Map<?, ?> workflow = beginReplacement(
                 applicationId,
-                documentKind,
-                newDocumentId,
-                version,
-                (System.nanoTime() - startedAt) / 1_000_000);
-        return new DocumentUploadResponse(
-                newDocumentId,
-                applicationId,
-                stringValue(updatedApplication, "cvDocumentId"),
-                stringValue(updatedApplication, "coverLetterDocumentId"),
-                version,
-                uploadResponse.uploadedFile(),
-                uploadResponse.regeneratedFiles(),
-                uploadResponse.latestFiles(),
-                documentKind == DocumentKind.CV
-                        ? "CV replaced successfully. PDF version has been updated."
-                        : "Cover letter replaced successfully. PDF version has been updated.");
-    }
-
-    private GenerateCvCoverLetterResponse generateCvAndCoverLetter(String userId, Map<String, Object> profile, Job job) {
-        long startedAt = System.nanoTime();
-        log.info("Calling cv-cover-letter-service userId={} jobId={}", userId, job == null ? null : job.getId());
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("userProfile", profile);
-        request.put("job", job);
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-User-Id", userId);
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        GenerateCvCoverLetterResponse response = restTemplate.postForObject(
-                cvCoverLetterBaseUrl + "/api/v1/cv-cover-letter/generate",
-                new HttpEntity<>(request, headers),
-                GenerateCvCoverLetterResponse.class);
-        log.info("cv-cover-letter-service returned userId={} jobId={} applicationId={} durationMs={}",
                 userId,
-                job == null ? null : job.getId(),
-                response == null ? null : response.getApplicationId(),
-                (System.nanoTime() - startedAt) / 1_000_000);
-        return response;
-    }
-
-    private void enrichContactDetails(Map<String, Object> profile, String authorization) {
-        if (authorization == null || authorization.isBlank()) {
-            return;
-        }
+                documentKind,
+                sha256(file));
+        UUID operationId = requiredUuid(workflow, "operationId");
+        UUID sourceDocumentId = requiredUuid(workflow, "sourceDocumentId");
+        UUID newDocumentId = optionalUuid(workflow, "replacementDocumentId");
+        Integer version = null;
+        DocumentUploadResponse uploadResponse = null;
         try {
-            long startedAt = System.nanoTime();
-            log.info("Calling authentication-service for contact enrichment");
-            HttpHeaders headers = new HttpHeaders();
-            headers.set(HttpHeaders.AUTHORIZATION, authorization);
-            Map<?, ?> account = restTemplate.exchange(
-                    authenticationBaseUrl + "/api/auth/me",
-                    org.springframework.http.HttpMethod.GET,
-                    new HttpEntity<>(headers),
-                    Map.class).getBody();
-            if (account != null) {
-                putIfText(profile, "fullName", account.get("name"));
-                putIfText(profile, "email", account.get("email"));
+            Map<?, ?> currentDocument = restTemplate.exchange(
+                    documentStoreBaseUrl + "/api/v1/documents/{documentId}",
+                    HttpMethod.GET,
+                    documentStoreRequest(
+                            userId, null, documentStoreReaderToken),
+                    Map.class,
+                    sourceDocumentId).getBody();
+            if (currentDocument == null
+                    || currentDocument.get("documentFamilyId") == null) {
+                throw new IllegalArgumentException(
+                        "Source document family is missing");
             }
-            log.info("authentication-service contact enrichment completed durationMs={}",
+            String content = extractDocxText(file);
+            String title = firstText(
+                    stringValue(currentDocument, "title"),
+                    ("%s replacement for %s").formatted(
+                            documentKind == DocumentKind.CV
+                                    ? "CV"
+                                    : "Cover letter",
+                            stringValue(application, "jobTitle")));
+
+            Map<String, Object> createDocument = new LinkedHashMap<>();
+            createDocument.put("userId", userId);
+            createDocument.put(
+                    "jobId", stringValue(application, "jobId"));
+            createDocument.put(
+                    "applicationId", applicationId.toString());
+            createDocument.put(
+                    "documentFamilyId",
+                    currentDocument.get("documentFamilyId"));
+            createDocument.put("documentType", documentKind.name());
+            createDocument.put("title", title);
+            createDocument.put("content", content);
+            createDocument.put("active", false);
+            createDocument.put(
+                    "originalFilename", file.getOriginalFilename());
+            createDocument.put("sourceType", "UPLOADED");
+            createDocument.put("createdBy", userId);
+
+            Map<?, ?> created = restTemplate.exchange(
+                    documentStoreBaseUrl + "/api/v1/documents",
+                    HttpMethod.POST,
+                    documentStoreRequest(
+                            userId,
+                            createDocument,
+                            documentStoreProducerToken,
+                            operationId + ":document"),
+                    Map.class).getBody();
+            if (created == null || created.get("id") == null) {
+                throw new IllegalStateException(
+                        "Document Store returned no replacement document");
+            }
+            newDocumentId = UUID.fromString(
+                    Objects.toString(created.get("id")));
+            version = integerValue(created.get("version"));
+            registerReplacement(
+                    applicationId, userId, operationId, newDocumentId);
+
+            uploadResponse = uploadReplacementFile(
+                    newDocumentId,
+                    userId,
+                    file,
+                    documentKind,
+                    UploadFormat.DOCX,
+                    false,
+                    operationId.toString());
+
+            restTemplate.exchange(
+                    documentStoreBaseUrl
+                            + "/api/v1/documents/{documentId}/approve",
+                    HttpMethod.PATCH,
+                    documentStoreRequest(
+                            userId, null, documentStoreProducerToken),
+                    Map.class,
+                    newDocumentId);
+
+            Map<?, ?> completed = completeReplacement(
+                    applicationId, userId, operationId);
+            log.info("Application document replacement completed applicationId={} documentKind={} version={} durationMs={}",
+                    applicationId,
+                    documentKind,
+                    version,
                     (System.nanoTime() - startedAt) / 1_000_000);
-        } catch (RestClientException exception) {
-            log.warn("authentication-service contact enrichment failed error={}",
+            return replacementResponse(
+                    completed,
+                    newDocumentId,
+                    applicationId,
+                    version,
+                    uploadResponse,
+                    documentKind);
+        } catch (RuntimeException exception) {
+            Map<?, ?> recovery = markReplacementRecovery(
+                    applicationId, userId, operationId);
+            log.warn(
+                    "Application document replacement requires recovery applicationId={} documentKind={} error={}",
+                    applicationId,
+                    documentKind,
                     exception.getClass().getSimpleName());
-            // Contact details improve document presentation, but generation should not fail if auth lookup is unavailable.
+            return replacementResponse(
+                    recovery,
+                    newDocumentId,
+                    applicationId,
+                    version,
+                    uploadResponse,
+                    documentKind);
         }
     }
 
-    private void putIfText(Map<String, Object> profile, String key, Object value) {
-        if (value instanceof String text && !text.isBlank()) {
-            profile.put(key, text.trim());
-        }
-    }
-
-    private DocumentDownloadsResponse exportDocument(UUID documentId) {
+    DocumentDownloadsResponse exportDocument(UUID documentId, String userId) {
         long startedAt = System.nanoTime();
         log.info("Calling document-export-service documentId={}", documentId);
-        DocumentExportResponse response = documentExportsApi.exportDocument(documentId,
+        DocumentExportResponse response = documentExportsApi.exportDocument(
+                requireDocumentOwner(userId),
+                documentId,
+                ExportIdempotencyKeys.forDocument(documentId),
                 new DocumentExportRequest()
                         .formats(List.of(
                                 DocumentExportRequest.FormatsEnum.DOCX,
@@ -390,7 +381,159 @@ public class DocumentGenerationService {
                 new DocumentDownloadsResponse(
                         latest == null ? null : toDownload(latest.docx()),
                         latest == null ? null : toDownload(latest.pdf())),
+                null,
+                null,
+                false,
+                null,
                 response.message());
+    }
+
+    private Map<?, ?> beginReplacement(
+            UUID applicationId,
+            String userId,
+            DocumentKind documentKind,
+            String requestSha256) {
+        Map<String, Object> request = Map.of(
+                "documentType", documentKind.name(),
+                "requestSha256", requestSha256);
+        Map<?, ?> response = restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements",
+                HttpMethod.POST,
+                applicationTrackerRequest(userId, request),
+                Map.class,
+                applicationId).getBody();
+        if (response == null) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no replacement workflow");
+        }
+        return response;
+    }
+
+    private void registerReplacement(
+            UUID applicationId,
+            String userId,
+            UUID operationId,
+            UUID replacementDocumentId) {
+        restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements/{operationId}/replacement-document",
+                HttpMethod.PATCH,
+                applicationTrackerRequest(
+                        userId,
+                        Map.of(
+                                "replacementDocumentId",
+                                replacementDocumentId)),
+                Map.class,
+                applicationId,
+                operationId);
+    }
+
+    private Map<?, ?> completeReplacement(
+            UUID applicationId,
+            String userId,
+            UUID operationId) {
+        Map<?, ?> response = restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements/{operationId}/complete",
+                HttpMethod.PATCH,
+                applicationTrackerRequest(userId, null),
+                Map.class,
+                applicationId,
+                operationId).getBody();
+        if (response == null) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no replacement outcome");
+        }
+        return response;
+    }
+
+    private Map<?, ?> markReplacementRecovery(
+            UUID applicationId,
+            String userId,
+            UUID operationId) {
+        Map<?, ?> response = restTemplate.exchange(
+                applicationTrackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-replacements/{operationId}/recovery-required",
+                HttpMethod.PATCH,
+                applicationTrackerRequest(userId, null),
+                Map.class,
+                applicationId,
+                operationId).getBody();
+        if (response == null) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no recovery outcome");
+        }
+        return response;
+    }
+
+    private DocumentUploadResponse replacementResponse(
+            Map<?, ?> workflow,
+            UUID replacementDocumentId,
+            UUID applicationId,
+            Integer version,
+            DocumentUploadResponse upload,
+            DocumentKind documentKind) {
+        String operationStatus =
+                stringValue(workflow, "operationStatus");
+        boolean completed = "COMPLETED".equals(operationStatus);
+        UUID resolvedDocumentId = replacementDocumentId == null
+                ? optionalUuid(workflow, "replacementDocumentId")
+                : replacementDocumentId;
+        return new DocumentUploadResponse(
+                resolvedDocumentId,
+                applicationId,
+                stringValue(workflow, "cvDocumentId"),
+                stringValue(workflow, "coverLetterDocumentId"),
+                version,
+                upload == null ? null : upload.uploadedFile(),
+                upload == null ? List.of() : upload.regeneratedFiles(),
+                upload == null ? null : upload.latestFiles(),
+                requiredUuid(workflow, "operationId"),
+                operationStatus,
+                booleanValue(workflow, "retryable"),
+                stringValue(workflow, "recoveryCode"),
+                completed
+                        ? documentKind == DocumentKind.CV
+                                ? "CV replaced successfully. PDF version has been updated."
+                                : "Cover letter replaced successfully. PDF version has been updated."
+                        : "Document replacement is pending recoverable completion.");
+    }
+
+    private UUID requiredUuid(Map<?, ?> map, String key) {
+        UUID value = optionalUuid(map, key);
+        if (value == null) {
+            throw new IllegalStateException(key + " is missing");
+        }
+        return value;
+    }
+
+    private UUID optionalUuid(Map<?, ?> map, String key) {
+        String value = stringValue(map, key);
+        return value == null || value.isBlank()
+                ? null
+                : UUID.fromString(value);
+    }
+
+    private boolean booleanValue(Map<?, ?> map, String key) {
+        Object value = map == null ? null : map.get(key);
+        return value instanceof Boolean bool
+                ? bool
+                : Boolean.parseBoolean(Objects.toString(value, "false"));
+    }
+
+    private String sha256(MultipartFile file) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(file.getBytes()));
+        } catch (java.io.IOException exception) {
+            throw new IllegalArgumentException(
+                    "Unable to read uploaded file");
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(
+                    "SHA-256 is unavailable", exception);
+        }
     }
 
     private DownloadFileResponse toDownload(ExportFileItem item) {
@@ -480,11 +623,13 @@ public class DocumentGenerationService {
         }
     }
 
-    private Map<?, ?> fetchApplication(UUID applicationId) {
-        Map<?, ?> application = restTemplate.getForObject(
+    private Map<?, ?> fetchApplication(UUID applicationId, String userId) {
+        Map<?, ?> application = restTemplate.exchange(
                 applicationTrackerBaseUrl + "/api/v1/applications/{applicationId}",
+                HttpMethod.GET,
+                applicationTrackerRequest(userId, null),
                 Map.class,
-                applicationId);
+                applicationId).getBody();
         if (application == null) {
             throw new IllegalArgumentException("Application not found");
         }
@@ -493,10 +638,10 @@ public class DocumentGenerationService {
 
     private void validateApplicationOwner(Map<?, ?> application, String userId) {
         if (userId == null || userId.isBlank()) {
-            return;
+            throw new IllegalArgumentException("Authenticated application owner is required.");
         }
         String owner = stringValue(application, "userId");
-        if (owner != null && !owner.equals(userId)) {
+        if (owner == null || !owner.equals(userId)) {
             throw new IllegalArgumentException("Application does not belong to the current user.");
         }
     }
@@ -532,13 +677,15 @@ public class DocumentGenerationService {
         return Integer.valueOf(value.toString());
     }
 
-    private void validateApplicationAllowsDocumentReplacement(UUID generatedDocumentId) {
+    private void validateApplicationAllowsDocumentReplacement(UUID generatedDocumentId, String userId) {
         long startedAt = System.nanoTime();
         log.info("Calling application-tracker-service before document replacement documentId={}", generatedDocumentId);
-        Map<?, ?> application = restTemplate.getForObject(
+        Map<?, ?> application = restTemplate.exchange(
                 applicationTrackerBaseUrl + "/api/v1/applications/document/{documentId}",
+                HttpMethod.GET,
+                applicationTrackerRequest(userId, null),
                 Map.class,
-                generatedDocumentId.toString());
+                generatedDocumentId.toString()).getBody();
         Object status = application == null ? null : application.get("status");
         if (!"DOCUMENTS_GENERATED".equals(status)) {
             log.warn("Locked document upload rejected documentId={} status={}", generatedDocumentId, status);
@@ -547,6 +694,51 @@ public class DocumentGenerationService {
         log.info("application-tracker-service replacement check passed documentId={} durationMs={}",
                 generatedDocumentId,
                 (System.nanoTime() - startedAt) / 1_000_000);
+    }
+
+    private HttpEntity<?> applicationTrackerRequest(String userId, Object body) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("Authenticated application owner is required.");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(SERVICE_TOKEN_HEADER, applicationTrackerProducerToken);
+        headers.set(APPLICATION_OWNER_HEADER, userId);
+        if (body != null) {
+            headers.setContentType(MediaType.APPLICATION_JSON);
+        }
+        return new HttpEntity<>(body, headers);
+    }
+
+    private HttpEntity<?> documentStoreRequest(
+            String userId,
+            Object body,
+            String serviceToken) {
+        return documentStoreRequest(
+                userId, body, serviceToken, null);
+    }
+
+    private HttpEntity<?> documentStoreRequest(
+            String userId,
+            Object body,
+            String serviceToken,
+            String idempotencyKey) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(SERVICE_TOKEN_HEADER, serviceToken);
+        headers.set(DOCUMENT_OWNER_HEADER, requireDocumentOwner(userId));
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            headers.set("Idempotency-Key", idempotencyKey);
+        }
+        if (body != null) {
+            headers.setContentType(MediaType.APPLICATION_JSON);
+        }
+        return new HttpEntity<>(body, headers);
+    }
+
+    private String requireDocumentOwner(String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("Authenticated document owner is required.");
+        }
+        return userId;
     }
 
     private String mimeType(UploadFormat uploadedFormat) {

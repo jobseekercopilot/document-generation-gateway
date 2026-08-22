@@ -13,12 +13,40 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      JSC_PACKAGE_READ_TOKEN: ${{ secrets.JSC_PACKAGE_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Test fail-closed history scanning
+        run: ./scripts/test-secret-history.sh
+      - name: Scan complete Git history
+        run: ./scripts/verify-secret-history.sh
+      - name: Verify document-generation architecture
+        run: |
+          python3 scripts/verify_architecture.py
+          python3 scripts/test_architecture_policy.py
+      - name: Test pinned contract policy
+        run: ./scripts/test-contract-policy.sh
+      - name: Verify pinned producer contracts
+        run: ./scripts/verify-contracts.sh
+      - name: Test private package consumer policy
+        run: |
+          python3 scripts/verify_package_consumer.py
+          python3 scripts/test_package_consumer_policy.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
           cache: maven
-      - name: Verify
-        run: mvn -B clean verify
+      - name: Reject forbidden repository artefacts
+        run: |
+          test -z "$(find . -path './.git' -prune -o \( -name target -o -name libs -o -name '*.jar' -o -name '*.class' \) -print)"
+      - name: Build and test
+        run: |
+          test -n "$JSC_PACKAGE_READ_TOKEN"
+          mvn -B --no-transfer-progress \
+            -s .mvn/github-packages-settings.xml clean verify
+      - name: Build source-only container
+        run: ./scripts/build-container.sh local/document-generation-gateway:ci

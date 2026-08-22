@@ -1,8 +1,20 @@
 # Beta-readiness audit
 
-Audit date: 2026-07-23
+Audit date: 2026-07-24
 
 Status: **Not ready for private beta**
+
+## Approved architecture boundary
+
+The accepted cross-repository
+[Document architecture ADR](https://github.com/jobseekercopilot/document-store-service/blob/fedcdbdec63795269c4e4c4f43fc32f38c6327b1/docs/adr/0001-document-architecture-and-ownership.md)
+is the single ownership decision for this journey. DOCGEN-01 verifies it from
+the Gateway boundary in
+[`architecture/DOCGEN-01_VERIFICATION.md`](architecture/DOCGEN-01_VERIFICATION.md),
+including current/target sequences, one owner for every lifecycle state,
+explicit Application Tracker/Build Tools repository decisions and a
+machine-checked synthetic trace. The decision assigns the remaining runtime
+work; it does not resolve the blockers below.
 
 ## Verified responsibility and request flow
 
@@ -23,37 +35,61 @@ record.
 
 - Source was copied from the untracked service directory in the intact root
   workspace; no standalone source history was available.
-- The source-controlled JWT fallback was removed from this migration
-  candidate. `JWT_SECRET` is now required and no secret value was copied.
+- The source-controlled JWT fallback was removed from the migration candidate.
+  The later GW-01 slice replaces the legacy HMAC filter with the platform
+  RS256/JWKS contract and keeps signing and service-identity secrets out of
+  source.
 - `target/`, local client JARs, generated binaries, logs, databases, exported
   documents, recordings, and environment files are excluded.
 - The migration-time contract is `contracts/openapi.json`.
 - Gitleaks and targeted personal-data checks passed on the sanitised source.
-- A clean `mvn -B clean verify` fails before compilation because seven
-  `systemPath` client JARs are absent. Six test methods exist in source, but
-  they were not executed in the clean candidate.
-- The candidate container build fails at `COPY libs ./libs`; no image was
-  produced.
+- The DOCGEN-02 gateway slice replaces the three source-used `systemPath`
+  clients with deterministic generation from exact revision/checksum-pinned
+  producer contracts. It removes four unused generated-client dependencies
+  and two unused generated API beans. Contract policy tests, Maven
+  verification and the source-only container build run in CI without sibling
+  repositories, local `libs/` or preinstalled Job Seeker Copilot artifacts.
+- Producer contract compatibility does not resolve every trusted downstream
+  identity. The GW-01 gateway slice now forwards only the validated bearer to
+  User Profile, adds runtime service identity to Authentication and adds
+  runtime producer identity plus owner context to Application Tracker.
+  The Store consumer slice pins Store 1.1.0 and adds distinct reader/producer
+  identities plus owner context to each direct Store operation. The Export
+  consumer slice pins Export 2.0.0 and adds its distinct service identity plus
+  owner context to generation and replacement calls. The final CV/Cover Letter
+  consumer slice pins CV/Cover Letter 2.0.0, adds a sixth distinct service
+  identity, and binds generation to the validated owner without forwarding
+  legacy `X-User-Id`.
 - OWASP Dependency-Check 12.1.8 completed against the cached 2026-07-18
   advisory database: 62 dependencies, 14 vulnerable dependencies, 146
-  vulnerability matches, including 17 Critical and 42 High matches. Results
+  vulnerability matches, including 17 Critical and 41 High matches. Results
   require reachability/false-positive triage; the report was not committed.
 
 ## Confirmed blockers
 
-1. `JwtTokenFilter` accepts a caller-controlled `X-User-Id` fallback, allowing
-   untrusted identity selection.
+1. Resolved in the GW-01 gateway slice: caller-controlled `X-User-Id` no
+   longer authenticates or overrides the validated JWT subject.
 2. The generation request trusts browser-supplied job title, employer, and
    description instead of resolving the selected canonical job.
 3. The generation, export, and application path is synchronous and non-atomic;
    it has no operation state, idempotency key, cancellation, or safe retry.
 4. Generated documents are already stored and linked as
    `DOCUMENTS_GENERATED` before user preview/edit/approval.
-5. File download by UUID is proxied without an ownership check.
-6. Direct document replacement is not authorised against the authenticated
-   owner.
-7. Application-based replacement accepts missing identity and relies on an
-   unauthenticated downstream lookup.
+5. Resolved in the GW-01 Store consumer slice: file download UUIDs are sent
+   only with the Store reader identity and validated owner context.
+6. Resolved at the service-contract boundary in the GW-01 Store and Export
+   consumer slices: direct Store read/create/activate operations and the
+   intervening Export upload/conversion call are owner bound. Fleet E2E
+   evidence remains required.
+7. Resolved at the service-contract boundary in the GW-01 gateway and Export
+   consumer slices: Application Tracker lookups and Export replacement require
+   a validated owner plus dedicated service identity. Cross-user fleet evidence
+   remains required.
+   APP-08 now also reserves durable Tracker state before replacement writes,
+   preserves the old application reference until approval, replays Store and
+   Export writes with stable operation keys, and reports incomplete work as
+   recoverable `202`. Broader generation orchestration and fleet E2E evidence
+   remain required.
 8. Upload validation checks extension/MIME/basic ZIP members only; it lacks
    bounded decompression, macro/relationship/content checks, and filename
    hardening evidence.
@@ -64,8 +100,9 @@ record.
 11. There is no complete correlation-safe state model or metrics for
     generation, invalid output, rejected claims, cost, storage, export, and
     download failures.
-12. The build depends on seven untracked generated client JARs and there is no
-    reproducible contract publication pipeline.
+12. The six Java service boundaries now have immutable producer contract pins,
+    but full-fleet publication and TypeScript generation evidence remain
+    incomplete.
 13. The Dockerfile is not hardened with digest-pinned bases, a non-root
     runtime, explicit readiness, resource limits, or supply-chain evidence.
 14. Current Spring, Tomcat, Jackson, security, HTTP, compression, POI,

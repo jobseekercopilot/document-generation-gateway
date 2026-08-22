@@ -2,7 +2,12 @@ package com.jobseekercopilot.documentgenerationgateway;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -11,15 +16,253 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+        "document-generation.security.jwk-set-uri=http://127.0.0.1:65535/.well-known/jwks.json",
+        "document-generation.security.authentication-service-token="
+                + "test-only-authentication-service-token-32-bytes",
+        "document-generation.security.application-tracker-producer-token="
+                + "test-only-application-producer-token-32-bytes",
+        "document-generation.security.cv-cover-letter-service-token="
+                + "test-only-cv-cover-letter-service-token-32-bytes",
+        "document-generation.security.document-export-service-token="
+                + "test-only-document-export-service-token-32-bytes",
+        "document-generation.security.document-store-producer-token="
+                + "test-only-document-store-producer-token-32-bytes",
+        "document-generation.security.document-store-reader-token="
+                + "test-only-document-store-reader-token-32-bytes",
+        "document-generation.security.payment-service-token="
+                + "test-only-payment-service-token-0000000000001"
+})
 @AutoConfigureMockMvc
 class OpenApiExportTest {
     @Autowired private MockMvc mockMvc;
+    @Autowired private ObjectMapper objectMapper;
 
     @Test
     void exportOpenApi() throws Exception {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        JsonNode contract = objectMapper.readTree(spec);
+        assertEquals("3.0.0", contract.path("info").path("version").asText());
+        assertEquals(
+                "bearer",
+                contract.path("components")
+                        .path("securitySchemes")
+                        .path("bearerAuth")
+                        .path("scheme")
+                        .asText());
+        assertFalse(spec.contains("X-User-Id"));
+        assertFalse(contract.path("paths")
+                .has("/api/v1/document-generation/jobs/{jobId}/generate"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-families"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-families/{documentFamilyId}"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-families/{documentFamilyId}/current"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}/application-associations"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}/archive"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}/restore"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/document-versions/{documentId}"));
+        assertTrue(contract.path("paths")
+                .path("/api/v1/document-generation/document-versions/{documentId}")
+                .path("delete")
+                .path("responses")
+                .has("204"));
+        JsonNode selections = contract.path("paths")
+                .path("/api/v1/document-generation/applications/{applicationId}/document-selections")
+                .path("put");
+        assertTrue(selections.path("requestBody").path("required").asBoolean());
+        assertTrue(selections.path("parameters").findValuesAsText("name")
+                .contains("Idempotency-Key"));
+        assertTrue(contract.path("paths")
+                .has("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download"));
+        JsonNode applicationUpload = contract.path("paths")
+                .path("/api/v1/document-generation/applications/{applicationId}/document-uploads")
+                .path("post");
+        assertTrue(applicationUpload.path("parameters").findValuesAsText("name")
+                .contains("Idempotency-Key"));
+        assertTrue(applicationUpload.path("requestBody")
+                .path("content").has("multipart/form-data"));
+        assertTrue(contract.path("paths").has(
+                "/api/v1/document-generation/application-document-uploads/{operationId}"));
+        JsonNode downloadHeaders = contract.path("paths")
+                .path("/api/v1/document-generation/documents/{documentId}/artifacts/{artifactId}/download")
+                .path("get")
+                .path("responses")
+                .path("200")
+                .path("headers");
+        assertTrue(downloadHeaders.has("Content-Disposition"));
+        assertTrue(downloadHeaders.has("Content-Length"));
+        assertTrue(downloadHeaders.has("X-Content-Type-Options"));
+        assertTrue(downloadHeaders.has("Cache-Control"));
+        assertTrue(downloadHeaders.has("Pragma"));
+        JsonNode start = contract.path("paths")
+                .path("/api/v1/document-generation/saved-jobs/{savedJobId}/operations")
+                .path("post");
+        assertTrue(start.path("requestBody").path("required").asBoolean());
+        assertEquals(
+                "#/components/schemas/StartGenerationRequest",
+                start.path("requestBody")
+                        .path("content")
+                        .path("application/json")
+                        .path("schema")
+                        .path("$ref")
+                        .asText());
+        JsonNode schemas = contract.path("components").path("schemas");
+        JsonNode uploadResponse = schemas
+                .path("ApplicationDocumentUploadOperationResponse")
+                .path("properties");
+        assertTrue(uploadResponse.has("operationId"));
+        assertTrue(uploadResponse.has("documentId"));
+        assertFalse(uploadResponse.has("content"));
+        assertFalse(uploadResponse.has("originalSha256"));
+        assertTrue(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("purgedAt"));
+        assertTrue(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("unavailableReason"));
+        assertTrue(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("applicationAssociations"));
+        assertFalse(schemas.path("DocumentApplicationAssociation")
+                .path("properties").has("contentSha256"));
+        JsonNode selectionResponse = schemas
+                .path("ApplicationDocumentSelectionsResponse")
+                .path("properties");
+        assertTrue(selectionResponse.has("applicationUsedCvDocumentReference"));
+        assertTrue(selectionResponse.has(
+                "applicationUsedCoverLetterDocumentReference"));
+        assertEquals(
+                "[\"UNKNOWN\",\"SELECTED\",\"OMITTED\"]",
+                selectionResponse.path("applicationUsedCvState")
+                        .path("enum")
+                        .toString());
+        assertEquals(
+                "[\"UNKNOWN\",\"SELECTED\",\"OMITTED\"]",
+                selectionResponse.path("applicationUsedCoverLetterState")
+                        .path("enum")
+                        .toString());
+        assertTrue(selectionResponse.has("applicationUsedAt"));
+        assertTrue(selectionResponse.has("appliedAt"));
+        assertEquals(
+                java.util.Set.of(
+                        "cvSelection",
+                        "coverLetterSelection",
+                        "expectedVersion"),
+                new java.util.HashSet<>(objectMapper.convertValue(
+                        schemas.path("SaveApplicationDocumentSelectionsRequest")
+                                .path("required"),
+                        objectMapper.getTypeFactory().constructCollectionType(
+                                java.util.List.class,
+                                String.class))));
+        assertFalse(schemas.path("DocumentVersionHistoryItem")
+                .path("properties").has("content"));
+        assertFalse(schemas.path("DocumentArtifactManifestItem")
+                .path("properties").has("fileName"));
+        assertEquals(
+                java.util.Set.of("documents"),
+                new java.util.HashSet<>(objectMapper.convertValue(
+                        schemas.path("StartGenerationRequest").path("required"),
+                        objectMapper.getTypeFactory().constructCollectionType(
+                                java.util.List.class,
+                                String.class))));
+        JsonNode outputSelection = schemas.path("StartGenerationRequest")
+                .path("properties").path("outputs");
+        assertEquals(1, outputSelection.path("minItems").asInt());
+        assertEquals(2, outputSelection.path("maxItems").asInt());
+        assertTrue(outputSelection.path("uniqueItems").asBoolean());
+        assertEquals(
+                "[\"CV\",\"COVER_LETTER\"]",
+                outputSelection.path("items").path("enum").toString());
+        assertFalse(schemas.path("ApproveGenerationRequest")
+                .has("required"));
+        assertTrue(schemas.path("GenerationOperationResponse")
+                .path("properties").has("requestedOutputs"));
+        assertTrue(schemas.path("GenerationOperationResponse")
+                .path("properties").has("outputResults"));
+        assertEquals(
+                "#/components/schemas/GenerationOutputResultResponse",
+                schemas.path("GenerationOperationResponse")
+                        .path("properties")
+                        .path("outputResults")
+                        .path("additionalProperties")
+                        .path("$ref")
+                        .asText());
+        JsonNode outputResult = schemas.path(
+                "GenerationOutputResultResponse");
+        assertTrue(outputResult.path("properties").has("regeneration"));
+        assertFalse(outputResult.path("properties").has("estimatedTokens"));
+        assertFalse(outputResult.path("properties").has("actualTokens"));
+        assertFalse(outputResult.path("properties").has("providerTokens"));
+        assertEquals(
+                "[\"READY\",\"ESTIMATED\",\"ALLOWANCE_RESERVED\","
+                        + "\"OUTCOME_UNKNOWN\",\"DRAFT_GENERATED\","
+                        + "\"STORED_PENDING_ALLOWANCE\",\"ALLOWANCE_COMMITTED\","
+                        + "\"STORED\",\"FAILED\"]",
+                outputResult.path("properties").path("status")
+                        .path("enum").toString());
+        assertFalse(spec.contains("estimatedTokens"));
+        assertFalse(spec.contains("actualTokens"));
+        assertFalse(spec.contains("providerTokens"));
+        assertFalse(spec.toLowerCase(java.util.Locale.ROOT).contains("credit"));
+        assertFalse(spec.toLowerCase(java.util.Locale.ROOT).contains("token"));
+        JsonNode recovery = schemas.path(
+                "GenerationRecoverySummaryResponse");
+        assertFalse(outputResult.path("additionalProperties")
+                .asBoolean(true));
+        assertFalse(recovery.path("additionalProperties")
+                .asBoolean(true));
+        assertEquals(
+                "#/components/schemas/GenerationRecoverySummaryResponse",
+                outputResult.path("properties")
+                        .path("recoverySummary")
+                        .path("$ref")
+                        .asText());
+        assertEquals(
+                "[\"LLM\",\"DETERMINISTIC_FALLBACK\",\"NOT_AVAILABLE\"]",
+                recovery.path("properties")
+                        .path("generationSource")
+                        .path("enum")
+                        .toString());
+        assertEquals(
+                "[\"NOT_RESERVED\",\"RESERVED\",\"RESERVED_PENDING_RECONCILIATION\","
+                        + "\"COMMITTED\",\"RELEASED_NO_CHARGE\",\"RELEASED_AFTER_FAILURE\","
+                        + "\"RELEASED_AFTER_RECONCILIATION\"]",
+                recovery.path("properties")
+                        .path("billingStatus")
+                        .path("enum")
+                        .toString());
+        assertEquals(60, recovery.path("properties")
+                .path("reconciliationAttempts")
+                .path("maximum")
+                .asInt());
+        assertFalse(recovery.path("properties").has("content"));
+        assertFalse(recovery.path("properties").has("prompt"));
+        assertFalse(recovery.path("properties").has("evidence"));
+        assertFalse(recovery.path("properties").has("providerError"));
+        assertEquals(
+                java.util.Set.of("purpose", "entryIds", "sectionOrder"),
+                new java.util.HashSet<>(objectMapper.convertValue(
+                        schemas.path("DocumentEvidenceSelection").path("required"),
+                        objectMapper.getTypeFactory().constructCollectionType(
+                                java.util.List.class,
+                                String.class))));
+        assertEquals(
+                "[\"CV\",\"COVER_LETTER\"]",
+                schemas.path("DocumentEvidenceSelection")
+                        .path("properties")
+                        .path("purpose")
+                        .path("enum")
+                        .toString());
+        contract.path("paths").forEach(path ->
+                path.forEach(operation ->
+                        assertTrue(operation.path("security").toString().contains("bearerAuth"))));
         Files.writeString(Path.of("target/openapi.json"), spec);
+        if (Boolean.getBoolean("documentGeneration.updateContract")) {
+            Files.writeString(Path.of("contracts/openapi.json"), spec);
+        }
     }
 }

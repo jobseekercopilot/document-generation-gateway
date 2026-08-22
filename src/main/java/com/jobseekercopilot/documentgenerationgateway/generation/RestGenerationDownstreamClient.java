@@ -1,0 +1,632 @@
+package com.jobseekercopilot.documentgenerationgateway.generation;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobseekercopilot.documentgenerationgateway.security.CurrentAccessTokenSupplier;
+import com.jobseekercopilot.documentgenerationgateway.security.DownstreamServiceCredentials;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
+import com.jobseekercopilot.generated.userprofileservice.api.EvidenceSnapshotsApi;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceCategory;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotPurpose;
+import com.jobseekercopilot.generated.userprofileservice.model.EvidenceSnapshotRequest;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+
+@Component
+public class RestGenerationDownstreamClient
+        implements GenerationDownstreamClient {
+    private static final String SERVICE_TOKEN = "X-Service-Token";
+    private static final String DOCUMENT_OWNER = "X-Document-Owner";
+    private static final String PAYMENT_OWNER = "X-Payment-Owner";
+    private static final String APPLICATION_OWNER = "X-Application-Owner";
+
+    private final RestTemplate restTemplate;
+    private final EvidenceSnapshotsApi evidenceSnapshotsApi;
+    private final CurrentAccessTokenSupplier accessTokenSupplier;
+    private final ObjectMapper objectMapper;
+    private final DownstreamServiceCredentials credentials;
+    private final String jobBaseUrl;
+    private final String userProfileBaseUrl;
+    private final String authenticationBaseUrl;
+    private final String cvBaseUrl;
+    private final String paymentBaseUrl;
+    private final String storeBaseUrl;
+    private final String exportBaseUrl;
+    private final String trackerBaseUrl;
+    private final String rejectedGenerationOperatorToken;
+
+    public RestGenerationDownstreamClient(
+            RestTemplate restTemplate,
+            EvidenceSnapshotsApi evidenceSnapshotsApi,
+            CurrentAccessTokenSupplier accessTokenSupplier,
+            ObjectMapper objectMapper,
+            DownstreamServiceCredentials credentials,
+            @Value("${services.job-service.base-url}") String jobBaseUrl,
+            @Value("${services.user-profile-service.base-url}")
+            String userProfileBaseUrl,
+            @Value("${services.authentication-service.base-url}")
+            String authenticationBaseUrl,
+            @Value("${services.cv-cover-letter-service.base-url}")
+            String cvBaseUrl,
+            @Value("${services.payment-service.base-url}") String paymentBaseUrl,
+            @Value("${services.document-store-service.base-url}")
+            String storeBaseUrl,
+            @Value("${services.document-export-service.base-url}")
+            String exportBaseUrl,
+            @Value("${services.application-tracker-service.base-url}")
+            String trackerBaseUrl,
+            @Value("${document-generation.retained-response-recovery.operator-token:}")
+            String rejectedGenerationOperatorToken) {
+        this.restTemplate = restTemplate;
+        this.evidenceSnapshotsApi = evidenceSnapshotsApi;
+        this.accessTokenSupplier = accessTokenSupplier;
+        this.objectMapper = objectMapper;
+        this.credentials = credentials;
+        this.jobBaseUrl = jobBaseUrl;
+        this.userProfileBaseUrl = userProfileBaseUrl;
+        this.authenticationBaseUrl = authenticationBaseUrl;
+        this.cvBaseUrl = cvBaseUrl;
+        this.paymentBaseUrl = paymentBaseUrl;
+        this.storeBaseUrl = storeBaseUrl;
+        this.exportBaseUrl = exportBaseUrl;
+        this.trackerBaseUrl = trackerBaseUrl;
+        this.rejectedGenerationOperatorToken =
+                rejectedGenerationOperatorToken;
+    }
+
+    @Override
+    public Map<String, Object> savedJob(
+            UUID savedJobId,
+            String authorization) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.AUTHORIZATION, authorization);
+        return body(restTemplate.exchange(
+                jobBaseUrl + "/api/jobs/saved/{savedJobId}",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                Map.class,
+                savedJobId));
+    }
+
+    @Override
+    public Map<String, Object> profile() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(accessTokenSupplier.get());
+        return body(restTemplate.exchange(
+                userProfileBaseUrl + "/api/profiles/me",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                Map.class));
+    }
+
+    @Override
+    public Map<String, Object> evidenceSnapshot(
+            DocumentEvidenceSelection selection) {
+        EvidenceSnapshotRequest request = new EvidenceSnapshotRequest()
+                .purpose(EvidenceSnapshotPurpose.valueOf(
+                        selection.purpose().name()))
+                .entryIds(selection.entryIds())
+                .sectionOrder(selection.sectionOrder().stream()
+                        .map(section -> EvidenceCategory.valueOf(section.name()))
+                        .toList());
+        Object snapshot = Objects.requireNonNull(
+                evidenceSnapshotsApi.createEvidenceSnapshot(request),
+                "User Profile Service returned no evidence snapshot.");
+        return objectMapper.convertValue(snapshot, LinkedHashMap.class);
+    }
+
+    @Override
+    public Map<String, Object> account(String authorization) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.authenticationServiceToken(),
+                null,
+                null);
+        headers.set(HttpHeaders.AUTHORIZATION, authorization);
+        return body(restTemplate.exchange(
+                authenticationBaseUrl + "/api/auth/me",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                Map.class));
+    }
+
+    @Override
+    public long estimate(String ownerId, Map<String, Object> request) {
+        Map<String, Object> response = post(
+                cvBaseUrl + "/api/v1/cv-cover-letter/drafts/estimate",
+                serviceHeaders(
+                        credentials.cvCoverLetterServiceToken(),
+                        DOCUMENT_OWNER,
+                        ownerId),
+                request);
+        Number estimated = requiredNumber(response, "estimatedTokens");
+        if (estimated.longValue() < 1) {
+            throw new IllegalStateException(
+                    "CV service returned an invalid token estimate.");
+        }
+        return estimated.longValue();
+    }
+
+    @Override
+    public long estimateSelected(
+            String ownerId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        Map<String, Object> response = post(
+                cvBaseUrl
+                        + "/api/v1/cv-cover-letter/drafts/"
+                        + output.name()
+                        + "/estimate",
+                serviceHeaders(
+                        credentials.cvCoverLetterServiceToken(),
+                        DOCUMENT_OWNER,
+                        ownerId),
+                request);
+        Number estimated = requiredNumber(response, "estimatedTokens");
+        if (estimated.longValue() < 1) {
+            throw new IllegalStateException(
+                    "CV service returned an invalid selected-output token estimate.");
+        }
+        return estimated.longValue();
+    }
+
+    @Override
+    public Map<String, Object> reserve(
+            String ownerId,
+            UUID operationId,
+            long estimatedTokens,
+            boolean regeneration) {
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 2,
+                        "regeneration", regeneration,
+                        "operationKey", operationId + ":reservation",
+                        "referenceType", "GENERATION_OPERATION",
+                        "referenceId", operationId.toString()));
+    }
+
+    @Override
+    public Map<String, Object> reserveSelected(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            long estimatedTokens,
+            boolean regeneration) {
+        String outputKey = output == DocumentPurpose.CV
+                ? "cv"
+                : "cover-letter";
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 1,
+                        "regeneration", regeneration,
+                        "operationKey",
+                        operationId + ":" + outputKey + ":reservation",
+                        "referenceType", "GENERATION_OUTPUT",
+                        "referenceId", operationId + ":" + output.name()));
+    }
+
+    @Override
+    public Map<String, Object> reserveStoredSelectedRecovery(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            boolean regeneration) {
+        String outputKey = output == DocumentPurpose.CV
+                ? "cv"
+                : "cover-letter";
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 1,
+                        "regeneration", regeneration,
+                        "operationKey",
+                        operationId + ":" + outputKey
+                                + ":stored-delivery-recovery",
+                        "referenceType", "GENERATION_OUTPUT",
+                        "referenceId", operationId + ":" + output.name()));
+    }
+
+    @Override
+    public Map<String, Object> reserveStoredLegacyRecovery(
+            String ownerId,
+            UUID operationId,
+            boolean regeneration) {
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 2,
+                        "regeneration", regeneration,
+                        "operationKey",
+                        operationId + ":stored-delivery-recovery",
+                        "referenceType", "GENERATION_OPERATION",
+                        "referenceId", operationId.toString()));
+    }
+
+    @Override
+    public Map<String, Object> reserveRetainedResponseRecovery(
+            String ownerId,
+            UUID operationId,
+            long actualTokens) {
+        return post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of(
+                        "documentCredits", 2,
+                        "regeneration", false,
+                        "operationKey", operationId
+                                + ":retained-response-recovery",
+                        "referenceType", "GENERATION_OPERATION_RECOVERY",
+                        "referenceId", operationId.toString()));
+    }
+
+    @Override
+    public Map<String, Object> generate(
+            String ownerId,
+            UUID operationId,
+            Map<String, Object> request) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.cvCoverLetterServiceToken(),
+                DOCUMENT_OWNER,
+                ownerId);
+        headers.set("X-Generation-Operation-Id", operationId.toString());
+        return post(
+                cvBaseUrl + "/api/v1/cv-cover-letter/drafts",
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> generateSelected(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.cvCoverLetterServiceToken(),
+                DOCUMENT_OWNER,
+                ownerId);
+        headers.set("X-Generation-Operation-Id", operationId.toString());
+        return post(
+                cvBaseUrl
+                        + "/api/v1/cv-cover-letter/drafts/"
+                        + output.name(),
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> replayRejectedGeneration(
+            String ownerId,
+            UUID operationId,
+            Map<String, Object> request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Operator-Token", rejectedGenerationOperatorToken);
+        headers.set(DOCUMENT_OWNER, ownerId);
+        return post(
+                cvBaseUrl
+                        + "/internal/v1/cv-cover-letter/rejected-generations/"
+                        + operationId
+                        + "/replay",
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> replayRejectedSelectedGeneration(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Operator-Token", rejectedGenerationOperatorToken);
+        headers.set(DOCUMENT_OWNER, ownerId);
+        return post(
+                cvBaseUrl
+                        + "/internal/v1/cv-cover-letter/rejected-generations/"
+                        + operationId
+                        + "/replay/"
+                        + output.name(),
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> deterministicSelectedFallback(
+            String ownerId,
+            UUID operationId,
+            DocumentPurpose output,
+            Map<String, Object> request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Operator-Token", rejectedGenerationOperatorToken);
+        headers.set(DOCUMENT_OWNER, ownerId);
+        return post(
+                cvBaseUrl
+                        + "/internal/v1/cv-cover-letter/rejected-generations/"
+                        + operationId
+                        + "/fallback/"
+                        + output.name(),
+                headers,
+                request);
+    }
+
+    @Override
+    public void commit(
+            String ownerId,
+            UUID reservationId,
+            long actualTokens,
+            List<DeliveredDocumentEvidence> deliveries) {
+        post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations/"
+                        + reservationId
+                        + "/commit",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of("deliveries", deliveries.stream()
+                        .map(delivery -> Map.of(
+                                "documentId",
+                                delivery.documentId().toString(),
+                                "documentType",
+                                delivery.documentType().name()))
+                        .toList()));
+    }
+
+    @Override
+    public void release(
+            String ownerId,
+            UUID reservationId,
+            String reason) {
+        post(
+                paymentBaseUrl
+                        + "/api/v2/payments/document-credit-reservations/"
+                        + reservationId
+                        + "/release",
+                serviceHeaders(
+                        credentials.paymentServiceToken(),
+                        PAYMENT_OWNER,
+                        ownerId),
+                Map.of("reason", reason));
+    }
+
+    @Override
+    public Map<String, Object> createDocument(
+            String ownerId,
+            String idempotencyKey,
+            Map<String, Object> request) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.documentStoreProducerToken(),
+                DOCUMENT_OWNER,
+                ownerId);
+        headers.set("Idempotency-Key", idempotencyKey);
+        return post(
+                storeBaseUrl + "/api/v1/documents",
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> approveDocument(
+            String ownerId,
+            UUID documentId) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.documentStoreProducerToken(),
+                DOCUMENT_OWNER,
+                ownerId);
+        return body(restTemplate.exchange(
+                storeBaseUrl
+                        + "/api/v1/documents/{documentId}/approve",
+                HttpMethod.PATCH,
+                new HttpEntity<>(headers),
+                Map.class,
+                documentId));
+    }
+
+    @Override
+    public Map<String, Object> exportDocument(
+            String ownerId,
+            UUID documentId,
+            String idempotencyKey,
+            Map<String, Object> professionalContact) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.documentExportServiceToken(),
+                DOCUMENT_OWNER,
+                ownerId);
+        headers.set("Idempotency-Key", idempotencyKey);
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("formats", List.of("DOCX", "PDF"));
+        if (professionalContact != null && !professionalContact.isEmpty()) {
+            request.put("professionalContact", professionalContact);
+        }
+        return post(
+                exportBaseUrl
+                        + "/api/v1/document-exports/documents/"
+                        + documentId,
+                headers,
+                request);
+    }
+
+    @Override
+    public Map<String, Object> createApplication(
+            String ownerId,
+            String idempotencyKey,
+            Map<String, Object> request) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        headers.set("Idempotency-Key", idempotencyKey);
+        return post(
+                trackerBaseUrl + "/api/v1/applications",
+                headers,
+                request);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> applications(String ownerId) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        Object body = restTemplate.exchange(
+                trackerBaseUrl + "/api/v1/applications/user/{userId}",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                List.class,
+                ownerId).getBody();
+        if (!(body instanceof List<?> applications)) {
+            throw new IllegalStateException(
+                    "Application Tracker returned no application list.");
+        }
+        return applications.stream()
+                .map(application -> objectMapper.convertValue(
+                        application,
+                        LinkedHashMap.class))
+                .map(application ->
+                        (Map<String, Object>) application)
+                .toList();
+    }
+
+    @Override
+    public Map<String, Object> updateApplicationDocumentSelections(
+            String ownerId,
+            UUID applicationId,
+            String idempotencyKey,
+            long expectedVersion,
+            UUID cvDocumentId,
+            UUID coverLetterDocumentId) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("Idempotency-Key", idempotencyKey);
+        Map<String, Object> cvSelection = documentSelection(cvDocumentId);
+        Map<String, Object> coverLetterSelection =
+                documentSelection(coverLetterDocumentId);
+        return body(restTemplate.exchange(
+                trackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/document-selections",
+                HttpMethod.PUT,
+                new HttpEntity<>(
+                        Map.of(
+                                "cvSelection", cvSelection,
+                                "coverLetterSelection", coverLetterSelection,
+                                "expectedVersion", expectedVersion),
+                        headers),
+                Map.class,
+                applicationId));
+    }
+
+    private Map<String, Object> documentSelection(UUID documentId) {
+        return documentId == null
+                ? Map.of("state", "OMITTED")
+                : Map.of("state", "SELECTED", "documentId", documentId);
+    }
+
+    @Override
+    public Map<String, Object> updateApplicationStatus(
+            String ownerId,
+            UUID applicationId,
+            String status,
+            long expectedVersion) {
+        HttpHeaders headers = serviceHeaders(
+                credentials.applicationTrackerProducerToken(),
+                APPLICATION_OWNER,
+                ownerId);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return body(restTemplate.exchange(
+                trackerBaseUrl
+                        + "/api/v1/applications/{applicationId}/status",
+                HttpMethod.PATCH,
+                new HttpEntity<>(
+                        Map.of(
+                                "status", status,
+                                "expectedVersion", expectedVersion),
+                        headers),
+                Map.class,
+                applicationId));
+    }
+
+    private Map<String, Object> post(
+            String url,
+            HttpHeaders headers,
+            Map<String, Object> request) {
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return body(restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                new HttpEntity<>(request, headers),
+                Map.class));
+    }
+
+    private HttpHeaders serviceHeaders(
+            String token,
+            String ownerHeader,
+            String ownerId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(SERVICE_TOKEN, token);
+        if (ownerHeader != null) {
+            headers.set(ownerHeader, ownerId);
+        }
+        return headers;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> body(
+            org.springframework.http.ResponseEntity<Map> response) {
+        if (response.getBody() == null) {
+            throw new IllegalStateException(
+                    "A downstream service returned no response body.");
+        }
+        return new LinkedHashMap<>((Map<String, Object>) response.getBody());
+    }
+
+    private Number requiredNumber(
+            Map<String, Object> response,
+            String field) {
+        Object value = response.get(field);
+        if (value instanceof Number number) {
+            return number;
+        }
+        throw new IllegalStateException(
+                "A downstream service omitted " + field + ".");
+    }
+}

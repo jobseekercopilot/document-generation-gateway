@@ -1,0 +1,4595 @@
+package com.jobseekercopilot.documentgenerationgateway.generation;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobseekercopilot.documentgenerationgateway.dto.ApproveGenerationRequest;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentEvidenceSelection;
+import com.jobseekercopilot.documentgenerationgateway.dto.DocumentPurpose;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOperationResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationOutputResultResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.GenerationRecoverySummaryResponse;
+import com.jobseekercopilot.documentgenerationgateway.dto.StartGenerationRequest;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationConflictException;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationDeadlineExceededException;
+import com.jobseekercopilot.documentgenerationgateway.exception.GenerationNotFoundException;
+import com.jobseekercopilot.documentgenerationgateway.logging.CorrelationIds;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.RestClientException;
+
+@Service
+public class DurableGenerationService {
+    private static final Logger log =
+            LoggerFactory.getLogger(DurableGenerationService.class);
+    private static final int MAX_LEDGER_CLAIMS = 200;
+    private static final int MAX_CLAIM_REFERENCES = 30;
+    private static final int MAX_CLAIM_REVIEW_TEXT = 500;
+    private static final Pattern IDEMPOTENCY_KEY =
+            Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}");
+    private static final Pattern CONTENT_VERSION =
+            Pattern.compile("sha256:[a-f0-9]{64}");
+    private static final Pattern CONTENT_SHA256 =
+            Pattern.compile("[a-f0-9]{64}");
+    private static final Pattern SKILL_MATCH_SEPARATOR =
+            Pattern.compile("[^\\p{L}\\p{N}#+.]+");
+    private static final Pattern SKILL_MATCH_TERMINAL_PERIOD =
+            Pattern.compile("(?<=[\\p{L}\\p{N}])\\.(?=\\s|$)");
+    private static final Pattern SKILL_MATCH_WHITESPACE =
+            Pattern.compile("\\s+");
+    private static final int MAX_APPLICATION_URL_LENGTH = 2_048;
+    private static final String NHS_JOBS_PROVIDER = "NHS_JOBS";
+    private static final String NHS_JOBS_ATTRIBUTION_LABEL =
+            "Vacancy source: NHS Jobs";
+    private static final String NHS_JOBS_ATTRIBUTION_URL =
+            "https://www.jobs.nhs.uk/";
+    private static final String NHS_JOBS_LICENCE_URL =
+            "https://www.nationalarchives.gov.uk/doc/"
+                    + "open-government-licence/version/3/";
+    private static final String NHS_JOBS_DISCLAIMER =
+            "NHS Jobs does not endorse Job Seeker Copilot.";
+    private static final String RETAINED_RESPONSE_RECOVERY =
+            "retainedResponseRecovery";
+    private static final String RETAINED_RESPONSE_AUTO_APPROVAL =
+            "retainedResponseAutoApproval";
+    private static final Set<String> SAFE_GENERATION_SOURCES = Set.of(
+            "LLM", "DETERMINISTIC_FALLBACK", "NOT_AVAILABLE");
+    private static final Set<String> SAFE_RECONCILIATION_STATUSES = Set.of(
+            "NOT_REQUIRED", "PENDING", "RECOVERED", "EXHAUSTED");
+    private static final Set<String> SAFE_RECONCILIATION_SOURCES = Set.of(
+            "RETAINED_RESPONSE", "DETERMINISTIC_FALLBACK");
+    private static final Set<String> SAFE_BILLING_OUTCOMES = Set.of(
+            "NOT_RESERVED",
+            "RESERVED",
+            "RESERVED_PENDING_RECONCILIATION",
+            "COMMITTED",
+            "RELEASED_NO_CHARGE",
+            "RELEASED_AFTER_FAILURE",
+            "RELEASED_AFTER_RECONCILIATION");
+
+    private final GenerationOperationRepository repository;
+    private final GenerationDownstreamClient downstream;
+    private final ObjectMapper objectMapper;
+    private final OperationDeadlineGuard deadlineGuard;
+    private final GenerationWorkScheduler workScheduler;
+    private final Duration deadline;
+    private final Duration leaseDuration;
+    private final boolean retainedResponseRecoveryEnabled;
+    private final Duration outcomeReconciliationInterval;
+    private final int maxOutcomeReconciliationAttempts;
+
+    @Autowired
+    public DurableGenerationService(
+            GenerationOperationRepository repository,
+            GenerationDownstreamClient downstream,
+            ObjectMapper objectMapper,
+            OperationDeadlineGuard deadlineGuard,
+            GenerationWorkScheduler workScheduler,
+            @Value("${document-generation.operation.deadline}") Duration deadline,
+            @Value("${document-generation.operation.lease}") Duration leaseDuration,
+            @Value("${document-generation.downstream.read-timeout}") Duration readTimeout,
+            @Value("${document-generation.retained-response-recovery.enabled:false}")
+            boolean retainedResponseRecoveryEnabled,
+            @Value("${document-generation.retained-response-recovery.reconciliation-interval:PT2S}")
+            Duration outcomeReconciliationInterval,
+            @Value("${document-generation.retained-response-recovery.max-reconciliation-attempts:30}")
+            int maxOutcomeReconciliationAttempts) {
+        this.repository = repository;
+        this.downstream = downstream;
+        this.objectMapper = objectMapper;
+        this.deadlineGuard = deadlineGuard;
+        this.workScheduler = workScheduler;
+        this.deadline = requirePositive(deadline, "operation deadline");
+        this.leaseDuration = requirePositive(leaseDuration, "operation lease");
+        Duration boundedReadTimeout =
+                requirePositive(readTimeout, "downstream read timeout");
+        if (this.leaseDuration.compareTo(boundedReadTimeout) <= 0) {
+            throw new IllegalStateException(
+                    "Document generation operation lease must be longer than "
+                            + "the downstream read timeout.");
+        }
+        this.retainedResponseRecoveryEnabled =
+                retainedResponseRecoveryEnabled;
+        this.outcomeReconciliationInterval = requirePositive(
+                outcomeReconciliationInterval,
+                "outcome reconciliation interval");
+        if (maxOutcomeReconciliationAttempts < 1
+                || maxOutcomeReconciliationAttempts > 60) {
+            throw new IllegalStateException(
+                    "Outcome reconciliation attempts must be between 1 and 60.");
+        }
+        this.maxOutcomeReconciliationAttempts =
+                maxOutcomeReconciliationAttempts;
+    }
+
+    public DurableGenerationService(
+            GenerationOperationRepository repository,
+            GenerationDownstreamClient downstream,
+            ObjectMapper objectMapper,
+            OperationDeadlineGuard deadlineGuard,
+            Duration deadline,
+            Duration leaseDuration,
+            Duration readTimeout) {
+        this(
+                repository,
+                downstream,
+                objectMapper,
+                deadlineGuard,
+                new GenerationWorkScheduler() {
+                    @Override
+                    public boolean submit(
+                            UUID operationId,
+                            String correlationId,
+                            Runnable work) {
+                        work.run();
+                        return true;
+                    }
+
+                    @Override
+                    public boolean submitAfter(
+                            UUID operationId,
+                            String correlationId,
+                            Duration delay,
+                            Runnable work) {
+                        return false;
+                    }
+                },
+                deadline,
+                leaseDuration,
+                readTimeout,
+                false,
+                Duration.ofSeconds(2),
+                30);
+    }
+
+    public GenerationOperationResponse start(
+            String ownerId,
+            String authorization,
+            UUID savedJobId,
+            String idempotencyKey,
+            StartGenerationRequest request) {
+        requireOwner(ownerId);
+        requireAuthorization(authorization);
+        requireIdempotencyKey(idempotencyKey);
+        validateSelectionRequest(request);
+        boolean selectiveOutputWorkflow = request.outputs() != null;
+        StartGenerationRequest normalizedRequest =
+                normalizeSelectionRequest(request);
+        Map<String, Object> persistedRequest = selectiveOutputWorkflow
+                ? objectMapper.convertValue(
+                        normalizedRequest, LinkedHashMap.class)
+                : legacySelectionRequest(request);
+        Map<String, Object> initialData = new LinkedHashMap<>();
+        initialData.put(
+                "evidenceSelectionRequest",
+                persistedRequest);
+        if (selectiveOutputWorkflow) {
+            initialData.put("selectiveOutputWorkflow", true);
+            initialData.put(
+                    "requestedOutputs",
+                    normalizedRequest.outputs().stream()
+                            .map(Enum::name)
+                            .toList());
+            initialData.put("outputResults", initialOutputResults(
+                    ownerId,
+                    savedJobId,
+                    normalizedRequest.outputs()));
+        } else {
+            initialData.put(
+                    "regeneration",
+                    requestedOutputs(request).stream().anyMatch(
+                            output -> repository.hasStoredDocument(
+                                    ownerId, savedJobId, output)));
+        }
+        initialData.put("correlationId", CorrelationIds.currentOrNew());
+        String requestFingerprint = sha256("generation-v2:"
+                + savedJobId
+                + ":"
+                + sha256Json(persistedRequest));
+        GenerationOperation operation = repository
+                .findByOwnerAndIdempotencyKey(ownerId, idempotencyKey)
+                .map(replay -> validateIdempotentReplay(
+                        replay,
+                        savedJobId,
+                        requestFingerprint))
+                .orElseGet(() -> repository.findLatestReplaySafe(
+                                ownerId,
+                                savedJobId,
+                                requestFingerprint)
+                        .or(() -> repository.findLatestDeadlineRecovery(
+                                ownerId,
+                                savedJobId,
+                                requestFingerprint))
+                        .or(() -> repository
+                                .findLatestRecoverableApplicationConflict(
+                                        ownerId,
+                                        savedJobId,
+                                        requestFingerprint)
+                                .filter(this::recoverableApplicationConflict))
+                        .orElseGet(() -> repository.createOrReplay(
+                                ownerId,
+                                idempotencyKey,
+                                savedJobId,
+                                requestFingerprint,
+                                initialData,
+                                deadline)));
+        operation = repository.prepareRetryableReplay(
+                operation, deadline);
+        boolean recovery = recoverableApplicationConflict(operation);
+        if ((operation.state().terminal() && !recovery)
+                || operation.state() == GenerationOperationState.AWAITING_APPROVAL) {
+            return response(operation);
+        }
+        GenerationOperationResponse accepted = response(operation);
+        submitStart(operation, ownerId, authorization);
+        return accepted;
+    }
+
+    private Map<String, Object> legacySelectionRequest(
+            StartGenerationRequest request) {
+        Map<String, Object> legacy = new LinkedHashMap<>();
+        legacy.put("documents", request.documents());
+        return legacy;
+    }
+
+    public GenerationOperationResponse get(String ownerId, UUID operationId) {
+        requireOwner(ownerId);
+        GenerationOperation operation = required(operationId, ownerId);
+        if (operation.state()
+                        == GenerationOperationState.AWAITING_APPROVAL
+                && operation.data().containsKey("approvalRequest")) {
+            submitApproval(operation, ownerId);
+        }
+        if (outcomeReconciliationPending(operation)) {
+            scheduleOutcomeReconciliation(operation, ownerId);
+        }
+        return response(operation);
+    }
+
+    public GenerationOperationResponse approve(
+            String ownerId,
+            UUID operationId,
+            ApproveGenerationRequest request) {
+        requireOwner(ownerId);
+        GenerationOperation operation = required(operationId, ownerId);
+        verifyApprovalRequest(operation, request);
+        if (operation.state().terminal()) {
+            return response(operation);
+        }
+        if (operation.state() == GenerationOperationState.AWAITING_APPROVAL) {
+            Map<String, Object> data = data(operation);
+            Map<String, Object> approvalRequest =
+                    new LinkedHashMap<>();
+            if (request.cvDocumentId() != null) {
+                approvalRequest.put(
+                        "cvDocumentId",
+                        request.cvDocumentId().toString());
+            }
+            if (request.coverLetterDocumentId() != null) {
+                approvalRequest.put(
+                        "coverLetterDocumentId",
+                        request.coverLetterDocumentId().toString());
+            }
+            data.put("approvalRequest", approvalRequest);
+            operation = repository.acceptApproval(operation, data);
+            verifyApprovalRequest(operation, request);
+        }
+        GenerationOperationResponse accepted = response(operation);
+        submitApproval(operation, ownerId);
+        return accepted;
+    }
+
+    public GenerationOperationResponse recoverRejectedGeneration(
+            String ownerId,
+            UUID operationId) {
+        requireOwner(ownerId);
+        GenerationOperation operation = required(operationId, ownerId);
+        if (operation.data().containsKey(RETAINED_RESPONSE_RECOVERY)) {
+            operation = repository.prepareRetryableReplay(
+                    operation, deadline);
+            if (!operation.state().terminal()
+                    || recoverableApplicationConflict(operation)) {
+                submitStart(operation, ownerId, null);
+            }
+            return response(operation);
+        }
+        requireRejectedGeneration(operation);
+
+        UUID leaseToken = UUID.randomUUID();
+        if (!repository.tryAcquire(
+                operation.id(), ownerId, leaseToken, leaseDuration)) {
+            throw new GenerationConflictException(
+                    "Generation operation is currently being processed.");
+        }
+
+        UUID recoveryReservationId = null;
+        boolean recoveryPersisted = false;
+        try {
+            operation = required(operation.id(), ownerId);
+            if (operation.data().containsKey(RETAINED_RESPONSE_RECOVERY)) {
+                return response(operation);
+            }
+            requireRejectedGeneration(operation);
+            Map<String, Object> replay =
+                    downstream.replayRejectedGeneration(
+                            ownerId,
+                            operation.id(),
+                            map(operation.data().get("generationRequest"),
+                                    "generation request"));
+            if (!"ACCEPTED".equals(requiredText(replay, "outcome"))
+                    || number(replay, "providerInvocationCount")
+                                    .longValue()
+                            != 0
+                    || replay.get("diagnostic") != null) {
+                throw new GenerationConflictException(
+                        "The retained response did not pass zero-provider recovery validation.");
+            }
+            Map<String, Object> generated =
+                    map(replay.get("draft"), "replayed generation draft");
+            if (!operation.id().equals(
+                    requiredUuid(generated, "operationId"))) {
+                throw new GenerationConflictException(
+                        "The retained response belongs to a different operation.");
+            }
+            long actualTokens = number(
+                    map(generated.get("usage"), "generation usage"),
+                    "totalTokens").longValue();
+            if (actualTokens < 1) {
+                throw new GenerationConflictException(
+                        "The retained response has invalid token usage.");
+            }
+
+            Map<String, Object> reservation =
+                    downstream.reserveRetainedResponseRecovery(
+                            ownerId, operation.id(), actualTokens);
+            recoveryReservationId =
+                    requiredUuid(reservation, "reservationId");
+            Map<String, Object> data = data(operation);
+            data.put("reservationId", recoveryReservationId.toString());
+            data.put("reservationEvidence", reservation);
+            data.put("generation", generated);
+            data.put("generationCompletedAt", Instant.now().toString());
+            data.put("actualTokens", actualTokens);
+            data.put(RETAINED_RESPONSE_RECOVERY, Map.of(
+                    "recoveredAt", Instant.now().toString(),
+                    "providerInvocationCount", 0,
+                    "source", "CV_REJECTED_GENERATION_STORE"));
+            data.put(RETAINED_RESPONSE_AUTO_APPROVAL, true);
+            operation = repository.recoverRejectedGeneration(
+                    operation,
+                    leaseToken,
+                    data,
+                    deadline);
+            recoveryPersisted = true;
+        } catch (RuntimeException failure) {
+            if (recoveryReservationId != null && !recoveryPersisted) {
+                try {
+                    downstream.release(
+                            ownerId,
+                            recoveryReservationId,
+                            "Retained response recovery did not start");
+                } catch (RuntimeException releaseFailure) {
+                    log.error(
+                            "retained response recovery reservation release failed operationId={} reservationId={}",
+                            operationId,
+                            recoveryReservationId);
+                }
+            }
+            throw failure;
+        } finally {
+            repository.release(operationId, ownerId, leaseToken);
+        }
+
+        GenerationOperationResponse accepted = response(operation);
+        submitStart(operation, ownerId, null);
+        return accepted;
+    }
+
+    private static void requireRejectedGeneration(
+            GenerationOperation operation) {
+        if (operation.state() != GenerationOperationState.FAILED
+                || !"GENERATION_REJECTED".equals(
+                        operation.failureCode())
+                || !(operation.data().get("generationRequest")
+                        instanceof Map<?, ?>)) {
+            throw new GenerationConflictException(
+                    "Only a rejected generation with a retained request can be recovered.");
+        }
+    }
+
+    private GenerationOperation validateIdempotentReplay(
+            GenerationOperation replay,
+            UUID savedJobId,
+            String requestFingerprint) {
+        if (!replay.savedJobId().equals(savedJobId)
+                || !replay.requestFingerprint().equals(requestFingerprint)) {
+            throw new GenerationConflictException(
+                    "Idempotency-Key was already used for a different "
+                            + "generation request.");
+        }
+        return replay;
+    }
+
+    private void submitStart(
+            GenerationOperation operation,
+            String ownerId,
+            String authorization) {
+        boolean submitted = workScheduler.submit(
+                operation.id(),
+                correlationId(operation),
+                () -> resumeStart(
+                        operation.id(),
+                        ownerId,
+                        authorization));
+        if (!submitted) {
+            log.warn(
+                    "generation start remains replayable operationId={} "
+                            + "correlationId={} reason=EXECUTOR_CAPACITY",
+                    operation.id(),
+                    correlationId(operation));
+        }
+    }
+
+    private void submitApproval(
+            GenerationOperation operation,
+            String ownerId) {
+        boolean submitted = workScheduler.submit(
+                operation.id(),
+                correlationId(operation),
+                () -> resumeApproval(operation.id(), ownerId));
+        if (!submitted) {
+            log.warn(
+                    "generation approval remains replayable operationId={} "
+                            + "correlationId={} reason=EXECUTOR_CAPACITY",
+                    operation.id(),
+                    correlationId(operation));
+        }
+    }
+
+    private void resumeStart(
+            UUID operationId,
+            String ownerId,
+            String authorization) {
+        GenerationOperation operation = required(operationId, ownerId);
+        boolean recovery = recoverableApplicationConflict(operation);
+        if ((operation.state().terminal() && !recovery)
+                || (operation.state()
+                                == GenerationOperationState.AWAITING_APPROVAL
+                        && !operation.data().containsKey(
+                                "approvalRequest"))) {
+            return;
+        }
+        UUID leaseToken = UUID.randomUUID();
+        if (!repository.tryAcquire(
+                operation.id(), ownerId, leaseToken, leaseDuration)) {
+            deferStart(
+                    required(operation.id(), ownerId),
+                    ownerId,
+                    authorization);
+            return;
+        }
+        try {
+            operation = required(operation.id(), ownerId);
+            if (recoverableApplicationConflict(operation)) {
+                operation = checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.EXPORTED,
+                        operation.data(),
+                        null,
+                        null);
+                advanceApproval(operation, leaseToken);
+            } else if (approvalInProgress(operation)) {
+                advanceApproval(operation, leaseToken);
+            } else {
+                advanceToApproval(
+                        operation,
+                        leaseToken,
+                        authorization);
+            }
+        } finally {
+            repository.release(operationId, ownerId, leaseToken);
+        }
+    }
+
+    private void resumeApproval(
+            UUID operationId,
+            String ownerId) {
+        GenerationOperation operation = required(operationId, ownerId);
+        if (operation.state().terminal()) {
+            return;
+        }
+        UUID leaseToken = UUID.randomUUID();
+        if (!repository.tryAcquire(
+                operation.id(), ownerId, leaseToken, leaseDuration)) {
+            deferApproval(required(operation.id(), ownerId), ownerId);
+            return;
+        }
+        try {
+            operation = required(operation.id(), ownerId);
+            if (operation.state()
+                            == GenerationOperationState.AWAITING_APPROVAL
+                    && !operation.data().containsKey("approvalRequest")) {
+                return;
+            }
+            advanceApproval(operation, leaseToken);
+        } finally {
+            repository.release(operationId, ownerId, leaseToken);
+        }
+    }
+
+    private void deferStart(
+            GenerationOperation operation,
+            String ownerId,
+            String authorization) {
+        Duration delay = leaseRetryDelay(operation);
+        if (delay == null) {
+            return;
+        }
+        workScheduler.submitAfter(
+                operation.id(),
+                correlationId(operation),
+                delay,
+                () -> resumeStart(
+                        operation.id(),
+                        ownerId,
+                        authorization));
+    }
+
+    private void deferApproval(
+            GenerationOperation operation,
+            String ownerId) {
+        Duration delay = leaseRetryDelay(operation);
+        if (delay == null) {
+            return;
+        }
+        workScheduler.submitAfter(
+                operation.id(),
+                correlationId(operation),
+                delay,
+                () -> resumeApproval(operation.id(), ownerId));
+    }
+
+    private Duration leaseRetryDelay(
+            GenerationOperation operation) {
+        if (operation.leaseUntil() == null) {
+            return null;
+        }
+        Duration remaining = Duration.between(
+                Instant.now(), operation.leaseUntil());
+        return remaining.isNegative() || remaining.isZero()
+                ? null
+                : remaining.plusMillis(10);
+    }
+
+    public GenerationOperationResponse cancel(
+            String ownerId,
+            UUID operationId) {
+        requireOwner(ownerId);
+        GenerationOperation operation = required(operationId, ownerId);
+        if (operation.state() == GenerationOperationState.CANCELLED) {
+            return response(operation);
+        }
+        requireCancellable(operation);
+        UUID leaseToken = UUID.randomUUID();
+        if (!repository.tryAcquire(
+                operation.id(), ownerId, leaseToken, leaseDuration)) {
+            throw new GenerationConflictException(
+                    "Generation operation is currently being processed.");
+        }
+        try {
+            operation = required(operation.id(), ownerId);
+            if (operation.state() == GenerationOperationState.CANCELLED) {
+                return response(operation);
+            }
+            // The lease closes the check/use race with generation, storage and
+            // credit-commit checkpoints. Re-read before releasing any hold.
+            requireCancellable(operation);
+            UUID reservationId = selectiveWorkflow(operation)
+                    && currentOutput(operation) != null
+                    ? uuid(
+                            outputResult(
+                                    operation.data(),
+                                    requiredCurrentOutput(operation)),
+                            "reservationId")
+                    : uuid(operation.data(), "reservationId");
+            if (reservationId != null
+                    && (beforeGeneration(operation.state())
+                            || (selectiveWorkflow(operation)
+                                    && beforeSelectedProvider(
+                                            operation.state())))) {
+                downstream.release(
+                        ownerId,
+                        reservationId,
+                        "Generation cancelled before provider invocation");
+            }
+            operation = checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.CANCELLED,
+                    operation.data(),
+                    null,
+                    null);
+            return response(operation);
+        } finally {
+            repository.release(
+                    operation.id(), ownerId, leaseToken);
+        }
+    }
+
+    private GenerationOperation advanceToApproval(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String authorization) {
+        if (selectiveWorkflow(operation)) {
+            return advanceSelectiveToApproval(
+                    operation, leaseToken, authorization);
+        }
+        return advanceLegacyToApproval(
+                operation, leaseToken, authorization);
+    }
+
+    private GenerationOperation advanceSelectiveToApproval(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String authorization) {
+        try {
+            while (true) {
+                switch (operation.state()) {
+                    case CREATED -> operation = resolveSelectiveContext(
+                            operation, leaseToken, authorization);
+                    case SNAPSHOTS_RESOLVED -> operation =
+                            ensureSavedApplication(operation, leaseToken);
+                    case APPLICATION_SAVED -> {
+                        if (outcomeReconciliationPending(operation)) {
+                            scheduleOutcomeReconciliation(
+                                    operation, operation.ownerId());
+                            return operation;
+                        }
+                        DocumentPurpose next = nextOutput(operation);
+                        if (next == null) {
+                            operation = finishSelectiveGeneration(
+                                    operation, leaseToken);
+                            if (operation.state()
+                                    == GenerationOperationState.DRAFTS_STORED) {
+                                operation = awaitSelectiveApproval(
+                                        operation, leaseToken);
+                            }
+                            return operation;
+                        }
+                        operation = beginSelectedOutput(
+                                operation, leaseToken, next);
+                        operation = prepareSelectedOutput(
+                                operation, leaseToken, next);
+                    }
+                    case OUTPUT_READY -> operation = estimateSelectedOutput(
+                            operation, leaseToken);
+                    case ESTIMATED -> operation = reserveSelectedOutput(
+                            operation, leaseToken);
+                    case CREDIT_RESERVED -> {
+                        if (Instant.now().isAfter(operation.deadlineAt())) {
+                            operation = failCurrentOutputBeforeProvider(
+                                    operation,
+                                    leaseToken,
+                                    "OPERATION_DEADLINE_EXCEEDED",
+                                    "The generation deadline expired before model invocation.");
+                            continue;
+                        }
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.GENERATION_IN_PROGRESS,
+                                operation.data(),
+                                null,
+                                null);
+                        operation = invokeSelectedGeneration(
+                                operation, leaseToken);
+                        if (outcomeReconciliationPending(operation)) {
+                            scheduleOutcomeReconciliation(
+                                    operation, operation.ownerId());
+                            return operation;
+                        }
+                    }
+                    case GENERATION_IN_PROGRESS -> operation =
+                            markCurrentOutputUnknown(
+                                    operation,
+                                    leaseToken,
+                                    "A previous provider invocation was interrupted; automatic retry is disabled to prevent duplicate cost.");
+                    case DRAFT_GENERATED -> operation =
+                            storeSelectedDraft(operation, leaseToken);
+                    case DRAFTS_STORED_PENDING_CREDIT -> {
+                        operation = commitSelectedCredit(
+                                operation, leaseToken);
+                        if (operation.failureCode() != null
+                                || operation.state()
+                                        == GenerationOperationState
+                                                .RECOVERY_REQUIRED) {
+                            return operation;
+                        }
+                    }
+                    // Compatibility for operations checkpointed by a previous
+                    // release after the credit was already committed.
+                    case CREDIT_COMMITTED -> operation =
+                            storeSelectedDraft(operation, leaseToken);
+                    case DRAFTS_STORED -> {
+                        return awaitSelectiveApproval(
+                                operation, leaseToken);
+                    }
+                    default -> {
+                        return operation;
+                    }
+                }
+            }
+        } catch (GenerationDeadlineExceededException exception) {
+            if (operation.state()
+                    == GenerationOperationState.GENERATION_IN_PROGRESS) {
+                return markCurrentOutputUnknown(
+                        operation,
+                        leaseToken,
+                        "The provider call exceeded the operation deadline; automatic retry is disabled.");
+            }
+            if (currentOutput(operation) != null
+                    && beforeSelectedProvider(operation.state())) {
+                if (operation.state() == GenerationOperationState.ESTIMATED
+                        && exception.downstreamCallStarted()) {
+                    return checkpoint(
+                            operation,
+                            leaseToken,
+                            GenerationOperationState.RECOVERY_REQUIRED,
+                            operation.data(),
+                            "CREDIT_RESERVATION_RECOVERY_REQUIRED",
+                            "The selected-output reservation outcome is ambiguous and must be recovered by its stable operation key.");
+                }
+                GenerationOperation failed = failCurrentOutputBeforeProvider(
+                        operation,
+                        leaseToken,
+                        "OPERATION_DEADLINE_EXCEEDED",
+                        "The generation deadline expired before this selected output reached the model.");
+                return failed.state() == GenerationOperationState.APPLICATION_SAVED
+                        ? advanceSelectiveToApproval(
+                                failed, leaseToken, authorization)
+                        : failed;
+            }
+            return deadlineFailure(operation, leaseToken, exception);
+        } catch (GenerationSourceException exception) {
+            if (!exception.retryable()
+                    && currentOutput(operation) != null
+                    && beforeSelectedProvider(operation.state())) {
+                GenerationOperation failed = failCurrentOutputBeforeProvider(
+                        operation,
+                        leaseToken,
+                        exception.code(),
+                        exception.getMessage());
+                return failed.state() == GenerationOperationState.APPLICATION_SAVED
+                        ? advanceSelectiveToApproval(
+                                failed, leaseToken, authorization)
+                        : failed;
+            }
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    exception.retryable()
+                            ? operation.state()
+                            : GenerationOperationState.FAILED,
+                    operation.data(),
+                    exception.code(),
+                    exception.getMessage());
+        } catch (HttpStatusCodeException exception) {
+            if (exception.getStatusCode().is4xxClientError()
+                    && currentOutput(operation) != null
+                    && beforeSelectedProvider(operation.state())) {
+                GenerationOperation failed = failCurrentOutputBeforeProvider(
+                        operation,
+                        leaseToken,
+                        "DOWNSTREAM_REQUEST_REJECTED",
+                        "A required service rejected this selected output before provider invocation.");
+                return failed.state() == GenerationOperationState.APPLICATION_SAVED
+                        ? advanceSelectiveToApproval(
+                                failed, leaseToken, authorization)
+                        : failed;
+            }
+            return retryableFailure(operation, leaseToken, exception);
+        } catch (RestClientException exception) {
+            return retryableFailure(operation, leaseToken, exception);
+        } catch (RuntimeException exception) {
+            if (currentOutput(operation) != null
+                    && beforeSelectedProvider(operation.state())) {
+                GenerationOperation failed = failCurrentOutputBeforeProvider(
+                        operation,
+                        leaseToken,
+                        "INVALID_DOWNSTREAM_RESPONSE",
+                        "A required service returned invalid data for this selected output.");
+                return failed.state() == GenerationOperationState.APPLICATION_SAVED
+                        ? advanceSelectiveToApproval(
+                                failed, leaseToken, authorization)
+                        : failed;
+            }
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.FAILED,
+                    operation.data(),
+                    "INVALID_DOWNSTREAM_RESPONSE",
+                    "A required service returned an invalid selective-generation response.");
+        }
+    }
+
+    private GenerationOperation beginSelectedOutput(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output) {
+        Map<String, Object> data = data(operation);
+        data.put("currentOutput", output.name());
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.APPLICATION_SAVED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation resolveSelectiveContext(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String authorization) {
+        Map<String, Object> savedJob = bounded(
+                operation,
+                () -> downstream.savedJob(
+                        operation.savedJobId(), authorization));
+        validateSavedJob(operation, savedJob);
+        Map<String, Object> rawJob =
+                map(savedJob.get("job"), "saved job");
+        Map<String, Object> rawProfile =
+                bounded(operation, downstream::profile);
+        Map<String, Object> account;
+        try {
+            account = bounded(
+                    operation,
+                    () -> downstream.account(authorization));
+        } catch (RestClientException unavailable) {
+            account = Map.of();
+        }
+        Instant capturedAt = Instant.now();
+        Map<String, Object> jobSnapshot =
+                jobSnapshot(operation, savedJob, rawJob, capturedAt);
+        Map<String, Object> profileSnapshot = profileSnapshot(
+                operation,
+                rawProfile,
+                account,
+                jobSnapshot,
+                capturedAt);
+        Map<String, Object> data = data(operation);
+        data.put("savedJob", savedJob);
+        data.put("rawProfile", rawProfile);
+        data.put("jobSnapshot", jobSnapshot);
+        data.put("profileSnapshot", profileSnapshot);
+        data.put("jobSnapshotSha256", sha256Json(jobSnapshot));
+        data.put("profileSnapshotSha256", sha256Json(profileSnapshot));
+        data.put("canonicalJobId", firstText(
+                savedJob.get("canonicalJobId"),
+                rawJob.get("canonicalJobId"),
+                rawJob.get("id")));
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.SNAPSHOTS_RESOLVED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation ensureSavedApplication(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        Map<String, Object> request = savedApplicationRequest(operation);
+        Map<String, Object> application;
+        try {
+            application = bounded(
+                    operation,
+                    () -> downstream.createApplication(
+                            operation.ownerId(),
+                            operation.id() + ":application",
+                            request));
+        } catch (HttpStatusCodeException conflict) {
+            if (conflict.getStatusCode() != HttpStatus.CONFLICT) {
+                throw conflict;
+            }
+            String canonicalJobId =
+                    requiredText(request, "canonicalJobId");
+            application = bounded(
+                    operation,
+                    () -> downstream.applications(operation.ownerId()))
+                    .stream()
+                    .filter(candidate -> canonicalJobId.equals(firstText(
+                            candidate.get("canonicalJobId"),
+                            candidate.get("jobId"))))
+                    .findFirst()
+                    .orElseThrow(() -> conflict);
+        }
+        String status = requiredText(application, "status");
+        if (!"SAVED".equals(status)
+                && !"DOCUMENTS_GENERATED".equals(status)) {
+            throw new GenerationConflictException(
+                    "The existing application can no longer accept generated documents.");
+        }
+        Map<String, Object> data = data(operation);
+        data.put("applicationId", requiredUuid(application, "id").toString());
+        data.put("applicationEvidence", application);
+        putUuidIfPresent(data, "existingCvDocumentId",
+                uuid(application, "cvDocumentId"));
+        putUuidIfPresent(data, "existingCoverLetterDocumentId",
+                uuid(application, "coverLetterDocumentId"));
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.APPLICATION_SAVED,
+                data,
+                null,
+                null);
+    }
+
+    private Map<String, Object> savedApplicationRequest(
+            GenerationOperation operation) {
+        Map<String, Object> savedJob =
+                map(operation.data().get("savedJob"), "saved job");
+        Map<String, Object> job =
+                map(savedJob.get("job"), "saved job");
+        String canonicalJobId = firstText(
+                savedJob.get("canonicalJobId"),
+                job.get("canonicalJobId"),
+                job.get("id"));
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("userId", operation.ownerId());
+        request.put("jobId", firstText(job.get("id"), canonicalJobId));
+        request.put("canonicalJobId", canonicalJobId);
+        String provider = firstText(
+                job.get("primarySource"),
+                job.get("provider"),
+                savedJob.get("provider"),
+                "JOB_SERVICE");
+        request.put("provider", provider);
+        String externalJobId = firstText(
+                job.get("externalJobId"), job.get("id"), canonicalJobId);
+        request.put("externalJobId", externalJobId);
+        request.put("jobTitle", requiredJobText(job, "title", "jobTitle"));
+        request.put("companyName",
+                requiredJobText(job, "company", "companyName"));
+        putIfText(request, "location", job.get("location"));
+        addApplicationSourceMetadata(
+                request, job, provider, externalJobId);
+        request.put("provenance",
+                "MANUAL".equalsIgnoreCase(provider)
+                        ? "MANUAL"
+                        : "EXTERNAL");
+        request.put("initialStatus", "SAVED");
+        return request;
+    }
+
+    private void addApplicationSourceMetadata(
+            Map<String, Object> request,
+            Map<String, Object> job,
+            String provider,
+            String externalJobId) {
+        Map<String, Object> source = matchingJobSource(
+                job, provider, externalJobId);
+        String listingUrl = firstSafeApplicationUrl(
+                source.get("listingUrl"),
+                job.get("sourceUrl"),
+                job.get("url"));
+        String applyUrl = firstSafeApplicationUrl(
+                source.get("applyUrl"), job.get("applyUrl"));
+        putIfText(request, "listingUrl", listingUrl);
+        putIfText(request, "applyUrl", applyUrl);
+
+        if (NHS_JOBS_PROVIDER.equalsIgnoreCase(provider)) {
+            request.put("attributionLabel", NHS_JOBS_ATTRIBUTION_LABEL);
+            request.put("attributionSourceUrl", NHS_JOBS_ATTRIBUTION_URL);
+            request.put("licenceUrl", NHS_JOBS_LICENCE_URL);
+            request.put("disclaimer", NHS_JOBS_DISCLAIMER);
+            return;
+        }
+
+        String publisher = text(source.get("publisher"));
+        if (publisher != null) {
+            putBounded(
+                    request,
+                    "attributionLabel",
+                    "Vacancy source: " + publisher,
+                    255);
+        }
+    }
+
+    private Map<String, Object> matchingJobSource(
+            Map<String, Object> job,
+            String provider,
+            String externalJobId) {
+        for (Object value : list(job.get("sources"))) {
+            Map<String, Object> source = optionalMap(value);
+            String sourceExternalJobId = text(source.get("externalJobId"));
+            if (sourceProviderMatches(source, provider)
+                    && Objects.equals(sourceExternalJobId, externalJobId)) {
+                return source;
+            }
+        }
+        return Map.of();
+    }
+
+    private boolean sourceProviderMatches(
+            Map<String, Object> source,
+            String provider) {
+        String sourceProvider = text(source.get("provider"));
+        String integrationProvider = text(
+                source.get("integrationProvider"));
+        return (sourceProvider != null
+                        && sourceProvider.equalsIgnoreCase(provider))
+                || (integrationProvider != null
+                        && integrationProvider.equalsIgnoreCase(provider));
+    }
+
+    private String firstSafeApplicationUrl(Object... values) {
+        for (Object value : values) {
+            String candidate = text(value);
+            if (validApplicationUrl(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private boolean validApplicationUrl(String value) {
+        if (value == null
+                || value.length() > MAX_APPLICATION_URL_LENGTH
+                || value.codePoints().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        try {
+            URI uri = new URI(value);
+            return ("http".equalsIgnoreCase(uri.getScheme())
+                            || "https".equalsIgnoreCase(uri.getScheme()))
+                    && uri.getHost() != null
+                    && !uri.getHost().isBlank()
+                    && uri.getRawUserInfo() == null;
+        } catch (URISyntaxException exception) {
+            return false;
+        }
+    }
+
+    private GenerationOperation prepareSelectedOutput(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output) {
+        StartGenerationRequest selections = selectionRequest(operation);
+        DocumentEvidenceSelection selected = selection(selections, output);
+        Map<String, Object> evidenceSnapshot = bounded(
+                operation,
+                () -> downstream.evidenceSnapshot(selected));
+        validateEvidenceSnapshot(selected, evidenceSnapshot);
+        validateProfileBinding(
+                map(operation.data().get("rawProfile"), "profile"),
+                evidenceSnapshot);
+        Map<String, Object> generationRequest = new LinkedHashMap<>();
+        generationRequest.put("inputSchemaVersion", "2.0");
+        generationRequest.put("profile", generationProfile(
+                map(operation.data().get("profileSnapshot"),
+                        "profile snapshot")));
+        generationRequest.put("job",
+                map(operation.data().get("jobSnapshot"),
+                        "job snapshot"));
+        generationRequest.put("evidenceSnapshot", evidenceSnapshot);
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "READY");
+        result.put("evidenceSnapshot", evidenceSnapshot);
+        result.put("generationRequest", generationRequest);
+        result.put("providerOperationId",
+                providerOperationId(operation.id(), output).toString());
+        saveOutputResult(data, output, result);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.OUTPUT_READY,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation estimateSelectedOutput(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        DocumentPurpose output = requiredCurrentOutput(operation);
+        Map<String, Object> selectedResult =
+                outputResult(operation.data(), output);
+        long estimatedTokens = bounded(
+                operation,
+                () -> downstream.estimateSelected(
+                        operation.ownerId(),
+                        output,
+                        map(selectedResult.get("generationRequest"),
+                                "selected generation request")));
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "ESTIMATED");
+        result.put("estimatedTokens", estimatedTokens);
+        saveOutputResult(data, output, result);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.ESTIMATED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation reserveSelectedOutput(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        DocumentPurpose output = requiredCurrentOutput(operation);
+        Map<String, Object> selectedResult =
+                outputResult(operation.data(), output);
+        Map<String, Object> reservation = bounded(
+                operation,
+                () -> downstream.reserveSelected(
+                        operation.ownerId(),
+                        operation.id(),
+                        output,
+                        number(selectedResult, "estimatedTokens").longValue(),
+                        booleanValue(selectedResult.get("regeneration"))));
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "CREDIT_RESERVED");
+        result.put("reservationId",
+                requiredUuid(reservation, "reservationId").toString());
+        result.put("reservationEvidence", reservation);
+        saveOutputResult(data, output, result);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.CREDIT_RESERVED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation invokeSelectedGeneration(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        DocumentPurpose output = requiredCurrentOutput(operation);
+        Map<String, Object> selectedResult =
+                outputResult(operation.data(), output);
+        try {
+            UUID providerOperationId =
+                    requiredUuid(selectedResult, "providerOperationId");
+            Map<String, Object> generated = bounded(
+                    operation,
+                    () -> downstream.generateSelected(
+                            operation.ownerId(),
+                            providerOperationId,
+                            output,
+                            map(selectedResult.get("generationRequest"),
+                                    "selected generation request")));
+            if (!providerOperationId.equals(
+                    requiredUuid(generated, "operationId"))
+                    || !output.name().equals(
+                            requiredText(generated, "outputType"))) {
+                throw new IllegalStateException(
+                        "CV Service returned a mismatched selected-output identity.");
+            }
+            long providerTokens = number(
+                    map(generated.get("usage"), "generation usage"),
+                    "totalTokens").longValue();
+            long billableTokens = generated.get("billableTokens") == null
+                    ? providerTokens
+                    : number(generated, "billableTokens").longValue();
+            if (providerTokens < 0 || billableTokens < 0) {
+                throw new IllegalStateException(
+                        "CV Service returned invalid selected-output usage.");
+            }
+            Map<String, Object> data = data(operation);
+            Map<String, Object> result = outputResult(data, output);
+            result.put("status", "DRAFT_GENERATED");
+            result.put("generation", generated);
+            result.put("generationCompletedAt", Instant.now().toString());
+            result.put("actualTokens", billableTokens);
+            result.put("providerTokens", providerTokens);
+            saveOutputResult(data, output, result);
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.DRAFT_GENERATED,
+                    data,
+                    null,
+                    null);
+        } catch (GenerationDeadlineExceededException exception) {
+            return markCurrentOutputUnknown(
+                    operation,
+                    leaseToken,
+                    "The provider call exceeded the operation deadline; automatic retry is disabled.");
+        } catch (HttpStatusCodeException exception) {
+            if (exception.getStatusCode().is4xxClientError()) {
+                return failCurrentOutputBeforeProvider(
+                        operation,
+                        leaseToken,
+                        "GENERATION_REJECTED",
+                        "The selected output was rejected before a usable draft was returned.");
+            }
+            return markCurrentOutputUnknown(
+                    operation,
+                    leaseToken,
+                    "The selected provider outcome is ambiguous; automatic retry is disabled.");
+        } catch (RestClientException exception) {
+            return markCurrentOutputUnknown(
+                    operation,
+                    leaseToken,
+                    "The selected provider outcome is ambiguous; automatic retry is disabled.");
+        } catch (RuntimeException invalidResponse) {
+            return failCurrentOutputBeforeProvider(
+                    operation,
+                    leaseToken,
+                    "INVALID_GENERATION_RESPONSE",
+                    "The selected draft response was invalid.");
+        }
+    }
+
+    private GenerationOperation commitSelectedCredit(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        DocumentPurpose output = requiredCurrentOutput(operation);
+        Map<String, Object> selectedResult =
+                outputResult(operation.data(), output);
+        long billableTokens = number(
+                selectedResult, "actualTokens").longValue();
+        UUID reservationId = requiredUuid(
+                selectedResult, "reservationId");
+        GenerationOperation creditOperation = operation;
+        List<DeliveredDocumentEvidence> deliveries = List.of(
+                new DeliveredDocumentEvidence(
+                        requiredUuid(selectedResult, "documentId"),
+                        output));
+        try {
+            bounded(creditOperation, () -> downstream.commit(
+                    creditOperation.ownerId(),
+                    reservationId,
+                    billableTokens,
+                    deliveries));
+        } catch (HttpStatusCodeException commitFailure) {
+            if (!recoverableStoredReservation(commitFailure)) {
+                throw commitFailure;
+            }
+            if (Boolean.TRUE.equals(selectedResult.get(
+                    "storedReservationRecovery"))) {
+                return exhaustStoredReservationRecovery(
+                        operation,
+                        leaseToken,
+                        output,
+                        reservationId);
+            }
+            operation = replaceExpiredStoredReservation(
+                    operation,
+                    leaseToken,
+                    output,
+                    reservationId);
+            selectedResult = outputResult(operation.data(), output);
+            UUID replacementId = requiredUuid(
+                    selectedResult, "reservationId");
+            GenerationOperation recoveredOperation = operation;
+            try {
+                bounded(recoveredOperation, () -> downstream.commit(
+                        recoveredOperation.ownerId(),
+                        replacementId,
+                        billableTokens,
+                        deliveries));
+            } catch (HttpStatusCodeException replacementFailure) {
+                if (recoverableStoredReservation(
+                        replacementFailure)) {
+                    return exhaustStoredReservationRecovery(
+                            recoveredOperation,
+                            leaseToken,
+                            output,
+                            replacementId);
+                }
+                return checkpointStoredCommitRetryable(
+                        recoveredOperation, leaseToken);
+            } catch (RestClientException
+                    | GenerationDeadlineExceededException replacementFailure) {
+                return checkpointStoredCommitRetryable(
+                        recoveredOperation, leaseToken);
+            }
+        }
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "STORED");
+        result.put("billingOutcome", "COMMITTED");
+        saveOutputResult(data, output, result);
+        data.remove("currentOutput");
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.APPLICATION_SAVED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation checkpointStoredCommitRetryable(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
+                operation.data(),
+                "DOWNSTREAM_RETRYABLE",
+                "The stored output credit commit could not be confirmed and will be replayed using the same reservation.");
+    }
+
+    private GenerationOperation exhaustStoredReservationRecovery(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            UUID replacementReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                replacementReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY_EXHAUSTED"));
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "STORED");
+        result.put("billingOutcome", "RELEASED_RECOVERY_REQUIRED");
+        saveOutputResult(data, output, result);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                data,
+                "STORED_OUTPUT_CREDIT_RECOVERY_REQUIRED",
+                "The stored output was retained without charge after its replacement credit reservation also expired; manual resolution is required.");
+    }
+
+    private GenerationOperation replaceExpiredStoredReservation(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            UUID expiredReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                expiredReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY"));
+        Map<String, Object> currentResult = outputResult(
+                operation.data(), output);
+        boolean regeneration = booleanValue(
+                currentResult.get("regeneration"));
+        Map<String, Object> replacement = bounded(
+                operation,
+                () -> downstream.reserveStoredSelectedRecovery(
+                        operation.ownerId(),
+                        operation.id(),
+                        output,
+                        regeneration));
+        UUID replacementId = requiredUuid(
+                replacement, "reservationId");
+        Map<String, Object> data = data(operation);
+        Map<String, Object> recoveredResult = outputResult(data, output);
+        recoveredResult.put(
+                "supersededReservationId", expiredReservationId.toString());
+        recoveredResult.put("reservationId", replacementId.toString());
+        recoveredResult.put("storedReservationRecovery", true);
+        saveOutputResult(data, output, recoveredResult);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
+                data,
+                null,
+                null);
+    }
+
+    private boolean recoverableStoredReservation(
+            HttpStatusCodeException failure) {
+        if (failure.getStatusCode() != HttpStatus.CONFLICT) {
+            return false;
+        }
+        try {
+            String code = objectMapper.readTree(
+                            failure.getResponseBodyAsString())
+                    .path("code")
+                    .asText();
+            return "RESERVATION_EXPIRED".equals(code)
+                    || "RESERVATION_ALREADY_RELEASED".equals(code);
+        } catch (JsonProcessingException invalidError) {
+            return false;
+        }
+    }
+
+    private GenerationOperation storeSelectedDraft(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        DocumentPurpose output = requiredCurrentOutput(operation);
+        Map<String, Object> selectedResult =
+                outputResult(operation.data(), output);
+        Map<String, Object> generated =
+                map(selectedResult.get("generation"), "selected generation");
+        Map<String, Object> savedJob =
+                map(operation.data().get("savedJob"), "saved job");
+        Map<String, Object> rawJob =
+                map(savedJob.get("job"), "saved job");
+        String jobId = firstText(
+                savedJob.get("canonicalJobId"),
+                rawJob.get("canonicalJobId"),
+                rawJob.get("id"));
+        validateClaimLedger(
+                map(generated.get("claimLedger"), "claim ledger"));
+        Map<String, Object> stored = bounded(
+                operation,
+                () -> downstream.createDocument(
+                        operation.ownerId(),
+                        operation.id() + ":" + outputKey(output)
+                                + "-document",
+                        documentRequest(
+                                operation.ownerId(),
+                                jobId,
+                                requiredUuid(
+                                        operation.data(),
+                                        "applicationId"),
+                                output.name(),
+                                requiredText(generated, "title"),
+                                requiredText(generated, "content"),
+                                map(generated.get("generationMetadata"),
+                                        "generation metadata"),
+                                documentEvidenceProvenance(
+                                        generated,
+                                        map(selectedResult.get("evidenceSnapshot"),
+                                                "selected evidence snapshot"),
+                                        requiredText(
+                                                selectedResult,
+                                                "generationCompletedAt")))));
+        UUID documentId = requiredUuid(stored, "id");
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        boolean previouslyCommitted = operation.state()
+                == GenerationOperationState.CREDIT_COMMITTED;
+        result.put("status", previouslyCommitted
+                ? "STORED"
+                : "STORED_PENDING_CREDIT");
+        result.put("documentId", documentId.toString());
+        result.put("documentEvidence", stored);
+        saveOutputResult(data, output, result);
+        data.put(documentIdKey(output), documentId.toString());
+        if (previouslyCommitted) {
+            data.remove("currentOutput");
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                previouslyCommitted
+                        ? GenerationOperationState.APPLICATION_SAVED
+                        : GenerationOperationState
+                                .DRAFTS_STORED_PENDING_CREDIT,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation failCurrentOutputBeforeProvider(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String code,
+            String message) {
+        DocumentPurpose output = requiredCurrentOutput(operation);
+        Map<String, Object> result = outputResult(operation.data(), output);
+        UUID reservationId = uuid(result, "reservationId");
+        if (reservationId != null) {
+            try {
+                downstream.release(
+                        operation.ownerId(), reservationId, code);
+            } catch (RestClientException releaseFailure) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.RECOVERY_REQUIRED,
+                        operation.data(),
+                        "CREDIT_RELEASE_RECOVERY_REQUIRED",
+                        "A selected-output credit hold could not be confirmed released.");
+            }
+        }
+        Map<String, Object> data = data(operation);
+        result = outputResult(data, output);
+        result.put("status", "FAILED");
+        result.put("failureCode", code);
+        result.put("failureMessage", message);
+        result.put("billingOutcome", reservationId == null
+                ? "NOT_RESERVED"
+                : "RELEASED_AFTER_FAILURE");
+        saveOutputResult(data, output, result);
+        data.remove("currentOutput");
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.APPLICATION_SAVED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation markCurrentOutputUnknown(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String message) {
+        DocumentPurpose output = requiredCurrentOutput(operation);
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "OUTCOME_UNKNOWN");
+        result.put("failureCode", "GENERATION_OUTCOME_UNKNOWN");
+        result.put("failureMessage", message);
+        if (uuid(result, "reservationId") != null) {
+            result.put("billingOutcome",
+                    "RESERVED_PENDING_RECONCILIATION");
+        }
+        if (retainedResponseRecoveryEnabled) {
+            result.put("outcomeReconciliation", Map.of(
+                    "status", "PENDING",
+                    "attempts", 0,
+                    "startedAt", Instant.now().toString()));
+        }
+        saveOutputResult(data, output, result);
+        if (!retainedResponseRecoveryEnabled) {
+            data.remove("currentOutput");
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.APPLICATION_SAVED,
+                data,
+                null,
+                null);
+    }
+
+    private boolean outcomeReconciliationPending(
+            GenerationOperation operation) {
+        if (!retainedResponseRecoveryEnabled
+                || !selectiveWorkflow(operation)) {
+            return false;
+        }
+        return requestedOutputs(operation).stream().anyMatch(output -> {
+            Map<String, Object> result = outputResult(
+                    operation.data(), output);
+            Map<String, Object> reconciliation = optionalMap(
+                    result.get("outcomeReconciliation"));
+            return "OUTCOME_UNKNOWN".equals(text(result.get("status")))
+                    && "PENDING".equals(text(
+                            reconciliation.get("status")));
+        });
+    }
+
+    private void scheduleOutcomeReconciliation(
+            GenerationOperation operation,
+            String ownerId) {
+        if (!outcomeReconciliationPending(operation)) {
+            return;
+        }
+        boolean submitted = workScheduler.submitAfter(
+                operation.id(),
+                correlationId(operation),
+                outcomeReconciliationInterval,
+                () -> resumeOutcomeReconciliation(
+                        operation.id(), ownerId));
+        if (!submitted) {
+            log.warn(
+                    "generation outcome reconciliation remains pending operationId={} reason=EXECUTOR_CAPACITY",
+                    operation.id());
+        }
+    }
+
+    private void resumeOutcomeReconciliation(
+            UUID operationId,
+            String ownerId) {
+        GenerationOperation operation = required(operationId, ownerId);
+        if (!outcomeReconciliationPending(operation)) {
+            return;
+        }
+        UUID leaseToken = UUID.randomUUID();
+        if (!repository.tryAcquire(
+                operation.id(), ownerId, leaseToken, leaseDuration)) {
+            scheduleOutcomeReconciliation(
+                    required(operation.id(), ownerId), ownerId);
+            return;
+        }
+        boolean reschedule = false;
+        try {
+            operation = required(operation.id(), ownerId);
+            if (!outcomeReconciliationPending(operation)) {
+                return;
+            }
+            DocumentPurpose output = requiredCurrentOutput(operation);
+            Map<String, Object> result = outputResult(
+                    operation.data(), output);
+            Map<String, Object> reconciliation = optionalMap(
+                    result.get("outcomeReconciliation"));
+            int attempt = reconciliation.get("attempts")
+                    instanceof Number previousAttempts
+                    ? previousAttempts.intValue() + 1
+                    : 1;
+            UUID providerOperationId = requiredUuid(
+                    result, "providerOperationId");
+            Map<String, Object> request = map(
+                    result.get("generationRequest"),
+                    "selected generation request");
+            Map<String, Object> generated = null;
+            String source = null;
+            try {
+                Map<String, Object> replay =
+                        downstream.replayRejectedSelectedGeneration(
+                                ownerId,
+                                providerOperationId,
+                                output,
+                                request);
+                if ("ACCEPTED".equals(requiredText(replay, "outcome"))
+                        && number(replay, "providerInvocationCount")
+                                        .longValue()
+                                == 0) {
+                    generated = map(
+                            replay.get("draft"),
+                            "reconciled selected draft");
+                    source = "RETAINED_RESPONSE";
+                }
+            } catch (HttpStatusCodeException notReady) {
+                if (notReady.getStatusCode() != HttpStatus.NOT_FOUND) {
+                    log.warn(
+                            "generation outcome reconciliation call failed operationId={} output={} attempt={} failureStatus={}",
+                            operationId,
+                            output,
+                            attempt,
+                            notReady.getStatusCode().value());
+                }
+            } catch (RestClientException unavailable) {
+                log.warn(
+                        "generation outcome reconciliation call failed operationId={} output={} attempt={} failureType={}",
+                        operationId,
+                        output,
+                        attempt,
+                        unavailable.getClass().getSimpleName());
+            }
+
+            if (generated == null
+                    && attempt >= maxOutcomeReconciliationAttempts
+                    && output == DocumentPurpose.CV) {
+                generated = downstream.deterministicSelectedFallback(
+                        ownerId,
+                        providerOperationId,
+                        output,
+                        request);
+                source = "DETERMINISTIC_FALLBACK";
+            }
+
+            if (generated != null) {
+                operation = acceptReconciledSelectedDraft(
+                        operation,
+                        leaseToken,
+                        output,
+                        providerOperationId,
+                        generated,
+                        attempt,
+                        source);
+                operation = advanceSelectiveToApproval(
+                        operation, leaseToken, null);
+            } else if (attempt >= maxOutcomeReconciliationAttempts) {
+                operation = failReconciledSelectedOutput(
+                        operation,
+                        leaseToken,
+                        output,
+                        attempt);
+                operation = advanceSelectiveToApproval(
+                        operation, leaseToken, null);
+            } else {
+                Map<String, Object> data = data(operation);
+                result = outputResult(data, output);
+                reconciliation = new LinkedHashMap<>(optionalMap(
+                        result.get("outcomeReconciliation")));
+                reconciliation.put("attempts", attempt);
+                reconciliation.put("lastCheckedAt", Instant.now().toString());
+                result.put("outcomeReconciliation", reconciliation);
+                saveOutputResult(data, output, result);
+                operation = checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.APPLICATION_SAVED,
+                        data,
+                        null,
+                        null);
+                reschedule = true;
+            }
+        } finally {
+            repository.release(operationId, ownerId, leaseToken);
+        }
+        if (reschedule) {
+            scheduleOutcomeReconciliation(
+                    required(operationId, ownerId), ownerId);
+        }
+    }
+
+    private GenerationOperation acceptReconciledSelectedDraft(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            UUID providerOperationId,
+            Map<String, Object> generated,
+            int attempt,
+            String source) {
+        if (!providerOperationId.equals(
+                requiredUuid(generated, "operationId"))
+                || !output.name().equals(
+                        requiredText(generated, "outputType"))) {
+            throw new IllegalStateException(
+                    "Reconciled selected draft identity did not match the original provider operation.");
+        }
+        long providerTokens = number(
+                map(generated.get("usage"), "generation usage"),
+                "totalTokens").longValue();
+        long billableTokens = generated.get("billableTokens") == null
+                ? providerTokens
+                : number(generated, "billableTokens").longValue();
+        if (billableTokens < 0 || providerTokens < 0) {
+            throw new IllegalStateException(
+                    "Reconciled selected draft returned invalid usage.");
+        }
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        result.put("status", "DRAFT_GENERATED");
+        result.put("generation", generated);
+        result.put("generationCompletedAt", Instant.now().toString());
+        result.put("actualTokens", billableTokens);
+        result.put("providerTokens", providerTokens);
+        result.remove("failureCode");
+        result.remove("failureMessage");
+        result.put("outcomeReconciliation", Map.of(
+                "status", "RECOVERED",
+                "attempts", attempt,
+                "source", source,
+                "providerInvocationCount", 0,
+                "completedAt", Instant.now().toString()));
+        saveOutputResult(data, output, result);
+        data.put("currentOutput", output.name());
+        log.info(
+                "generation outcome reconciled operationId={} output={} attempt={} source={} providerInvocationCount=0 providerTokens={} billableTokens={}",
+                operation.id(),
+                output,
+                attempt,
+                source,
+                providerTokens,
+                billableTokens);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFT_GENERATED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation failReconciledSelectedOutput(
+            GenerationOperation operation,
+            UUID leaseToken,
+            DocumentPurpose output,
+            int attempt) {
+        Map<String, Object> data = data(operation);
+        Map<String, Object> result = outputResult(data, output);
+        UUID reservationId = uuid(result, "reservationId");
+        if (reservationId != null) {
+            downstream.release(
+                    operation.ownerId(),
+                    reservationId,
+                    "GENERATION_OUTCOME_RECONCILIATION_EXHAUSTED");
+        }
+        result.put("status", "FAILED");
+        result.put("failureCode",
+                "GENERATION_OUTCOME_RECONCILIATION_EXHAUSTED");
+        result.put("failureMessage",
+                "No retained response became available within the bounded reconciliation window.");
+        result.put("billingOutcome", reservationId == null
+                ? "NOT_RESERVED"
+                : "RELEASED_AFTER_RECONCILIATION");
+        result.put("outcomeReconciliation", Map.of(
+                "status", "EXHAUSTED",
+                "attempts", attempt,
+                "completedAt", Instant.now().toString()));
+        saveOutputResult(data, output, result);
+        data.remove("currentOutput");
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.APPLICATION_SAVED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation finishSelectiveGeneration(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        boolean hasDraft = uuid(operation.data(), "cvDocumentId") != null
+                || uuid(operation.data(), "coverLetterDocumentId") != null;
+        boolean unknown = hasOutputStatus(operation, "OUTCOME_UNKNOWN");
+        if (!hasDraft) {
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    unknown
+                            ? GenerationOperationState.GENERATION_OUTCOME_UNKNOWN
+                            : GenerationOperationState.FAILED,
+                    operation.data(),
+                    unknown
+                            ? "GENERATION_OUTCOME_UNKNOWN"
+                            : "SELECTED_OUTPUTS_FAILED",
+                    unknown
+                            ? "At least one selected provider outcome is ambiguous; automatic retry is disabled."
+                            : "No selected document could be generated.");
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED,
+                operation.data(),
+                hasIncompleteOutput(operation)
+                        ? "PARTIAL_GENERATION"
+                        : null,
+                hasIncompleteOutput(operation)
+                        ? "At least one selected output remains missing and may be uploaded or omitted."
+                        : null);
+    }
+
+    private GenerationOperation awaitSelectiveApproval(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.AWAITING_APPROVAL,
+                operation.data(),
+                operation.failureCode(),
+                operation.failureMessage());
+    }
+
+    private GenerationOperation advanceLegacyToApproval(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String authorization) {
+        try {
+            while (true) {
+                switch (operation.state()) {
+                    case CREATED -> operation = resolveSnapshots(
+                            operation, leaseToken, authorization);
+                    case SNAPSHOTS_RESOLVED -> operation = estimate(
+                            operation, leaseToken);
+                    case ESTIMATED -> operation = reserve(
+                            operation, leaseToken);
+                    case CREDIT_RESERVED -> {
+                        if (Instant.now().isAfter(operation.deadlineAt())) {
+                            operation = releaseAndFail(
+                                    operation,
+                                    leaseToken,
+                                    "OPERATION_DEADLINE_EXCEEDED",
+                                    "The generation deadline expired before model invocation.");
+                            return operation;
+                        }
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.GENERATION_IN_PROGRESS,
+                                operation.data(),
+                                null,
+                                null);
+                        operation = invokeGeneration(operation, leaseToken);
+                    }
+                    case GENERATION_IN_PROGRESS -> {
+                        return checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.GENERATION_OUTCOME_UNKNOWN,
+                                operation.data(),
+                                "GENERATION_OUTCOME_UNKNOWN",
+                                "A previous provider invocation was interrupted; automatic retry is disabled to prevent duplicate cost.");
+                    }
+                    case DRAFT_GENERATED -> operation = storeDrafts(
+                            operation, leaseToken);
+                    case DRAFTS_STORED_PENDING_CREDIT -> {
+                        operation = commitCredit(operation, leaseToken);
+                        if (operation.failureCode() != null
+                                || operation.state()
+                                        == GenerationOperationState
+                                                .RECOVERY_REQUIRED) {
+                            return operation;
+                        }
+                    }
+                    // Compatibility for operations checkpointed by a previous
+                    // release after the credit was already committed.
+                    case CREDIT_COMMITTED -> operation = storeDrafts(
+                            operation, leaseToken);
+                    case DRAFTS_STORED -> {
+                        Map<String, Object> data = data(operation);
+                        if (Boolean.TRUE.equals(data.get(
+                                RETAINED_RESPONSE_AUTO_APPROVAL))) {
+                            data.put("approvalRequest", Map.of(
+                                    "cvDocumentId",
+                                    requiredUuid(data, "cvDocumentId")
+                                            .toString(),
+                                    "coverLetterDocumentId",
+                                    requiredUuid(
+                                            data,
+                                            "coverLetterDocumentId")
+                                            .toString()));
+                        }
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.AWAITING_APPROVAL,
+                                data,
+                                null,
+                                null);
+                        if (Boolean.TRUE.equals(data.get(
+                                RETAINED_RESPONSE_AUTO_APPROVAL))) {
+                            return advanceApproval(operation, leaseToken);
+                        }
+                        return operation;
+                    }
+                    default -> {
+                        return operation;
+                    }
+                }
+            }
+        } catch (GenerationDeadlineExceededException exception) {
+            return deadlineFailure(operation, leaseToken, exception);
+        } catch (GenerationSourceException exception) {
+            if (exception.retryable()) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        operation.state(),
+                        operation.data(),
+                        exception.code(),
+                        exception.getMessage());
+            }
+            return releaseAndFail(
+                    operation,
+                    leaseToken,
+                    exception.code(),
+                    exception.getMessage());
+        } catch (HttpStatusCodeException exception) {
+            if (operation.state() == GenerationOperationState.CREATED
+                    && exception.getStatusCode() == HttpStatus.NOT_FOUND) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.CREATED,
+                        operation.data(),
+                        "SAVED_JOB_NOT_AVAILABLE",
+                        "The saved job is not available; save or refresh it and replay this operation.");
+            }
+            if (exception.getStatusCode().is4xxClientError()
+                    && beforeGeneration(operation.state())) {
+                return releaseAndFail(
+                        operation,
+                        leaseToken,
+                        "DOWNSTREAM_REQUEST_REJECTED",
+                        "A required service rejected the generation request.");
+            }
+            return retryableFailure(
+                    operation, leaseToken, exception);
+        } catch (RestClientException exception) {
+            return retryableFailure(
+                    operation, leaseToken, exception);
+        } catch (RuntimeException exception) {
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.FAILED,
+                    operation.data(),
+                    "INVALID_DOWNSTREAM_RESPONSE",
+                    "A required service returned an invalid generation response.");
+        }
+    }
+
+    private GenerationOperation resolveSnapshots(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String authorization) {
+        Map<String, Object> savedJob =
+                bounded(operation, () -> downstream.savedJob(
+                        operation.savedJobId(), authorization));
+        validateSavedJob(operation, savedJob);
+        Map<String, Object> rawJob = map(savedJob.get("job"), "saved job");
+        Map<String, Object> rawProfile =
+                bounded(operation, downstream::profile);
+        StartGenerationRequest selectionRequest =
+                selectionRequest(operation);
+        Map<String, Object> cvEvidenceSnapshot = bounded(
+                operation,
+                () -> downstream.evidenceSnapshot(selection(
+                        selectionRequest, DocumentPurpose.CV)));
+        validateEvidenceSnapshot(
+                selection(selectionRequest, DocumentPurpose.CV),
+                cvEvidenceSnapshot);
+        Map<String, Object> coverLetterEvidenceSnapshot = bounded(
+                operation,
+                () -> downstream.evidenceSnapshot(selection(
+                        selectionRequest, DocumentPurpose.COVER_LETTER)));
+        validateEvidenceSnapshot(
+                selection(selectionRequest, DocumentPurpose.COVER_LETTER),
+                coverLetterEvidenceSnapshot);
+        validateProfileAndPurposeBindings(
+                rawProfile,
+                cvEvidenceSnapshot,
+                coverLetterEvidenceSnapshot);
+        Map<String, Object> account;
+        try {
+            account = bounded(
+                    operation,
+                    () -> downstream.account(authorization));
+        } catch (RestClientException unavailable) {
+            account = Map.of();
+        }
+        Instant capturedAt = Instant.now();
+        Map<String, Object> jobSnapshot =
+                jobSnapshot(operation, savedJob, rawJob, capturedAt);
+        Map<String, Object> profileSnapshot =
+                profileSnapshot(
+                        operation,
+                        rawProfile,
+                        account,
+                        jobSnapshot,
+                        capturedAt);
+        Map<String, Object> generationRequest = new LinkedHashMap<>();
+        generationRequest.put("inputSchemaVersion", "2.0");
+        generationRequest.put("profile", generationProfile(profileSnapshot));
+        generationRequest.put("job", jobSnapshot);
+        generationRequest.put("evidenceSnapshots", Map.of(
+                "cv", cvEvidenceSnapshot,
+                "coverLetter", coverLetterEvidenceSnapshot));
+
+        Map<String, Object> data = data(operation);
+        data.put("savedJob", savedJob);
+        data.put("profileSnapshot", profileSnapshot);
+        data.put("generationRequest", generationRequest);
+        data.put("jobSnapshotSha256", sha256Json(jobSnapshot));
+        data.put("profileSnapshotSha256", sha256Json(profileSnapshot));
+        data.put("cvEvidenceSnapshotId",
+                requiredText(cvEvidenceSnapshot, "snapshotId"));
+        data.put("cvEvidenceSnapshotDigest",
+                requiredText(cvEvidenceSnapshot, "snapshotDigest"));
+        data.put("coverLetterEvidenceSnapshotId",
+                requiredText(coverLetterEvidenceSnapshot, "snapshotId"));
+        data.put("coverLetterEvidenceSnapshotDigest",
+                requiredText(coverLetterEvidenceSnapshot, "snapshotDigest"));
+        data.put("canonicalJobId", firstText(
+                savedJob.get("canonicalJobId"),
+                rawJob.get("canonicalJobId"),
+                rawJob.get("id")));
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.SNAPSHOTS_RESOLVED,
+                data,
+                null,
+                null);
+    }
+
+    private void validateSavedJob(
+            GenerationOperation operation,
+            Map<String, Object> savedJob) {
+        UUID returnedSavedJobId =
+                requiredUuid(savedJob, "savedJobId");
+        if (!operation.savedJobId().equals(returnedSavedJobId)) {
+            throw new GenerationSourceException(
+                    "SAVED_JOB_ID_MISMATCH",
+                    "Job Service returned a different saved job.",
+                    false);
+        }
+        String sourceState =
+                requiredText(savedJob, "sourceState");
+        if ("EXPIRED_SNAPSHOT".equals(sourceState)) {
+            throw new GenerationSourceException(
+                    "SAVED_JOB_SNAPSHOT_EXPIRED",
+                    "The saved job snapshot has expired; refresh it and replay this operation.",
+                    true);
+        }
+        if (!"SNAPSHOT".equals(sourceState)) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned an unsupported saved-job source state.",
+                    false);
+        }
+        if (!"2.0".equals(
+                requiredText(savedJob, "canonicalSchemaVersion"))) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned an unsupported canonical job schema.",
+                    false);
+        }
+        if (number(savedJob, "snapshotVersion").longValue() < 1) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned an invalid snapshot version.",
+                    false);
+        }
+        String contentVersion =
+                requiredText(savedJob, "contentVersion");
+        String contentSha256 =
+                requiredText(savedJob, "contentSha256");
+        if (!CONTENT_VERSION.matcher(contentVersion).matches()
+                || !CONTENT_SHA256.matcher(contentSha256).matches()
+                || !contentVersion.equals("sha256:" + contentSha256)) {
+            throw new GenerationSourceException(
+                    "INVALID_SAVED_JOB_SNAPSHOT",
+                    "Job Service returned inconsistent snapshot content evidence.",
+                    false);
+        }
+    }
+
+    private GenerationOperation estimate(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        long estimatedTokens = bounded(operation, () -> downstream.estimate(
+                operation.ownerId(),
+                map(operation.data().get("generationRequest"),
+                        "generation request")));
+        Map<String, Object> data = data(operation);
+        data.put("estimatedTokens", estimatedTokens);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.ESTIMATED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation reserve(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        Map<String, Object> reservation = bounded(
+                operation,
+                () -> downstream.reserve(
+                        operation.ownerId(),
+                        operation.id(),
+                        number(operation.data(), "estimatedTokens")
+                                .longValue(),
+                        booleanValue(operation.data().get("regeneration"))));
+        UUID reservationId = requiredUuid(reservation, "reservationId");
+        Map<String, Object> data = data(operation);
+        data.put("reservationId", reservationId.toString());
+        data.put("reservationEvidence", reservation);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.CREDIT_RESERVED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation invokeGeneration(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        try {
+            Map<String, Object> generated = bounded(
+                    operation,
+                    () -> downstream.generate(
+                            operation.ownerId(),
+                            operation.id(),
+                            map(operation.data().get("generationRequest"),
+                                    "generation request")));
+            UUID returnedOperation = requiredUuid(generated, "operationId");
+            if (!returnedOperation.equals(operation.id())) {
+                throw new IllegalStateException(
+                        "CV Service returned a mismatched operation ID.");
+            }
+            Map<String, Object> usage =
+                    map(generated.get("usage"), "generation usage");
+            long actualTokens = number(usage, "totalTokens").longValue();
+            if (actualTokens < 1) {
+                throw new IllegalStateException(
+                        "CV Service returned invalid token usage.");
+            }
+            Map<String, Object> data = data(operation);
+            data.put("generation", generated);
+            data.put("generationCompletedAt", Instant.now().toString());
+            data.put("actualTokens", actualTokens);
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.DRAFT_GENERATED,
+                    data,
+                    null,
+                    null);
+        } catch (GenerationDeadlineExceededException exception) {
+            return generationOutcomeUnknown(
+                    operation, leaseToken, exception);
+        } catch (HttpStatusCodeException exception) {
+            if (exception.getStatusCode().is4xxClientError()) {
+                return releaseAndFail(
+                        operation,
+                        leaseToken,
+                        "GENERATION_REJECTED",
+                        "Document generation was rejected before a usable "
+                                + "draft was returned.");
+            }
+            return generationOutcomeUnknown(
+                    operation, leaseToken, exception);
+        } catch (RestClientException exception) {
+            return generationOutcomeUnknown(
+                    operation, leaseToken, exception);
+        } catch (RuntimeException invalidResponse) {
+            return releaseAndFail(
+                    operation,
+                    leaseToken,
+                    "INVALID_GENERATION_RESPONSE",
+                    "The generated draft response was invalid and no credits were charged.");
+        }
+    }
+
+    private GenerationOperation commitCredit(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        UUID reservationId = requiredUuid(
+                operation.data(), "reservationId");
+        long actualTokens = number(
+                operation.data(), "actualTokens").longValue();
+        List<DeliveredDocumentEvidence> deliveries = List.of(
+                new DeliveredDocumentEvidence(
+                        requiredUuid(operation.data(), "cvDocumentId"),
+                        DocumentPurpose.CV),
+                new DeliveredDocumentEvidence(
+                        requiredUuid(operation.data(), "coverLetterDocumentId"),
+                        DocumentPurpose.COVER_LETTER));
+        GenerationOperation creditOperation = operation;
+        try {
+            bounded(creditOperation, () -> downstream.commit(
+                    creditOperation.ownerId(),
+                    reservationId,
+                    actualTokens,
+                    deliveries));
+        } catch (HttpStatusCodeException commitFailure) {
+            if (!recoverableStoredReservation(commitFailure)) {
+                throw commitFailure;
+            }
+            if (Boolean.TRUE.equals(operation.data().get(
+                    "storedReservationRecovery"))) {
+                return exhaustStoredLegacyReservationRecovery(
+                        operation,
+                        leaseToken,
+                        reservationId);
+            }
+            operation = replaceExpiredStoredLegacyReservation(
+                    operation,
+                    leaseToken,
+                    reservationId);
+            UUID replacementId = requiredUuid(
+                    operation.data(), "reservationId");
+            GenerationOperation recoveredOperation = operation;
+            try {
+                bounded(recoveredOperation, () -> downstream.commit(
+                        recoveredOperation.ownerId(),
+                        replacementId,
+                        actualTokens,
+                        deliveries));
+            } catch (HttpStatusCodeException replacementFailure) {
+                if (recoverableStoredReservation(
+                        replacementFailure)) {
+                    return exhaustStoredLegacyReservationRecovery(
+                            recoveredOperation,
+                            leaseToken,
+                            replacementId);
+                }
+                return checkpointStoredCommitRetryable(
+                        recoveredOperation, leaseToken);
+            } catch (RestClientException
+                    | GenerationDeadlineExceededException replacementFailure) {
+                return checkpointStoredCommitRetryable(
+                        recoveredOperation, leaseToken);
+            }
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED,
+                operation.data(),
+                null,
+                null);
+    }
+
+    private GenerationOperation replaceExpiredStoredLegacyReservation(
+            GenerationOperation operation,
+            UUID leaseToken,
+            UUID expiredReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                expiredReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY"));
+        Map<String, Object> replacement = bounded(
+                operation,
+                () -> downstream.reserveStoredLegacyRecovery(
+                        operation.ownerId(),
+                        operation.id(),
+                        booleanValue(operation.data().get("regeneration"))));
+        UUID replacementId = requiredUuid(
+                replacement, "reservationId");
+        Map<String, Object> data = data(operation);
+        data.put("supersededReservationId", expiredReservationId.toString());
+        data.put("reservationId", replacementId.toString());
+        data.put("storedReservationRecovery", true);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation exhaustStoredLegacyReservationRecovery(
+            GenerationOperation operation,
+            UUID leaseToken,
+            UUID replacementReservationId) {
+        bounded(operation, () -> downstream.release(
+                operation.ownerId(),
+                replacementReservationId,
+                "STORED_OUTPUT_RESERVATION_RECOVERY_EXHAUSTED"));
+        Map<String, Object> data = data(operation);
+        data.put("billingOutcome", "RELEASED_RECOVERY_REQUIRED");
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                data,
+                "STORED_OUTPUT_CREDIT_RECOVERY_REQUIRED",
+                "The stored outputs were retained without charge after their replacement credit reservation also expired; manual resolution is required.");
+    }
+
+    private GenerationOperation storeDrafts(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        Map<String, Object> generated =
+                map(operation.data().get("generation"), "generation");
+        Map<String, Object> savedJob =
+                map(operation.data().get("savedJob"), "saved job");
+        Map<String, Object> rawJob =
+                map(savedJob.get("job"), "saved job");
+        String jobId = firstText(
+                savedJob.get("canonicalJobId"),
+                rawJob.get("canonicalJobId"),
+                rawJob.get("id"));
+        Map<String, Object> generationMetadata =
+                map(generated.get("generationMetadata"),
+                        "generation metadata");
+        validateClaimLedger(
+                map(generated.get("claimLedger"), "claim ledger"));
+        Map<String, Object> generationRequest =
+                map(operation.data().get("generationRequest"),
+                        "generation request");
+        Map<String, Object> evidenceSnapshots =
+                map(generationRequest.get("evidenceSnapshots"),
+                        "evidence snapshots");
+        String generatedAt =
+                requiredText(operation.data(), "generationCompletedAt");
+
+        Map<String, Object> cv = bounded(
+                operation,
+                () -> downstream.createDocument(
+                        operation.ownerId(),
+                        operation.id() + ":cv-document",
+                        documentRequest(
+                                operation.ownerId(),
+                                jobId,
+                                uuid(operation.data(), "applicationId"),
+                                "CV",
+                                requiredText(generated, "cvTitle"),
+                                requiredText(generated, "cvContent"),
+                                generationMetadata,
+                                documentEvidenceProvenance(
+                                        generated,
+                                        map(evidenceSnapshots.get("cv"),
+                                                "CV evidence snapshot"),
+                                        generatedAt))));
+        Map<String, Object> coverLetter = bounded(
+                operation,
+                () -> downstream.createDocument(
+                        operation.ownerId(),
+                        operation.id() + ":cover-letter-document",
+                        documentRequest(
+                                operation.ownerId(),
+                                jobId,
+                                uuid(operation.data(), "applicationId"),
+                                "COVER_LETTER",
+                                requiredText(generated, "coverLetterTitle"),
+                                requiredText(generated, "coverLetterContent"),
+                                generationMetadata,
+                                documentEvidenceProvenance(
+                                        generated,
+                                        map(evidenceSnapshots.get(
+                                                        "coverLetter"),
+                                                "cover-letter evidence snapshot"),
+                                        generatedAt))));
+        Map<String, Object> data = data(operation);
+        data.put("cvDocumentId",
+                requiredUuid(cv, "id").toString());
+        data.put("coverLetterDocumentId",
+                requiredUuid(coverLetter, "id").toString());
+        data.put("cvDocumentEvidence", cv);
+        data.put("coverLetterDocumentEvidence", coverLetter);
+        GenerationOperationState storedState = operation.state()
+                == GenerationOperationState.CREDIT_COMMITTED
+                        ? GenerationOperationState.DRAFTS_STORED
+                        : GenerationOperationState
+                                .DRAFTS_STORED_PENDING_CREDIT;
+        return checkpoint(
+                operation,
+                leaseToken,
+                storedState,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation advanceApproval(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        if (selectiveWorkflow(operation)) {
+            return advanceSelectiveApproval(operation, leaseToken);
+        }
+        return advanceLegacyApproval(operation, leaseToken);
+    }
+
+    private GenerationOperation advanceSelectiveApproval(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        try {
+            while (true) {
+                switch (operation.state()) {
+                    case AWAITING_APPROVAL -> {
+                        if (uuid(operation.data(), "cvDocumentId") != null) {
+                            GenerationOperation current = operation;
+                            bounded(operation, () -> downstream.approveDocument(
+                                    current.ownerId(),
+                                    requiredUuid(
+                                            current.data(),
+                                            "cvDocumentId")));
+                        }
+                        if (uuid(operation.data(),
+                                "coverLetterDocumentId") != null) {
+                            GenerationOperation current = operation;
+                            bounded(operation, () -> downstream.approveDocument(
+                                    current.ownerId(),
+                                    requiredUuid(
+                                            current.data(),
+                                            "coverLetterDocumentId")));
+                        }
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.APPROVED,
+                                operation.data(),
+                                operation.failureCode(),
+                                operation.failureMessage());
+                    }
+                    case APPROVED -> operation = checkpoint(
+                            operation,
+                            leaseToken,
+                            GenerationOperationState.CV_EXPORT_IN_PROGRESS,
+                            operation.data(),
+                            operation.failureCode(),
+                            operation.failureMessage());
+                    case CV_EXPORT_IN_PROGRESS -> {
+                        Map<String, Object> data = data(operation);
+                        GenerationOperation current = operation;
+                        UUID cvDocumentId = uuid(data, "cvDocumentId");
+                        if (cvDocumentId != null) {
+                            Map<String, Object> exported = bounded(
+                                    operation,
+                                    () -> downstream.exportDocument(
+                                            current.ownerId(),
+                                            cvDocumentId,
+                                            ExportIdempotencyKeys
+                                                    .forOperationOutput(
+                                                            current.id(),
+                                                            ExportIdempotencyKeys
+                                                                    .Output.CV),
+                                            professionalContact(current)));
+                            data.put("cvDownloads", exported);
+                        }
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.CV_EXPORTED,
+                                data,
+                                operation.failureCode(),
+                                operation.failureMessage());
+                    }
+                    case CV_EXPORTED -> operation = checkpoint(
+                            operation,
+                            leaseToken,
+                            GenerationOperationState
+                                    .COVER_LETTER_EXPORT_IN_PROGRESS,
+                            operation.data(),
+                            operation.failureCode(),
+                            operation.failureMessage());
+                    case COVER_LETTER_EXPORT_IN_PROGRESS -> {
+                        Map<String, Object> data = data(operation);
+                        GenerationOperation current = operation;
+                        UUID coverLetterDocumentId = uuid(
+                                data, "coverLetterDocumentId");
+                        if (coverLetterDocumentId != null) {
+                            Map<String, Object> exported = bounded(
+                                    operation,
+                                    () -> downstream.exportDocument(
+                                            current.ownerId(),
+                                            coverLetterDocumentId,
+                                            ExportIdempotencyKeys
+                                                    .forOperationOutput(
+                                                            current.id(),
+                                                            ExportIdempotencyKeys
+                                                                    .Output.COVER_LETTER),
+                                            professionalContact(current)));
+                            data.put("coverLetterDownloads", exported);
+                        }
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.EXPORTED,
+                                data,
+                                operation.failureCode(),
+                                operation.failureMessage());
+                    }
+                    case EXPORTED -> operation =
+                            linkSelectiveApplication(operation, leaseToken);
+                    default -> {
+                        return operation;
+                    }
+                }
+            }
+        } catch (GenerationDeadlineExceededException exception) {
+            return deadlineFailure(operation, leaseToken, exception);
+        } catch (HttpStatusCodeException exception) {
+            if (exception.getStatusCode().is4xxClientError()) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.RECOVERY_REQUIRED,
+                        operation.data(),
+                        "APPROVAL_REQUEST_REJECTED",
+                        "A required service rejected selective-document approval or linking.");
+            }
+            return retryableFailure(operation, leaseToken, exception);
+        } catch (RestClientException exception) {
+            return retryableFailure(operation, leaseToken, exception);
+        } catch (RuntimeException exception) {
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.RECOVERY_REQUIRED,
+                    operation.data(),
+                    "APPROVAL_RECOVERY_REQUIRED",
+                    "Selective-document approval could not be completed from persisted state.");
+        }
+    }
+
+    private GenerationOperation linkSelectiveApplication(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        UUID applicationId =
+                requiredUuid(operation.data(), "applicationId");
+        Map<String, Object> application = bounded(
+                operation,
+                () -> downstream.applications(operation.ownerId()))
+                .stream()
+                .filter(candidate -> applicationId.equals(
+                        uuid(candidate, "id")))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "The saved application is no longer available."));
+        UUID desiredCv = firstUuid(
+                uuid(operation.data(), "cvDocumentId"),
+                uuid(application, "cvDocumentId"));
+        UUID desiredCoverLetter = firstUuid(
+                uuid(operation.data(), "coverLetterDocumentId"),
+                uuid(application, "coverLetterDocumentId"));
+        boolean alreadySelected = Objects.equals(
+                        desiredCv, uuid(application, "cvDocumentId"))
+                && Objects.equals(
+                        desiredCoverLetter,
+                        uuid(application, "coverLetterDocumentId"));
+        Map<String, Object> selected = alreadySelected
+                ? application
+                : bounded(
+                        operation,
+                        () -> downstream.updateApplicationDocumentSelections(
+                                operation.ownerId(),
+                                applicationId,
+                                operation.id()
+                                        + ":application-document-selections",
+                                number(application, "version").longValue(),
+                                desiredCv,
+                                desiredCoverLetter));
+        if (desiredCv != null
+                && desiredCoverLetter != null
+                && "SAVED".equals(requiredText(selected, "status"))) {
+            long expectedVersion =
+                    number(selected, "version").longValue();
+            selected = bounded(
+                    operation,
+                    () -> downstream.updateApplicationStatus(
+                            operation.ownerId(),
+                            applicationId,
+                            "DOCUMENTS_GENERATED",
+                            expectedVersion));
+        }
+        Map<String, Object> data = data(operation);
+        data.put("applicationEvidence", selected);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.COMPLETED,
+                data,
+                operation.failureCode(),
+                operation.failureMessage());
+    }
+
+    private GenerationOperation advanceLegacyApproval(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        try {
+            while (true) {
+                switch (operation.state()) {
+                    case AWAITING_APPROVAL -> {
+                        GenerationOperation boundedOperation = operation;
+                        bounded(operation, () -> downstream.approveDocument(
+                                boundedOperation.ownerId(),
+                                requiredUuid(
+                                        boundedOperation.data(),
+                                        "cvDocumentId")));
+                        bounded(operation, () -> downstream.approveDocument(
+                                boundedOperation.ownerId(),
+                                requiredUuid(
+                                        boundedOperation.data(),
+                                        "coverLetterDocumentId")));
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.APPROVED,
+                                operation.data(),
+                                null,
+                                null);
+                    }
+                    case APPROVED -> {
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.CV_EXPORT_IN_PROGRESS,
+                                operation.data(),
+                                null,
+                                null);
+                    }
+                    case CV_EXPORT_IN_PROGRESS -> operation =
+                            exportCv(operation, leaseToken);
+                    case CV_EXPORTED -> {
+                        operation = checkpoint(
+                                operation,
+                                leaseToken,
+                                GenerationOperationState.COVER_LETTER_EXPORT_IN_PROGRESS,
+                                operation.data(),
+                                null,
+                                null);
+                    }
+                    case COVER_LETTER_EXPORT_IN_PROGRESS -> operation =
+                            exportCoverLetter(operation, leaseToken);
+                    case EXPORTED -> operation = createApplication(
+                            operation, leaseToken);
+                    default -> {
+                        return operation;
+                    }
+                }
+            }
+        } catch (GenerationDeadlineExceededException exception) {
+            return deadlineFailure(operation, leaseToken, exception);
+        } catch (HttpStatusCodeException exception) {
+            if (exception.getStatusCode().is4xxClientError()) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.RECOVERY_REQUIRED,
+                        operation.data(),
+                        "APPROVAL_REQUEST_REJECTED",
+                        "A required service rejected the approval request.");
+            }
+            return retryableFailure(
+                    operation, leaseToken, exception);
+        } catch (RestClientException exception) {
+            return retryableFailure(
+                    operation, leaseToken, exception);
+        } catch (RuntimeException exception) {
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.RECOVERY_REQUIRED,
+                    operation.data(),
+                    "APPROVAL_RECOVERY_REQUIRED",
+                    "Approval could not be completed from the persisted "
+                            + "operation state.");
+        }
+    }
+
+    private GenerationOperation exportCv(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        Map<String, Object> exported = bounded(
+                operation,
+                () -> downstream.exportDocument(
+                        operation.ownerId(),
+                        requiredUuid(operation.data(), "cvDocumentId"),
+                        ExportIdempotencyKeys.forOperationOutput(
+                                operation.id(),
+                                ExportIdempotencyKeys.Output.CV),
+                        professionalContact(operation)));
+        Map<String, Object> data = data(operation);
+        data.put("cvDownloads", exported);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.CV_EXPORTED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation exportCoverLetter(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        Map<String, Object> exported = bounded(
+                operation,
+                () -> downstream.exportDocument(
+                        operation.ownerId(),
+                        requiredUuid(
+                                operation.data(),
+                                "coverLetterDocumentId"),
+                        ExportIdempotencyKeys.forOperationOutput(
+                                operation.id(),
+                                ExportIdempotencyKeys
+                                        .Output.COVER_LETTER),
+                        professionalContact(operation)));
+        Map<String, Object> data = data(operation);
+        data.put("coverLetterDownloads", exported);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.EXPORTED,
+                data,
+                null,
+                null);
+    }
+
+    private GenerationOperation createApplication(
+            GenerationOperation operation,
+            UUID leaseToken) {
+        Map<String, Object> savedJob =
+                map(operation.data().get("savedJob"), "saved job");
+        Map<String, Object> job =
+                map(savedJob.get("job"), "saved job");
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("userId", operation.ownerId());
+        request.put("jobId", firstText(
+                job.get("id"), savedJob.get("canonicalJobId")));
+        putIfText(request, "canonicalJobId",
+                firstText(savedJob.get("canonicalJobId"),
+                        job.get("canonicalJobId")));
+        putIfText(request, "provider", job.get("provider"));
+        putIfText(request, "externalJobId",
+                firstText(job.get("externalJobId"), job.get("id")));
+        request.put("jobTitle", requiredJobText(job, "title", "jobTitle"));
+        request.put("companyName",
+                requiredJobText(job, "company", "companyName"));
+        putIfText(request, "location", job.get("location"));
+        request.put("cvDocumentId",
+                requiredUuid(operation.data(), "cvDocumentId"));
+        request.put("coverLetterDocumentId",
+                requiredUuid(
+                        operation.data(),
+                        "coverLetterDocumentId"));
+        request.put("provenance", "GENERATED");
+        request.put("initialStatus", "DOCUMENTS_GENERATED");
+        Map<String, Object> application;
+        try {
+            application = bounded(
+                    operation,
+                    () -> downstream.createApplication(
+                            operation.ownerId(),
+                            operation.id() + ":application",
+                            request));
+        } catch (HttpStatusCodeException conflict) {
+            if (conflict.getStatusCode() != HttpStatus.CONFLICT) {
+                throw conflict;
+            }
+            try {
+                application = linkExistingApplication(
+                        operation,
+                        requiredText(request, "canonicalJobId"),
+                        conflict);
+            } catch (HttpStatusCodeException unresolvedConflict) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.RECOVERY_REQUIRED,
+                        operation.data(),
+                        "APPLICATION_LINK_RECOVERY_REQUIRED",
+                        "The generated documents could not be linked to the "
+                                + "existing saved application automatically.");
+            }
+        }
+        Map<String, Object> data = data(operation);
+        data.put("applicationId",
+                requiredUuid(application, "id").toString());
+        data.put("applicationEvidence", application);
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.COMPLETED,
+                data,
+                null,
+                null);
+    }
+
+    private Map<String, Object> linkExistingApplication(
+            GenerationOperation operation,
+            String canonicalJobId,
+            HttpStatusCodeException conflict) {
+        Map<String, Object> application = bounded(
+                operation,
+                () -> downstream.applications(operation.ownerId()))
+                .stream()
+                .filter(candidate -> canonicalJobId.equals(firstText(
+                        candidate.get("canonicalJobId"),
+                        candidate.get("jobId"))))
+                .findFirst()
+                .orElseThrow(() -> conflict);
+        UUID applicationId = requiredUuid(application, "id");
+        String status = requiredText(application, "status");
+        if ("DOCUMENTS_GENERATED".equals(status)) {
+            if (requiredUuid(operation.data(), "cvDocumentId").equals(
+                            uuid(application, "cvDocumentId"))
+                    && requiredUuid(
+                                    operation.data(),
+                                    "coverLetterDocumentId")
+                            .equals(uuid(
+                                    application,
+                                    "coverLetterDocumentId"))) {
+                return application;
+            }
+            return bounded(
+                    operation,
+                    () -> downstream.updateApplicationDocumentSelections(
+                            operation.ownerId(),
+                            applicationId,
+                            operation.id()
+                                    + ":application-document-selections",
+                            number(application, "version").longValue(),
+                            requiredUuid(
+                                    operation.data(),
+                                    "cvDocumentId"),
+                            requiredUuid(
+                                    operation.data(),
+                                    "coverLetterDocumentId")));
+        }
+        if (!"SAVED".equals(status)) {
+            throw conflict;
+        }
+        Map<String, Object> applicationWithDocuments = bounded(
+                operation,
+                () -> downstream.updateApplicationDocumentSelections(
+                        operation.ownerId(),
+                        applicationId,
+                        operation.id() + ":application-document-selections",
+                        number(application, "version").longValue(),
+                        requiredUuid(
+                                operation.data(),
+                                "cvDocumentId"),
+                        requiredUuid(
+                                operation.data(),
+                                "coverLetterDocumentId")));
+        long expectedVersion =
+                number(applicationWithDocuments, "version").longValue();
+        return bounded(
+                operation,
+                () -> downstream.updateApplicationStatus(
+                        operation.ownerId(),
+                        applicationId,
+                        "DOCUMENTS_GENERATED",
+                        expectedVersion));
+    }
+
+    private boolean recoverableApplicationConflict(
+            GenerationOperation operation) {
+        String failure = Objects.toString(
+                operation.failureMessage(), "")
+                .toLowerCase(Locale.ROOT);
+        boolean explicitApplicationLinkFailure =
+                "APPLICATION_LINK_RECOVERY_REQUIRED".equals(
+                        operation.failureCode());
+        boolean legacyApplicationConflict =
+                "APPROVAL_REQUEST_REJECTED".equals(
+                                operation.failureCode())
+                        && failure.contains("\"status\":409")
+                        && failure.contains("canonical job");
+        return operation.state()
+                        == GenerationOperationState.RECOVERY_REQUIRED
+                && (explicitApplicationLinkFailure
+                        || legacyApplicationConflict)
+                && operation.data().containsKey("cvDownloads")
+                && operation.data().containsKey(
+                        "coverLetterDownloads")
+                && operation.data().containsKey("cvDocumentId")
+                && operation.data().containsKey(
+                        "coverLetterDocumentId")
+                && !operation.data().containsKey("applicationId");
+    }
+
+    private Map<String, Object> jobSnapshot(
+            GenerationOperation operation,
+            Map<String, Object> savedJob,
+            Map<String, Object> job,
+            Instant capturedAt) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("provenance", provenance(
+                "JOB_SERVICE",
+                operation.savedJobId().toString(),
+                firstText(
+                        savedJob.get("contentVersion"),
+                        savedJob.get("snapshotVersion")),
+                capturedAt));
+        result.put("title",
+                bounded(requiredJobText(job, "title", "jobTitle"), 160));
+        result.put("company",
+                bounded(requiredJobText(job, "company", "companyName"), 160));
+        String description = bounded(
+                requiredText(job, "description"),
+                12000);
+        String descriptionCompleteness = firstText(
+                job.get("descriptionCompleteness"));
+        if (descriptionCompleteness == null) {
+            descriptionCompleteness = looksLikeDescriptionPreview(description)
+                    ? "PREVIEW"
+                    : "UNKNOWN";
+        }
+        if (!Set.of("FULL", "PREVIEW", "USER_CONFIRMED", "UNKNOWN")
+                .contains(descriptionCompleteness)) {
+            throw new IllegalStateException(
+                    "Job Service returned an invalid description completeness state.");
+        }
+        if (!Set.of("FULL", "USER_CONFIRMED")
+                .contains(descriptionCompleteness)) {
+            throw new GenerationSourceException(
+                    "JOB_DESCRIPTION_REVIEW_REQUIRED",
+                    "Review and confirm the complete job advert before generation; no AI request was made.",
+                    true);
+        }
+        result.put("description", description);
+        result.put("descriptionCompleteness", descriptionCompleteness);
+        putBounded(result, "advertiserName",
+                firstText(job.get("advertiserName"), job.get("companyName"), job.get("company")),
+                160);
+        String advertiserType = firstText(job.get("advertiserType"));
+        if (advertiserType == null) {
+            advertiserType = "UNKNOWN";
+        }
+        if (!Set.of("EMPLOYER", "RECRUITER", "UNKNOWN")
+                .contains(advertiserType)) {
+            throw new IllegalStateException(
+                    "Job Service returned an invalid advertiser type.");
+        }
+        result.put("advertiserType", advertiserType);
+        putBounded(result, "hiringOrganisationName",
+                job.get("hiringOrganisationName"), 160);
+        putBounded(result, "applicationContactName",
+                job.get("applicationContactName"), 160);
+        putBounded(result, "location", job.get("location"), 160);
+        putBounded(result, "employmentType",
+                firstText(
+                        job.get("employmentType"),
+                        job.get("employmentTypeCode"),
+                        job.get("contractType")),
+                80);
+        String postedDate = isoDate(firstText(
+                job.get("postedDate"), job.get("postedAt")));
+        if (postedDate != null) {
+            result.put("postedDate", postedDate);
+        }
+        return result;
+    }
+
+    private boolean looksLikeDescriptionPreview(String description) {
+        String normalized = description.trim();
+        return normalized.length() < 600
+                || normalized.endsWith("...")
+                || normalized.endsWith("…")
+                || normalized.matches("(?is).*\\bTHE\\s+(?:ROL|ROLE)\\s*$");
+    }
+
+    private String isoDate(String value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.length() >= 10) {
+            try {
+                return LocalDate.parse(
+                        value.substring(0, 10),
+                        DateTimeFormatter.ISO_LOCAL_DATE).toString();
+            } catch (DateTimeParseException ignored) {
+                // Try the provider's UK display-date format below.
+            }
+        }
+        try {
+            return LocalDate.parse(
+                    value,
+                    DateTimeFormatter.ofPattern("d/M/uuuu")).toString();
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
+    }
+
+    private Map<String, Object> profileSnapshot(
+            GenerationOperation operation,
+            Map<String, Object> profile,
+            Map<String, Object> account,
+            Map<String, Object> job,
+            Instant capturedAt) {
+        String revisionId = requiredText(profile, "revisionId");
+        String contentDigest = requiredText(profile, "contentDigest");
+        try {
+            UUID.fromString(revisionId);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(
+                    "User Profile Service returned an invalid revision ID.");
+        }
+        if (!CONTENT_SHA256.matcher(contentDigest).matches()) {
+            throw new IllegalStateException(
+                    "User Profile Service returned an invalid profile digest.");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("provenance", provenance(
+                "USER_PROFILE_SERVICE",
+                revisionId,
+                "sha256:" + contentDigest,
+                capturedAt));
+        Map<String, Object> aspirations = optionalMap(
+                profile.get("aspirations"));
+        result.put("targetRoles", boundedStrings(
+                list(aspirations.get("targetRoles")), 20, 120));
+        Map<String, Object> workPreferences = optionalMap(
+                profile.get("workPreferences"));
+        String location = locationText(
+                workPreferences.get("location"));
+        if (location != null) {
+            result.put("location", bounded(location, 160));
+        }
+        // Skills are canonical user-profile facts. They are captured from the
+        // server-owned profile revision that both purpose-bound evidence
+        // snapshots are validated against. The CV service admits these only
+        // as exact, CV-only declared skills; employment and qualification
+        // claims remain snapshot-only in schema 2.0.
+        result.put("skills", relevantProfileSkills(
+                list(profile.get("skills")), job));
+        result.put("qualifications", List.of());
+        result.put("employmentHistory", List.of());
+
+        String fullName = firstText(
+                account.get("name"), account.get("fullName"));
+        String email = text(account.get("email"));
+        if (fullName != null || email != null) {
+            Map<String, Object> contact = new LinkedHashMap<>();
+            contact.put("provenance", provenance(
+                    "AUTHENTICATION_SERVICE",
+                    operation.ownerId(),
+                    "sha256:" + sha256Json(account),
+                    capturedAt));
+            putBounded(contact, "fullName", fullName, 120);
+            putBounded(contact, "email", email, 254);
+            result.put("contact", contact);
+        }
+        Map<String, Object> professionalContact = professionalContactSnapshot(
+                profile.get("professionalContact"));
+        if (!professionalContact.isEmpty()) {
+            result.put("professionalContact", professionalContact);
+        }
+        return result;
+    }
+
+    private Map<String, Object> professionalContactSnapshot(Object value) {
+        Map<String, Object> source = optionalMap(value);
+        if (source.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        String phone = text(source.get("phone"));
+        if (phone != null) {
+            long digits = phone.chars().filter(Character::isDigit).count();
+            if (phone.length() > 40
+                    || !phone.matches("[0-9+() .-]+")
+                    || digits < 7
+                    || digits > 15) {
+                throw new IllegalStateException(
+                        "User Profile Service returned an invalid professional phone number.");
+            }
+            result.put("phone", phone);
+        }
+        List<?> sourceLinks = list(source.get("links"));
+        if (sourceLinks.size() > 8) {
+            throw new IllegalStateException(
+                    "User Profile Service returned too many professional links.");
+        }
+        List<Map<String, Object>> links = new ArrayList<>();
+        Set<String> labels = new HashSet<>();
+        Set<String> urls = new HashSet<>();
+        for (Object valueLink : sourceLinks) {
+            Map<String, Object> sourceLink = optionalMap(valueLink);
+            String label = text(sourceLink.get("label"));
+            String url = text(sourceLink.get("url"));
+            if (!validProfessionalLabel(label)
+                    || !validProfessionalUrl(url)
+                    || !labels.add(label.toLowerCase(Locale.ROOT))
+                    || !urls.add(url)) {
+                throw new IllegalStateException(
+                        "User Profile Service returned an invalid professional link.");
+            }
+            links.add(Map.of("label", label, "url", url));
+        }
+        if (!links.isEmpty()) {
+            result.put("links", List.copyOf(links));
+        }
+        return Map.copyOf(result);
+    }
+
+    private boolean validProfessionalLabel(String value) {
+        return value != null
+                && value.length() <= 40
+                && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    private boolean validProfessionalUrl(String value) {
+        if (value == null
+                || value.length() < 9
+                || value.length() > 512
+                || !value.startsWith("https://")
+                || value.codePoints().anyMatch(Character::isISOControl)) {
+            return false;
+        }
+        try {
+            URI uri = new URI(value);
+            return "https".equals(uri.getScheme())
+                    && uri.getHost() != null
+                    && uri.getRawUserInfo() == null;
+        } catch (URISyntaxException exception) {
+            return false;
+        }
+    }
+
+    private Map<String, Object> professionalContact(
+            GenerationOperation operation) {
+        Map<String, Object> profileSnapshot = optionalMap(
+                operation.data().get("profileSnapshot"));
+        if (profileSnapshot.isEmpty()) {
+            profileSnapshot = optionalMap(optionalMap(
+                    operation.data().get("generationRequest")).get("profile"));
+        }
+        return optionalMap(profileSnapshot.get("professionalContact"));
+    }
+
+    private Map<String, Object> generationProfile(
+            Map<String, Object> profileSnapshot) {
+        Map<String, Object> projection = new LinkedHashMap<>(profileSnapshot);
+        projection.remove("professionalContact");
+        return projection;
+    }
+
+    private StartGenerationRequest selectionRequest(
+            GenerationOperation operation) {
+        Object value = operation.data().get("evidenceSelectionRequest");
+        try {
+            return objectMapper.convertValue(
+                    value, StartGenerationRequest.class);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(
+                    "Generation operation has no valid evidence selection.",
+                    exception);
+        }
+    }
+
+    private DocumentEvidenceSelection selection(
+            StartGenerationRequest request,
+            DocumentPurpose purpose) {
+        return request.documents().stream()
+                .filter(document -> document.purpose() == purpose)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Generation evidence purpose is missing."));
+    }
+
+    private void validateSelectionRequest(StartGenerationRequest request) {
+        Set<DocumentPurpose> outputs = requestedOutputs(request);
+        if (request == null
+                || request.documents() == null
+                || request.documents().size() != outputs.size()) {
+            throw new IllegalArgumentException(
+                    "Each requested output requires exactly one matching evidence selection.");
+        }
+        var purposes = new HashSet<DocumentPurpose>();
+        for (DocumentEvidenceSelection document : request.documents()) {
+            if (document == null
+                    || document.purpose() == null
+                    || document.entryIds() == null
+                    || document.entryIds().isEmpty()
+                    || document.entryIds().size() > 50
+                    || document.sectionOrder() == null
+                    || document.sectionOrder().isEmpty()
+                    || document.sectionOrder().size() > 9
+                    || new HashSet<>(document.entryIds()).size()
+                            != document.entryIds().size()
+                    || new HashSet<>(document.sectionOrder()).size()
+                            != document.sectionOrder().size()
+                    || !purposes.add(document.purpose())) {
+                throw new IllegalArgumentException(
+                        "Evidence selections must be bounded, unique and purpose-specific.");
+            }
+        }
+        if (!purposes.equals(outputs)) {
+            throw new IllegalArgumentException(
+                    "Evidence selections must exactly match the requested outputs.");
+        }
+    }
+
+    private Set<DocumentPurpose> requestedOutputs(
+            StartGenerationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException(
+                    "A generation request is required.");
+        }
+        Set<DocumentPurpose> outputs;
+        if (request.outputs() == null) {
+            outputs = EnumSet.allOf(DocumentPurpose.class);
+        } else if (request.outputs().isEmpty()) {
+            outputs = EnumSet.noneOf(DocumentPurpose.class);
+        } else {
+            outputs = EnumSet.copyOf(request.outputs());
+        }
+        if (outputs.isEmpty() || outputs.size() > 2) {
+            throw new IllegalArgumentException(
+                    "Requested outputs must be CV, COVER_LETTER, or both.");
+        }
+        return outputs;
+    }
+
+    private StartGenerationRequest normalizeSelectionRequest(
+            StartGenerationRequest request) {
+        Set<DocumentPurpose> outputs = requestedOutputs(request);
+        LinkedHashSet<DocumentPurpose> orderedOutputs =
+                new LinkedHashSet<>();
+        List<DocumentEvidenceSelection> orderedDocuments =
+                new ArrayList<>();
+        for (DocumentPurpose purpose : DocumentPurpose.values()) {
+            if (outputs.contains(purpose)) {
+                orderedOutputs.add(purpose);
+                orderedDocuments.add(selection(request, purpose));
+            }
+        }
+        return new StartGenerationRequest(
+                orderedOutputs, orderedDocuments);
+    }
+
+    private Map<String, Object> initialOutputResults(
+            String ownerId,
+            UUID savedJobId,
+            Set<DocumentPurpose> outputs) {
+        Map<String, Object> results = new LinkedHashMap<>();
+        for (DocumentPurpose output : DocumentPurpose.values()) {
+            if (outputs.contains(output)) {
+                results.put(output.name(), new LinkedHashMap<>(Map.of(
+                        "status", "REQUESTED",
+                        "regeneration",
+                        repository.hasStoredDocument(
+                                ownerId, savedJobId, output))));
+            }
+        }
+        return results;
+    }
+
+    private boolean selectiveWorkflow(GenerationOperation operation) {
+        return Boolean.TRUE.equals(
+                operation.data().get("selectiveOutputWorkflow"));
+    }
+
+    private Set<DocumentPurpose> requestedOutputs(
+            GenerationOperation operation) {
+        Object raw = operation.data().get("requestedOutputs");
+        if (!(raw instanceof List<?> values) || values.isEmpty()) {
+            return EnumSet.allOf(DocumentPurpose.class);
+        }
+        EnumSet<DocumentPurpose> outputs =
+                EnumSet.noneOf(DocumentPurpose.class);
+        for (Object value : values) {
+            outputs.add(DocumentPurpose.valueOf(
+                    Objects.toString(value)));
+        }
+        return outputs;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> outputResults(
+            Map<String, Object> data) {
+        Object raw = data.get("outputResults");
+        if (!(raw instanceof Map<?, ?> source)) {
+            return new LinkedHashMap<>();
+        }
+        return new LinkedHashMap<>((Map<String, Object>) source);
+    }
+
+    private Map<String, Object> outputResult(
+            Map<String, Object> data,
+            DocumentPurpose output) {
+        return optionalMap(outputResults(data).get(output.name()));
+    }
+
+    private void saveOutputResult(
+            Map<String, Object> data,
+            DocumentPurpose output,
+            Map<String, Object> result) {
+        Map<String, Object> results = outputResults(data);
+        results.put(output.name(), new LinkedHashMap<>(result));
+        data.put("outputResults", results);
+    }
+
+    private DocumentPurpose nextOutput(
+            GenerationOperation operation) {
+        for (DocumentPurpose output : DocumentPurpose.values()) {
+            if (!requestedOutputs(operation).contains(output)) {
+                continue;
+            }
+            String status = text(outputResult(
+                    operation.data(), output).get("status"));
+            if (!List.of("STORED", "FAILED", "OUTCOME_UNKNOWN")
+                    .contains(status)) {
+                return output;
+            }
+        }
+        return null;
+    }
+
+    private DocumentPurpose currentOutput(
+            GenerationOperation operation) {
+        String value = text(operation.data().get("currentOutput"));
+        return value == null ? null : DocumentPurpose.valueOf(value);
+    }
+
+    private DocumentPurpose requiredCurrentOutput(
+            GenerationOperation operation) {
+        DocumentPurpose output = currentOutput(operation);
+        if (output == null) {
+            throw new IllegalStateException(
+                    "Selective generation has no current output.");
+        }
+        return output;
+    }
+
+    private boolean hasOutputStatus(
+            GenerationOperation operation,
+            String status) {
+        return requestedOutputs(operation).stream()
+                .map(output -> outputResult(
+                        operation.data(), output))
+                .map(result -> text(result.get("status")))
+                .anyMatch(status::equals);
+    }
+
+    private boolean hasIncompleteOutput(
+            GenerationOperation operation) {
+        return requestedOutputs(operation).stream()
+                .map(output -> outputResult(
+                        operation.data(), output))
+                .map(result -> text(result.get("status")))
+                .anyMatch(status -> !"STORED".equals(status));
+    }
+
+    private UUID providerOperationId(
+            UUID operationId,
+            DocumentPurpose output) {
+        return UUID.nameUUIDFromBytes(
+                (operationId + ":" + output.name())
+                        .getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String outputKey(DocumentPurpose output) {
+        return output == DocumentPurpose.CV
+                ? "cv"
+                : "cover-letter";
+    }
+
+    private String documentIdKey(DocumentPurpose output) {
+        return output == DocumentPurpose.CV
+                ? "cvDocumentId"
+                : "coverLetterDocumentId";
+    }
+
+    private void validateProfileBinding(
+            Map<String, Object> profile,
+            Map<String, Object> snapshot) {
+        if (!requiredUuid(profile, "revisionId").equals(
+                        requiredUuid(snapshot, "profileRevisionId"))
+                || !requiredText(profile, "contentDigest").equals(
+                        requiredText(snapshot, "profileContentDigest"))) {
+            throw new IllegalStateException(
+                    "Evidence snapshot is not bound to the exact current profile revision.");
+        }
+    }
+
+    private void putUuidIfPresent(
+            Map<String, Object> target,
+            String key,
+            UUID value) {
+        if (value != null) {
+            target.put(key, value.toString());
+        }
+    }
+
+    private UUID firstUuid(UUID first, UUID second) {
+        return first == null ? second : first;
+    }
+
+    private boolean beforeSelectedProvider(
+            GenerationOperationState state) {
+        return state == GenerationOperationState.APPLICATION_SAVED
+                || state == GenerationOperationState.OUTPUT_READY
+                || state == GenerationOperationState.ESTIMATED
+                || state == GenerationOperationState.CREDIT_RESERVED;
+    }
+
+    private void validateEvidenceSnapshot(
+            DocumentEvidenceSelection requested,
+            Map<String, Object> snapshot) {
+        requiredUuid(snapshot, "snapshotId");
+        requiredUuid(snapshot, "profileRevisionId");
+        String digest = requiredText(snapshot, "snapshotDigest");
+        String profileDigest =
+                requiredText(snapshot, "profileContentDigest");
+        if (!CONTENT_SHA256.matcher(digest).matches()
+                || !CONTENT_SHA256.matcher(profileDigest).matches()
+                || !requested.purpose().name().equals(
+                        requiredText(snapshot, "purpose"))) {
+            throw new IllegalStateException(
+                    "User Profile Service returned inconsistent evidence snapshot metadata.");
+        }
+        List<?> sections = list(snapshot.get("sectionOrder"));
+        if (!sections.stream().map(this::text).toList().equals(
+                requested.sectionOrder().stream()
+                        .map(Enum::name)
+                        .toList())) {
+            throw new IllegalStateException(
+                    "User Profile Service returned a different section order.");
+        }
+        List<?> selections = list(snapshot.get("selections"));
+        List<String> returnedEntryIds = selections.stream()
+                .map(this::optionalMap)
+                .map(item -> requiredText(item, "entryId"))
+                .toList();
+        if (!returnedEntryIds.equals(requested.entryIds().stream()
+                .map(UUID::toString)
+                .toList())) {
+            throw new IllegalStateException(
+                    "User Profile Service returned a different evidence selection.");
+        }
+        var factIds = new HashSet<UUID>();
+        for (Object value : selections) {
+            Map<String, Object> selected = optionalMap(value);
+            requiredUuid(selected, "revisionId");
+            if (number(selected, "revisionNumber").longValue() < 1
+                    || !requested.sectionOrder().stream()
+                            .map(Enum::name)
+                            .toList()
+                            .contains(requiredText(selected, "category"))) {
+                throw new IllegalStateException(
+                        "Evidence selection has invalid revision or category metadata.");
+            }
+            String contentDigest =
+                    requiredText(selected, "contentDigest");
+            if (!CONTENT_SHA256.matcher(contentDigest).matches()) {
+                throw new IllegalStateException(
+                        "Evidence selection has an invalid revision digest.");
+            }
+            List<?> facts = list(selected.get("facts"));
+            if (facts.isEmpty()) {
+                throw new IllegalStateException(
+                        "Evidence selection contains no approved facts.");
+            }
+            for (Object factValue : facts) {
+                Map<String, Object> fact = optionalMap(factValue);
+                UUID factId = requiredUuid(fact, "factId");
+                if (!factIds.add(factId)
+                        || text(fact.get("factType")) == null
+                        || text(fact.get("factValue")) == null
+                        || !(fact.get("numericClaim") instanceof Boolean)) {
+                    throw new IllegalStateException(
+                            "Evidence snapshot contains an invalid or duplicate fact.");
+                }
+            }
+        }
+        if (factIds.isEmpty()) {
+            throw new IllegalStateException(
+                "Evidence snapshot contains no approved facts.");
+        }
+    }
+
+    private void validateProfileAndPurposeBindings(
+            Map<String, Object> profile,
+            Map<String, Object> cv,
+            Map<String, Object> coverLetter) {
+        UUID profileRevisionId = requiredUuid(profile, "revisionId");
+        String profileDigest = requiredText(profile, "contentDigest");
+        UUID cvProfileRevisionId =
+                requiredUuid(cv, "profileRevisionId");
+        UUID coverProfileRevisionId =
+                requiredUuid(coverLetter, "profileRevisionId");
+        String cvProfileDigest =
+                requiredText(cv, "profileContentDigest");
+        String coverProfileDigest =
+                requiredText(coverLetter, "profileContentDigest");
+        UUID cvSnapshotId = requiredUuid(cv, "snapshotId");
+        UUID coverSnapshotId =
+                requiredUuid(coverLetter, "snapshotId");
+        if (!profileRevisionId.equals(cvProfileRevisionId)
+                || !profileRevisionId.equals(coverProfileRevisionId)
+                || !profileDigest.equals(cvProfileDigest)
+                || !profileDigest.equals(coverProfileDigest)
+                || cvSnapshotId.equals(coverSnapshotId)) {
+            throw new IllegalStateException(
+                    "Evidence snapshots are not bound to the exact current profile revision and distinct document purposes.");
+        }
+    }
+
+    private List<Map<String, Object>> qualifications(List<?> values) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object value : values) {
+            Map<String, Object> source = optionalMap(value);
+            String name = text(source.get("qualificationName"));
+            if (name == null) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("qualificationName", bounded(name, 160));
+            putBounded(item, "issuingBody", source.get("issuingBody"), 160);
+            putBounded(item, "grade", source.get("grade"), 80);
+            putBounded(item, "dateAchieved",
+                    source.get("dateAchieved"), 10);
+            putBounded(item, "expectedCompletion",
+                    source.get("expectedCompletion"), 10);
+            String status = text(source.get("status"));
+            if (status != null) {
+                item.put("status",
+                        status.toUpperCase(Locale.ROOT).contains("PROGRESS")
+                                ? "IN_PROGRESS"
+                                : "COMPLETED");
+            }
+            result.add(item);
+            if (result.size() == 30) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private List<Map<String, Object>> employment(List<?> values) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object value : values) {
+            Map<String, Object> source = optionalMap(value);
+            String jobTitle = text(source.get("jobTitle"));
+            String employer = text(source.get("employer"));
+            String startDate = text(source.get("startDate"));
+            if (jobTitle == null || employer == null || startDate == null) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("jobTitle", bounded(jobTitle, 160));
+            item.put("employer", bounded(employer, 160));
+            item.put("startDate", bounded(startDate, 10));
+            putBounded(item, "endDate", source.get("endDate"), 10);
+            putBounded(item, "responsibilities",
+                    source.get("keyResponsibilities"), 4000);
+            String status = text(source.get("status"));
+            if (status != null) {
+                item.put("status",
+                        status.toUpperCase(Locale.ROOT).contains("CURRENT")
+                                ? "CURRENT"
+                                : "PREVIOUS_ROLE");
+            }
+            result.add(item);
+            if (result.size() == 30) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private Map<String, Object> provenance(
+            String owner,
+            String resourceId,
+            String version,
+            Instant capturedAt) {
+        return Map.of(
+                "owner", owner,
+                "resourceId", bounded(resourceId, 128),
+                "version", bounded(version, 128),
+                "capturedAt", capturedAt.toString());
+    }
+
+    private Map<String, Object> documentRequest(
+            String ownerId,
+            String jobId,
+            UUID applicationId,
+            String documentType,
+            String title,
+            String content,
+            Map<String, Object> generationMetadata,
+            Map<String, Object> evidenceProvenance) {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("userId", ownerId);
+        request.put("jobId", jobId);
+        if (applicationId != null) {
+            request.put("applicationId", applicationId);
+        }
+        request.put("documentType", documentType);
+        request.put("title", title);
+        request.put("content", content);
+        request.put("sourceType", "GENERATED");
+        request.put("generationMetadata", generationMetadata);
+        request.put("evidenceProvenance", evidenceProvenance);
+        request.put("createdBy", "document-generation-gateway");
+        return request;
+    }
+
+    private Map<String, Object> documentEvidenceProvenance(
+            Map<String, Object> generated,
+            Map<String, Object> snapshot,
+            String generatedAt) {
+        List<Map<String, Object>> evidenceRevisions = list(
+                        snapshot.get("selections"))
+                .stream()
+                .map(this::optionalMap)
+                .map(selected -> Map.<String, Object>of(
+                        "entryId", requiredUuid(
+                                selected, "entryId"),
+                        "revisionId", requiredUuid(
+                                selected, "revisionId"),
+                        "revisionNumber", number(
+                                selected, "revisionNumber").intValue(),
+                        "category", requiredText(
+                                selected, "category"),
+                        "contentDigest", requiredText(
+                                selected, "contentDigest")))
+                .toList();
+        Map<String, Object> provenance = new LinkedHashMap<>();
+        provenance.put(
+                "profileRevisionId",
+                requiredUuid(snapshot, "profileRevisionId"));
+        provenance.put(
+                "profileContentDigest",
+                requiredText(snapshot, "profileContentDigest"));
+        provenance.put(
+                "evidenceSnapshotId",
+                requiredUuid(snapshot, "snapshotId"));
+        provenance.put(
+                "evidenceSnapshotDigest",
+                requiredText(snapshot, "snapshotDigest"));
+        provenance.put("evidenceRevisions", evidenceRevisions);
+        provenance.put(
+                "sectionOrder",
+                list(snapshot.get("sectionOrder")).stream()
+                        .map(this::text)
+                        .toList());
+        provenance.put(
+                "claimLedger",
+                map(generated.get("claimLedger"), "claim ledger"));
+        provenance.put("generatedAt", generatedAt);
+        return provenance;
+    }
+
+    private void validateClaimLedger(Map<String, Object> ledger) {
+        requiredUuid(ledger, "ledgerId");
+        if (!CONTENT_SHA256.matcher(
+                requiredText(ledger, "ledgerSha256")).matches()
+                || text(ledger.get("policyVersion")) == null
+                || text(ledger.get("parserVersion")) == null) {
+            throw new IllegalStateException(
+                    "CV Service returned invalid claim-ledger provenance.");
+        }
+        List<?> claims = list(ledger.get("claims"));
+        if (claims.isEmpty() || claims.size() > MAX_LEDGER_CLAIMS) {
+            throw new IllegalStateException(
+                    "CV Service returned an invalid claim ledger.");
+        }
+        for (Object value : claims) {
+            Map<String, Object> claim = optionalMap(value);
+            String claimId = requiredText(claim, "claimId");
+            String disposition = requiredText(claim, "disposition");
+            List<?> evidenceIds = list(claim.get("evidenceIds"));
+            List<?> contentPaths = list(claim.get("contentPaths"));
+            Object rawReviewText = claim.get("reviewText");
+            String reviewText = rawReviewText instanceof String review
+                    ? review
+                    : null;
+            if (!claimId.matches("CLAIM-[0-9]{3,4}")
+                    || !List.of(
+                                    "SUPPORTED",
+                                    "REWORDED",
+                                    "CONFIRMATION_REQUIRED",
+                                    "REJECTED")
+                            .contains(disposition)
+                    || evidenceIds.size() > MAX_CLAIM_REFERENCES
+                    || contentPaths.size() > MAX_CLAIM_REFERENCES
+                    || reviewText == null
+                    || reviewText.length() > MAX_CLAIM_REVIEW_TEXT) {
+                throw new IllegalStateException(
+                        "CV Service returned an invalid claim ledger.");
+            }
+        }
+    }
+
+    private void verifyApprovalRequest(
+            GenerationOperation operation,
+            ApproveGenerationRequest request) {
+        Objects.requireNonNull(request, "Approval request is required.");
+        if (selectiveWorkflow(operation)) {
+            UUID storedCv = uuid(operation.data(), "cvDocumentId");
+            UUID storedLetter = uuid(
+                    operation.data(), "coverLetterDocumentId");
+            if ((storedCv == null && storedLetter == null)
+                    || !Objects.equals(storedCv, request.cvDocumentId())
+                    || !Objects.equals(
+                            storedLetter,
+                            request.coverLetterDocumentId())) {
+                throw new GenerationConflictException(
+                        "Approval must reference exactly the selective drafts created by this operation.");
+            }
+            verifyApprovalState(operation);
+            return;
+        }
+        UUID storedCv = requiredUuid(
+                operation.data(), "cvDocumentId");
+        UUID storedLetter = requiredUuid(
+                operation.data(), "coverLetterDocumentId");
+        if (!storedCv.equals(request.cvDocumentId())
+                || !storedLetter.equals(
+                        request.coverLetterDocumentId())) {
+            throw new GenerationConflictException(
+                    "Approval must reference the exact drafts created by this operation.");
+        }
+        verifyApprovalState(operation);
+    }
+
+    private void verifyApprovalState(
+            GenerationOperation operation) {
+        if (operation.state()
+                != GenerationOperationState.AWAITING_APPROVAL
+                && operation.state()
+                != GenerationOperationState.APPROVED
+                && operation.state()
+                != GenerationOperationState.CV_EXPORT_IN_PROGRESS
+                && operation.state()
+                != GenerationOperationState.CV_EXPORTED
+                && operation.state()
+                != GenerationOperationState.COVER_LETTER_EXPORT_IN_PROGRESS
+                && operation.state()
+                != GenerationOperationState.EXPORTED
+                && operation.state()
+                != GenerationOperationState.COMPLETED) {
+            throw new GenerationConflictException(
+                    "Generation operation is not awaiting approval.");
+        }
+    }
+
+    private GenerationOperation releaseAndFail(
+            GenerationOperation operation,
+            UUID leaseToken,
+            String code,
+            String message) {
+        UUID reservationId = uuid(
+                operation.data(), "reservationId");
+        if (reservationId != null) {
+            try {
+                downstream.release(
+                        operation.ownerId(),
+                        reservationId,
+                        code);
+            } catch (RestClientException releaseFailure) {
+                return checkpoint(
+                        operation,
+                        leaseToken,
+                        GenerationOperationState.RECOVERY_REQUIRED,
+                        operation.data(),
+                        "CREDIT_RELEASE_RECOVERY_REQUIRED",
+                        "The generation failed and its credit hold could not be confirmed released.");
+            }
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.FAILED,
+                operation.data(),
+                code,
+                message);
+    }
+
+    private GenerationOperation deadlineFailure(
+            GenerationOperation operation,
+            UUID leaseToken,
+            GenerationDeadlineExceededException exception) {
+        if (operation.state()
+                == GenerationOperationState.GENERATION_IN_PROGRESS) {
+            return generationOutcomeUnknown(
+                    operation, leaseToken, exception);
+        }
+        if (operation.state() == GenerationOperationState.ESTIMATED
+                && exception.downstreamCallStarted()) {
+            return checkpoint(
+                    operation,
+                    leaseToken,
+                    GenerationOperationState.RECOVERY_REQUIRED,
+                    operation.data(),
+                    "CREDIT_RESERVATION_RECOVERY_REQUIRED",
+                    "The deadline expired while reserving document-generation allowance; recover the stable operation reservation before continuing.");
+        }
+        if (beforeGeneration(operation.state())) {
+            return releaseAndFail(
+                    operation,
+                    leaseToken,
+                    "OPERATION_DEADLINE_EXCEEDED",
+                    "The document-generation operation deadline was exceeded.");
+        }
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.RECOVERY_REQUIRED,
+                deadlineRecoveryData(operation),
+                "OPERATION_DEADLINE_RECOVERY_REQUIRED",
+                "The operation deadline expired during a replay-safe side effect; recover using the persisted operation and stable downstream key.");
+    }
+
+    private Map<String, Object> deadlineRecoveryData(
+            GenerationOperation operation) {
+        Map<String, Object> recoveryData = data(operation);
+        recoveryData.put(
+                GenerationOperationRepository.DEADLINE_RECOVERY_STATE_KEY,
+                operation.state().name());
+        return recoveryData;
+    }
+
+    private GenerationOperation retryableFailure(
+            GenerationOperation operation,
+            UUID leaseToken,
+            RuntimeException exception) {
+        return checkpoint(
+                operation,
+                leaseToken,
+                operation.state(),
+                operation.data(),
+                "DOWNSTREAM_RETRYABLE",
+                "A replay-safe downstream step did not complete: "
+                        + exception.getClass().getSimpleName());
+    }
+
+    private GenerationOperation generationOutcomeUnknown(
+            GenerationOperation operation,
+            UUID leaseToken,
+            RuntimeException exception) {
+        return checkpoint(
+                operation,
+                leaseToken,
+                GenerationOperationState.GENERATION_OUTCOME_UNKNOWN,
+                operation.data(),
+                "GENERATION_OUTCOME_UNKNOWN",
+                "The provider outcome is ambiguous; automatic retry is disabled to prevent duplicate cost ("
+                        + exception.getClass().getSimpleName()
+                        + ").");
+    }
+
+    private GenerationOperation checkpoint(
+            GenerationOperation operation,
+            UUID leaseToken,
+            GenerationOperationState state,
+            Map<String, Object> data,
+            String failureCode,
+            String failureMessage) {
+        return repository.checkpoint(
+                operation,
+                leaseToken,
+                state,
+                data,
+                failureCode,
+                failureMessage);
+    }
+
+    private <T> T bounded(
+            GenerationOperation operation,
+            Supplier<T> downstreamCall) {
+        return deadlineGuard.call(
+                operation.deadlineAt(), downstreamCall);
+    }
+
+    private void bounded(
+            GenerationOperation operation,
+            Runnable downstreamCall) {
+        deadlineGuard.run(
+                operation.deadlineAt(), downstreamCall);
+    }
+
+    private GenerationOperation required(UUID id, String ownerId) {
+        return repository.findByOwnerAndId(id, ownerId)
+                .orElseThrow(GenerationNotFoundException::new);
+    }
+
+    private GenerationOperationResponse response(
+            GenerationOperation operation) {
+        boolean manual = operation.state()
+                == GenerationOperationState.GENERATION_OUTCOME_UNKNOWN
+                || operation.state()
+                == GenerationOperationState.RECOVERY_REQUIRED
+                || (selectiveWorkflow(operation)
+                        && hasOutputStatus(
+                                operation, "OUTCOME_UNKNOWN")
+                        && !outcomeReconciliationPending(operation));
+        Map<String, Object> downloads = new LinkedHashMap<>();
+        if (operation.data().containsKey("cvDownloads")) {
+            downloads.put("cv", operation.data().get("cvDownloads"));
+        }
+        if (operation.data().containsKey("coverLetterDownloads")) {
+            downloads.put(
+                    "coverLetter",
+                    operation.data().get("coverLetterDownloads"));
+        }
+        return new GenerationOperationResponse(
+                operation.id(),
+                operation.savedJobId(),
+                operation.state(),
+                !manual,
+                manual,
+                uuid(operation.data(), "cvDocumentId"),
+                uuid(operation.data(), "coverLetterDocumentId"),
+                uuid(operation.data(), "applicationId"),
+                downloads,
+                operation.failureCode(),
+                operation.failureMessage(),
+                operation.deadlineAt(),
+                operation.createdAt(),
+                operation.updatedAt(),
+                selectiveWorkflow(operation)
+                        ? requestedOutputs(operation)
+                        : null,
+                selectiveWorkflow(operation)
+                        ? publicOutputResults(operation.data())
+                        : Map.of());
+    }
+
+    private Map<String, GenerationOutputResultResponse> publicOutputResults(
+            Map<String, Object> data) {
+        Map<String, GenerationOutputResultResponse> publicResults =
+                new LinkedHashMap<>();
+        outputResults(data).forEach((output, rawResult) -> {
+            Map<String, Object> result = optionalMap(rawResult);
+            publicResults.put(output, new GenerationOutputResultResponse(
+                    publicOutputStatus(result.get("status")),
+                    result.containsKey("regeneration")
+                            ? booleanValue(result.get("regeneration"))
+                            : null,
+                    uuid(result, "documentId"),
+                    text(result.get("billingOutcome")),
+                    result.containsKey("outcomeReconciliation")
+                            ? optionalMap(result.get("outcomeReconciliation"))
+                            : null,
+                    text(result.get("failureCode")),
+                    text(result.get("failureMessage")),
+                    recoverySummary(result)));
+        });
+        return Map.copyOf(publicResults);
+    }
+
+    private String publicOutputStatus(Object rawStatus) {
+        String status = text(rawStatus);
+        if (status == null) return null;
+        return switch (status) {
+            case "CREDIT_RESERVED" -> "ALLOWANCE_RESERVED";
+            case "STORED_PENDING_CREDIT" -> "STORED_PENDING_ALLOWANCE";
+            case "CREDIT_COMMITTED" -> "ALLOWANCE_COMMITTED";
+            default -> status;
+        };
+    }
+
+    private GenerationRecoverySummaryResponse recoverySummary(
+            Map<String, Object> result) {
+        Map<String, Object> generated = optionalMap(
+                result.get("generation"));
+        Map<String, Object> recovery = optionalMap(
+                generated.get("recovery"));
+        Map<String, Object> audit = optionalMap(generated.get("audit"));
+        Map<String, Object> reconciliation = optionalMap(
+                result.get("outcomeReconciliation"));
+
+        String generationSource = safeEnum(
+                recovery.get("finalSource"),
+                SAFE_GENERATION_SOURCES,
+                generated.isEmpty() ? "NOT_AVAILABLE" : "LLM");
+        boolean repairAttempted = booleanValue(
+                recovery.get("structuralRepairAttempted"));
+        boolean repairSucceeded = booleanValue(
+                recovery.get("structuralRepairSucceeded"));
+        int duplicatesRemoved = boundedCount(
+                recovery.get("duplicateItemsRemoved"), 200);
+        int providerAttempts = boundedCount(
+                firstPresent(
+                        recovery.get("providerAttemptCount"),
+                        audit.get("providerAttemptCount")),
+                2);
+        int automaticRetries = boundedCount(
+                firstPresent(
+                        recovery.get("automaticRetryCount"),
+                        audit.get("automaticRetryCount")),
+                1);
+
+        String retryReason = safeEnum(
+                firstPresent(
+                        recovery.get("retryReason"),
+                        audit.get("retryReason")),
+                Set.of("RATE_LIMITED"),
+                null);
+        String reconciliationStatus = safeEnum(
+                reconciliation.get("status"),
+                SAFE_RECONCILIATION_STATUSES,
+                "NOT_REQUIRED");
+        int reconciliationAttempts = boundedCount(
+                reconciliation.get("attempts"),
+                maxOutcomeReconciliationAttempts);
+        String reconciliationSource = safeEnum(
+                reconciliation.get("source"),
+                SAFE_RECONCILIATION_SOURCES,
+                null);
+        String fallbackReason = safeFallbackReason(
+                recovery.get("fallbackReason"));
+        if (fallbackReason == null
+                && "DETERMINISTIC_FALLBACK".equals(
+                        reconciliationSource)) {
+            fallbackReason = "RECONCILIATION_EXHAUSTED";
+        }
+
+        String billingStatus = safeEnum(
+                result.get("billingOutcome"),
+                SAFE_BILLING_OUTCOMES,
+                inferredBillingStatus(result));
+        return new GenerationRecoverySummaryResponse(
+                generationSource,
+                repairSucceeded ? "APPLIED"
+                        : repairAttempted ? "CHECKED" : "NOT_REQUIRED",
+                duplicatesRemoved,
+                providerAttempts,
+                automaticRetries,
+                automaticRetries > 0,
+                retryReason,
+                booleanValue(recovery.get("retainedResponseReplay"))
+                        || "RETAINED_RESPONSE".equals(
+                                reconciliationSource),
+                "DETERMINISTIC_FALLBACK".equals(generationSource)
+                        || booleanValue(recovery.get("fallbackUsed")),
+                fallbackReason,
+                reconciliationStatus,
+                reconciliationAttempts,
+                reconciliationSource,
+                billingStatus,
+                "COMMITTED".equals(billingStatus),
+                billingStatus.startsWith("RELEASED_"));
+    }
+
+    private Long optionalLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        throw new IllegalStateException(
+                "A downstream response contains an invalid token count.");
+    }
+
+    private Object firstPresent(Object preferred, Object fallback) {
+        return preferred == null ? fallback : preferred;
+    }
+
+    private boolean booleanValue(Object value) {
+        return value instanceof Boolean flag && flag;
+    }
+
+    private int boundedCount(Object value, int maximum) {
+        if (!(value instanceof Number number)) {
+            return 0;
+        }
+        long count = number.longValue();
+        return count < 0 || count > maximum ? 0 : (int) count;
+    }
+
+    private String safeEnum(
+            Object value,
+            Set<String> allowed,
+            String fallback) {
+        String candidate = value instanceof String text ? text : null;
+        return candidate != null && allowed.contains(candidate)
+                ? candidate : fallback;
+    }
+
+    private String safeFallbackReason(Object value) {
+        if (!(value instanceof String reason)) {
+            return null;
+        }
+        if ("PROVIDER_FAILURE".equals(reason)
+                || "EMPTY_PROVIDER_RESPONSE".equals(reason)
+                || "RECONCILIATION_EXHAUSTED".equals(reason)) {
+            return reason;
+        }
+        if (reason.startsWith("MODEL_OUTPUT_REJECTED_")) {
+            return "MODEL_OUTPUT_REJECTED";
+        }
+        if (reason.startsWith("RETAINED_MODEL_OUTPUT_REJECTED_")) {
+            return "RETAINED_MODEL_OUTPUT_REJECTED";
+        }
+        return null;
+    }
+
+    private String inferredBillingStatus(Map<String, Object> result) {
+        if (uuid(result, "reservationId") == null) {
+            return "NOT_RESERVED";
+        }
+        if ("OUTCOME_UNKNOWN".equals(text(result.get("status")))) {
+            return "RESERVED_PENDING_RECONCILIATION";
+        }
+        return "RESERVED";
+    }
+
+    private void copyIfPresent(
+            Map<String, Object> source,
+            Map<String, Object> target,
+            String key) {
+        if (source.containsKey(key)) {
+            target.put(key, source.get(key));
+        }
+    }
+
+    private Map<String, Object> data(
+            GenerationOperation operation) {
+        return new LinkedHashMap<>(operation.data());
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> map(Object value, String label) {
+        if (value instanceof Map<?, ?> source) {
+            return new LinkedHashMap<>(
+                    (Map<String, Object>) source);
+        }
+        throw new IllegalStateException(
+                "Missing or invalid " + label + ".");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> optionalMap(Object value) {
+        if (value instanceof Map<?, ?> source) {
+            return new LinkedHashMap<>(
+                    (Map<String, Object>) source);
+        }
+        return Map.of();
+    }
+
+    private List<?> list(Object value) {
+        return value instanceof List<?> values
+                ? values
+                : List.of();
+    }
+
+    private List<String> boundedStrings(
+            List<?> values,
+            int maximumItems,
+            int maximumLength) {
+        List<String> result = new ArrayList<>();
+        for (Object value : values) {
+            String text = text(value);
+            if (text != null) {
+                result.add(bounded(text, maximumLength));
+            }
+            if (result.size() == maximumItems) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private List<String> relevantProfileSkills(
+            List<?> values,
+            Map<String, Object> job) {
+        List<String> titleMatches = new ArrayList<>();
+        List<String> descriptionMatches = new ArrayList<>();
+        List<String> remaining = new ArrayList<>();
+        HashSet<String> seen = new HashSet<>();
+        String title = skillMatchText(job.get("title"));
+        String description = skillMatchText(job.get("description"));
+
+        for (Object value : values) {
+            String skill = text(value);
+            if (skill == null) {
+                continue;
+            }
+            skill = bounded(skill, 100);
+            String matchKey = skillMatchText(skill);
+            if (matchKey.isEmpty() || !seen.add(matchKey)) {
+                continue;
+            }
+            if (containsSkill(title, matchKey)) {
+                titleMatches.add(skill);
+            } else if (containsSkill(description, matchKey)) {
+                descriptionMatches.add(skill);
+            } else {
+                remaining.add(skill);
+            }
+            if (seen.size() == 100) {
+                break;
+            }
+        }
+
+        List<String> selected = new ArrayList<>(40);
+        appendUntilFull(selected, titleMatches, 40);
+        appendUntilFull(selected, descriptionMatches, 40);
+        appendUntilFull(selected, remaining, 40);
+        return List.copyOf(selected);
+    }
+
+    private String skillMatchText(Object value) {
+        String source = text(value);
+        if (source == null) {
+            return "";
+        }
+        String separated = SKILL_MATCH_SEPARATOR.matcher(
+                        source.toLowerCase(Locale.ROOT))
+                .replaceAll(" ");
+        return SKILL_MATCH_WHITESPACE.matcher(
+                        SKILL_MATCH_TERMINAL_PERIOD.matcher(separated)
+                                .replaceAll("")
+                                .trim())
+                .replaceAll(" ");
+    }
+
+    private boolean containsSkill(String haystack, String skill) {
+        return !haystack.isEmpty()
+                && !skill.isEmpty()
+                && (" " + haystack + " ").contains(" " + skill + " ");
+    }
+
+    private void appendUntilFull(
+            List<String> target,
+            List<String> candidates,
+            int maximumItems) {
+        for (String candidate : candidates) {
+            if (target.size() == maximumItems) {
+                return;
+            }
+            target.add(candidate);
+        }
+    }
+
+    private String locationText(Object value) {
+        if (value instanceof Map<?, ?> location) {
+            return firstText(
+                    location.get("displayName"),
+                    location.get("formatted"),
+                    location.get("postcode"),
+                    location.get("town"));
+        }
+        return text(value);
+    }
+
+    private String requiredJobText(
+            Map<String, Object> job,
+            String first,
+            String second) {
+        String value = firstText(job.get(first), job.get(second));
+        if (value == null) {
+            throw new IllegalStateException(
+                    "Saved Job is missing " + first + ".");
+        }
+        return value;
+    }
+
+    private String requiredText(
+            Map<String, Object> values,
+            String key) {
+        String value = text(values.get(key));
+        if (value == null) {
+            throw new IllegalStateException(
+                    "A downstream response is missing " + key + ".");
+        }
+        return value;
+    }
+
+    private Number number(
+            Map<String, Object> values,
+            String key) {
+        Object value = values.get(key);
+        if (value instanceof Number number) {
+            return number;
+        }
+        throw new IllegalStateException(
+                "A downstream response is missing " + key + ".");
+    }
+
+    private UUID requiredUuid(
+            Map<String, Object> values,
+            String key) {
+        UUID value = uuid(values, key);
+        if (value == null) {
+            throw new IllegalStateException(
+                    "A downstream response is missing " + key + ".");
+        }
+        return value;
+    }
+
+    private UUID uuid(
+            Map<String, Object> values,
+            String key) {
+        Object value = values.get(key);
+        if (value instanceof UUID uuid) {
+            return uuid;
+        }
+        String text = text(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(text);
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalStateException(
+                    "A downstream response contains an invalid "
+                            + key
+                            + ".");
+        }
+    }
+
+    private String firstText(Object... values) {
+        for (Object value : values) {
+            String text = text(value);
+            if (text != null) {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    private String text(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = Objects.toString(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private void putIfText(
+            Map<String, Object> target,
+            String key,
+            Object value) {
+        String text = text(value);
+        if (text != null) {
+            target.put(key, text);
+        }
+    }
+
+    private void putBounded(
+            Map<String, Object> target,
+            String key,
+            Object value,
+            int maximumLength) {
+        String text = text(value);
+        if (text != null) {
+            target.put(key, bounded(text, maximumLength));
+        }
+    }
+
+    private String bounded(String value, int maximumLength) {
+        return value.length() <= maximumLength
+                ? value
+                : value.substring(0, maximumLength);
+    }
+
+    private String sha256Json(Object value) {
+        try {
+            return sha256(objectMapper.writeValueAsString(value));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException(
+                    "Snapshot could not be canonicalized.", exception);
+        }
+    }
+
+    private String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(
+                    "SHA-256 is unavailable.", exception);
+        }
+    }
+
+    private boolean beforeGeneration(
+            GenerationOperationState state) {
+        return state == GenerationOperationState.CREATED
+                || state == GenerationOperationState.SNAPSHOTS_RESOLVED
+                || state == GenerationOperationState.APPLICATION_SAVED
+                || state == GenerationOperationState.OUTPUT_READY
+                || state == GenerationOperationState.ESTIMATED
+                || state == GenerationOperationState.CREDIT_RESERVED;
+    }
+
+    private void requireCancellable(GenerationOperation operation) {
+        if (!beforeGeneration(operation.state())
+                || hasIrreversibleGenerationEvidence(operation)
+                || (selectiveWorkflow(operation)
+                        && !requestedOutputs(operation).stream()
+                                .map(output -> text(outputResult(
+                                        operation.data(), output).get("status")))
+                                .allMatch(status -> List.of(
+                                                "REQUESTED",
+                                                "READY",
+                                                "ESTIMATED",
+                                                "CREDIT_RESERVED")
+                                        .contains(status)))) {
+            throw new GenerationConflictException(
+                    "This generation operation can no longer be cancelled safely.");
+        }
+    }
+
+    private boolean hasIrreversibleGenerationEvidence(
+            GenerationOperation operation) {
+        Map<String, Object> data = operation.data();
+        return data.containsKey("generation")
+                || data.containsKey("generationCompletedAt")
+                || data.containsKey("cvDocumentId")
+                || data.containsKey("coverLetterDocumentId")
+                || data.containsKey("approvalRequest");
+    }
+
+    private boolean approvalInProgress(
+            GenerationOperation operation) {
+        GenerationOperationState state = operation.state();
+        return (state == GenerationOperationState.AWAITING_APPROVAL
+                        && operation.data().containsKey(
+                                "approvalRequest"))
+                || state == GenerationOperationState.APPROVED
+                || state
+                        == GenerationOperationState.CV_EXPORT_IN_PROGRESS
+                || state == GenerationOperationState.CV_EXPORTED
+                || state
+                        == GenerationOperationState
+                                .COVER_LETTER_EXPORT_IN_PROGRESS
+                || state == GenerationOperationState.EXPORTED;
+    }
+
+    private String correlationId(GenerationOperation operation) {
+        String stored = text(operation.data().get("correlationId"));
+        return CorrelationIds.isValid(stored)
+                ? stored
+                : CorrelationIds.currentOrNew();
+    }
+
+    private void requireOwner(String ownerId) {
+        if (ownerId == null
+                || ownerId.isBlank()
+                || ownerId.length() > 128
+                || ownerId.indexOf(',') >= 0
+                || ownerId.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(
+                    "A valid authenticated owner is required.");
+        }
+    }
+
+    private void requireAuthorization(String authorization) {
+        if (authorization == null
+                || !authorization.startsWith("Bearer ")
+                || authorization.length() <= "Bearer ".length()) {
+            throw new IllegalArgumentException(
+                    "The validated bearer token is required.");
+        }
+    }
+
+    private void requireIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null
+                || !IDEMPOTENCY_KEY.matcher(idempotencyKey).matches()) {
+            throw new IllegalArgumentException(
+                    "Idempotency-Key must use 1-128 safe characters.");
+        }
+    }
+
+    private static Duration requirePositive(
+            Duration value,
+            String label) {
+        if (value == null || value.isZero() || value.isNegative()) {
+            throw new IllegalStateException(
+                    "Document generation "
+                            + label
+                            + " must be positive.");
+        }
+        return value;
+    }
+
+    private static final class GenerationSourceException
+            extends RuntimeException {
+        private final String code;
+        private final boolean retryable;
+
+        private GenerationSourceException(
+                String code,
+                String message,
+                boolean retryable) {
+            super(message);
+            this.code = code;
+            this.retryable = retryable;
+        }
+
+        private String code() {
+            return code;
+        }
+
+        private boolean retryable() {
+            return retryable;
+        }
+    }
+}

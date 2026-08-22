@@ -1,0 +1,2452 @@
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "Jobseeker Copilot - Application Tracker API",
+    "description" : "Service for tracking job applications, their generated documents, and application status.\n\nThis service validates and stores exact approved Document Store version\nreferences. Current editable selections are separate from the immutable\nversions and explicit omissions frozen only when an application\nfirst enters APPLIED.\nAtomic document-selection commands require explicit SELECTED or OMITTED\nstate for both optional slots, an expected record version and a durable\nowner-scoped idempotency key.\nApplying requires expectedVersion and Idempotency-Key, re-verifies\nevery selected exact version, and commits both frozen slot states,\ntimestamps and content-free events atomically.\nDurable reconciliation verifies both reference sets against Document Store,\nrepairs only missing immutable metadata, and reports conflicts without\noverwriting historical evidence.\nOrdered Store lifecycle projections mark exact references archived,\ndeleted or purged. Purge keeps family/version identity and association\nhistory while scrubbing complete hashes and evidence details.\nIt does NOT store document contents.\n\nApplicationStatus values:\n- SAVED - Job has been saved to the claimant's applications\n- DOCUMENTS_GENERATED - Documents have been generated for the job\n- APPLIED - Application has been submitted\n- INTERVIEW - Interview stage\n- UNSUCCESSFUL - Application was unsuccessful\n- OFFER - Offer received\n- ACCEPTED - Offer accepted\n- REJECTED_BY_USER - Offer or opportunity rejected by the user\n- WITHDRAWN - User withdrew their application\n",
+    "contact" : {
+      "name" : "Jobseeker Copilot"
+    },
+    "license" : {
+      "name" : "Proprietary and confidential"
+    },
+    "version" : "4.7.0"
+  },
+  "servers" : [ {
+    "url" : "http://localhost:8088",
+    "description" : "Local development"
+  } ],
+  "tags" : [ {
+    "name" : "Application Records",
+    "description" : "Endpoints for tracking job applications"
+  } ],
+  "paths" : {
+    "/api/v1/applications/{id}/document-selections" : {
+      "put" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Atomically save the complete optional document selection",
+        "description" : "Replaces the desired CV and cover-letter slots together while the\napplication is SAVED or DOCUMENTS_GENERATED. Both slot objects are\nmandatory and must explicitly say SELECTED or OMITTED, preventing a\npartial rolling-deploy payload from being interpreted as a clear.\nExact approved and available versions are verified against Document\nStore. Family current is recommendation metadata only.\n",
+        "operationId" : "saveDocumentSelections",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "description" : "Required owner-scoped retry key, fingerprinted to the complete payload",
+          "required" : true,
+          "schema" : {
+            "maxLength" : 128,
+            "minLength" : 1,
+            "pattern" : "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "type" : "string"
+          },
+          "example" : "save-documents-application-123-attempt-1"
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SaveDocumentSelectionsRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Stale record version or conflicting idempotency-key reuse",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "oneOf" : [ {
+                    "$ref" : "#/components/schemas/ApplicationVersionConflictResponse"
+                  }, {
+                    "$ref" : "#/components/schemas/ErrorResponse"
+                  } ]
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid command, status or document reference",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Selection saved or exact command replayed",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Document reference validation unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/document/{documentId}/availability" : {
+      "put" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Project exact document availability into application history",
+        "description" : "Applies an ordered owner-scoped lifecycle projection. PURGED is terminal and scrubs complete hashes and evidence details while retaining exact family/version identity.",
+        "operationId" : "updateDocumentAvailability",
+        "parameters" : [ {
+          "name" : "documentId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for the approved producer identity",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateDocumentAvailabilityRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Availability projection applied or replayed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid or stale lifecycle projection",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid service identity",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Service identity lacks producer authority",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentAvailabilityResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/internal/system-data/v1/application-scenarios" : {
+      "post" : {
+        "tags" : [ "System Data Applications" ],
+        "operationId" : "seedApplications",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/SystemDataApplicationSeedRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications" : {
+      "post" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Create or replay an application record",
+        "description" : "Creates an authoritative generated, manual or external application.\nRepeating the same owner-scoped Idempotency-Key and payload returns\nthe existing record.\n",
+        "operationId" : "createApplication",
+        "parameters" : [ {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "description" : "Owner-scoped retry key. Legacy producers without a key receive deterministic request-based idempotency.",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          },
+          "example" : "apply-job-456-attempt-1"
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateApplicationRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Existing application replayed for the same idempotency key",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation error or ineligible document reference",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "201" : {
+            "description" : "Application record created successfully",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Idempotency key reuse or duplicate canonical application",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Document reference validation unavailable",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/withdraw-generated" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get generated-application withdrawal recovery status",
+        "operationId" : "generatedWithdrawalStatus",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Withdrawal operation not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Durable withdrawal state",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      },
+      "post" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Withdraw generated application",
+        "description" : "Starts or resumes durable generated-document cleanup; the application is removed only after cleanup completes",
+        "operationId" : "withdrawGeneratedApplication",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the generated-only application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "202" : {
+            "description" : "Withdrawal accepted and awaiting recoverable document cleanup",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Application cannot be withdrawn because it has already progressed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Generated application withdrawn",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/WithdrawGeneratedApplicationResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-replacements" : {
+      "post" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Start or resume a durable document replacement",
+        "description" : "Reserves one Tracker-owned operation before any replacement document or file is written",
+        "operationId" : "beginDocumentReplacement",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/BeginDocumentReplacementRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Existing replacement operation replayed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Application is locked or request differs from active operation",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          },
+          "202" : {
+            "description" : "Replacement operation accepted",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/status" : {
+      "patch" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Update application status",
+        "description" : "Bearer users follow the public lifecycle matrix. APPLIED requires expectedVersion and Idempotency-Key and atomically freezes exact selections and omissions. Approved producers are restricted to SAVED-to-DOCUMENTS_GENERATED and idempotent recovery of that completed bridge.",
+        "operationId" : "updateStatus",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "description" : "Required owner-scoped retry key when status is APPLIED",
+          "required" : false,
+          "schema" : {
+            "maxLength" : 128,
+            "minLength" : 1,
+            "pattern" : "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateStatusRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "400" : {
+            "description" : "Invalid status value",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid authentication",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Authenticated identity is not permitted to perform the requested transition",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Invalid lifecycle transition or stale/concurrent record version",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Status updated successfully",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-replacements/{operationId}/replacement-document" : {
+      "patch" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Register the Store document created for a replacement",
+        "operationId" : "registerReplacementDocument",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "operationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterReplacementDocumentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-replacements/{operationId}/recovery-required" : {
+      "patch" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Record a recoverable replacement dependency failure",
+        "operationId" : "markDocumentReplacementRecoveryRequired",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "operationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-replacements/{operationId}/complete" : {
+      "patch" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Verify and commit a durable document replacement",
+        "operationId" : "completeDocumentReplacement",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "operationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "503" : {
+            "description" : "Document reference validation unavailable",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Replacement committed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Workflow or application state mismatch",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Replacement operation not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-reference" : {
+      "patch" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Attach or replace a current approved document reference before application use",
+        "description" : "Legacy rolling-deploy endpoint for one selected slot. New clients must use the atomic document-selections command.",
+        "operationId" : "updateDocumentReference",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateDocumentReferenceRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Current reference attached or replaced",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Reference is invalid or already frozen",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Document reference validation unavailable",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "deprecated" : true,
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/internal/system-data/v1/application-scenarios/{scenarioId}/owners/{userId}" : {
+      "get" : {
+        "tags" : [ "System Data Applications" ],
+        "operationId" : "verifyApplications",
+        "parameters" : [ {
+          "name" : "scenarioId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "[a-z0-9][a-z0-9-]{1,54}-v[1-9][0-9]{0,6}",
+            "type" : "string"
+          }
+        }, {
+          "name" : "userId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      },
+      "delete" : {
+        "tags" : [ "System Data Applications" ],
+        "operationId" : "resetApplications",
+        "parameters" : [ {
+          "name" : "scenarioId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "pattern" : "[a-z0-9][a-z0-9-]{1,54}-v[1-9][0-9]{0,6}",
+            "type" : "string"
+          }
+        }, {
+          "name" : "userId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SystemDataResult"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "environmentDataToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get application by ID",
+        "operationId" : "getApplicationById",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Application record found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      },
+      "delete" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Delete an application record",
+        "operationId" : "deleteApplication",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record to delete",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "204" : {
+            "description" : "Application record deleted successfully"
+          },
+          "404" : {
+            "description" : "Application record not found"
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/history" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get immutable application activity history",
+        "description" : "Returns an owner-scoped chronological page and whether its latest event reconciles with current application state.",
+        "operationId" : "getApplicationHistory",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "page",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "minimum" : 0,
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 0
+          }
+        }, {
+          "name" : "size",
+          "in" : "query",
+          "required" : false,
+          "schema" : {
+            "maximum" : 100,
+            "minimum" : 1,
+            "type" : "integer",
+            "format" : "int32",
+            "default" : 50
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Ordered activity page returned",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationHistoryResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-replacements/{operationId}" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get durable document-replacement status",
+        "operationId" : "documentReplacementStatus",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "operationId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReplacementWorkflowResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/{id}/document-reference-reconciliation" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get durable document-reference reconciliation state",
+        "description" : "Reports whether current and frozen application references are healthy, safely repaired, invalid or temporarily unverifiable",
+        "operationId" : "getDocumentReferenceReconciliation",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "description" : "UUID of the application record",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200" : {
+            "description" : "Owner-scoped reconciliation state returned",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentReferenceReconciliationResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/user/{userId}" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get applications by user ID",
+        "operationId" : "getApplicationsForUser",
+        "parameters" : [ {
+          "name" : "userId",
+          "in" : "path",
+          "description" : "User ID to retrieve applications for",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Owner-scoped application records",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing, invalid or ambiguous authentication",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Authenticated identity lacks reader permission",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/SecurityErrorResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Bearer subject and requested owner do not match",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/document/{documentId}" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get application by generated document ID",
+        "operationId" : "getApplicationByDocumentId",
+        "parameters" : [ {
+          "name" : "documentId",
+          "in" : "path",
+          "description" : "Generated CV or cover letter document ID",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for approved service identities",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Application record found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Application record not found",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationRecordResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        }, {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/document/{documentId}/associations" : {
+      "get" : {
+        "tags" : [ "Application Records" ],
+        "summary" : "Get content-free associations for one exact document version",
+        "description" : "Returns every owner-scoped draft selection and frozen use. An empty list is authoritative and cross-owner identifiers remain non-enumerable.",
+        "operationId" : "getDocumentAssociations",
+        "parameters" : [ {
+          "name" : "documentId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }, {
+          "name" : "X-Application-Owner",
+          "in" : "header",
+          "description" : "Required owner context for the approved reader identity",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Authoritative association snapshot",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentApplicationAssociationsResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Service identity lacks association-read authority",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentApplicationAssociationsResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid service identity",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/DocumentApplicationAssociationsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "serviceToken" : [ ]
+        } ]
+      }
+    },
+    "/api/v1/applications/account-export" : {
+      "get" : {
+        "tags" : [ "application-account-lifecycle-controller" ],
+        "summary" : "Export current owner's application data",
+        "operationId" : "export",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApplicationPersonalDataExport"
+                }
+              }
+            }
+          }
+        },
+        "security" : [ {
+          "bearerAuth" : [ ]
+        } ]
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "DocumentSelectionCommand" : {
+        "required" : [ "state" ],
+        "type" : "object",
+        "properties" : {
+          "state" : {
+            "type" : "string",
+            "enum" : [ "SELECTED", "OMITTED" ]
+          },
+          "documentId" : {
+            "type" : "string",
+            "description" : "Exact approved Document Store version. Required only when state is SELECTED.",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          }
+        },
+        "description" : "Explicit desired state for one optional application document slot. Omission of this object is never interpreted as clearing the slot."
+      },
+      "SaveDocumentSelectionsRequest" : {
+        "required" : [ "coverLetterSelection", "cvSelection", "expectedVersion" ],
+        "type" : "object",
+        "properties" : {
+          "cvSelection" : {
+            "$ref" : "#/components/schemas/DocumentSelectionCommand"
+          },
+          "coverLetterSelection" : {
+            "$ref" : "#/components/schemas/DocumentSelectionCommand"
+          },
+          "expectedVersion" : {
+            "minimum" : 0,
+            "type" : "integer",
+            "description" : "Application record version observed by the client.",
+            "format" : "int64",
+            "example" : 3
+          }
+        },
+        "description" : "Complete desired CV and cover-letter selection. Both slot objects are required so older or partial clients cannot accidentally clear a selection."
+      },
+      "ErrorResponse" : {
+        "required" : [ "message", "status", "timestamp" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "errors" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "ApplicationRecordResponse" : {
+        "required" : [ "canonicalJobId", "companyName", "createdAt", "externalJobId", "id", "jobId", "jobTitle", "provenance", "provider", "status", "updatedAt", "userId", "version" ],
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "description" : "Unique identifier of the application record",
+            "format" : "uuid",
+            "example" : "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "userId" : {
+            "type" : "string",
+            "description" : "ID of the user who owns this application",
+            "example" : "user-123"
+          },
+          "jobId" : {
+            "type" : "string",
+            "description" : "ID of the job being applied to",
+            "example" : "job-456"
+          },
+          "canonicalJobId" : {
+            "type" : "string",
+            "description" : "Stable cross-provider canonical job identifier",
+            "example" : "job_abc123"
+          },
+          "provider" : {
+            "type" : "string",
+            "description" : "Job provider name",
+            "example" : "REED"
+          },
+          "externalJobId" : {
+            "type" : "string",
+            "description" : "Provider-specific job identifier",
+            "example" : "123456"
+          },
+          "provenance" : {
+            "type" : "string",
+            "description" : "How the application entered the tracker",
+            "example" : "MANUAL",
+            "enum" : [ "GENERATED", "MANUAL", "EXTERNAL" ]
+          },
+          "jobTitle" : {
+            "type" : "string",
+            "description" : "Title of the job",
+            "example" : "Java Developer"
+          },
+          "companyName" : {
+            "type" : "string",
+            "description" : "Name of the company",
+            "example" : "Example Ltd"
+          },
+          "location" : {
+            "type" : "string",
+            "description" : "Job location",
+            "example" : "Dorking"
+          },
+          "cvDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated CV document (reference only)",
+            "example" : "cv-123"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string",
+            "description" : "ID of the generated cover letter document (reference only)",
+            "example" : "cl-456"
+          },
+          "cvDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "coverLetterDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "applicationUsedCvDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "applicationUsedCvState" : {
+            "type" : "string",
+            "description" : "Whether the frozen CV slot is selected, explicitly omitted or unknown legacy state",
+            "enum" : [ "UNKNOWN", "SELECTED", "OMITTED" ]
+          },
+          "applicationUsedCoverLetterDocumentReference" : {
+            "$ref" : "#/components/schemas/DocumentVersionReference"
+          },
+          "applicationUsedCoverLetterState" : {
+            "type" : "string",
+            "description" : "Whether the frozen cover-letter slot is selected, explicitly omitted or unknown legacy state",
+            "enum" : [ "UNKNOWN", "SELECTED", "OMITTED" ]
+          },
+          "applicationUsedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when application-used references were frozen",
+            "format" : "date-time"
+          },
+          "status" : {
+            "type" : "string",
+            "description" : "Current application status",
+            "example" : "DOCUMENTS_GENERATED",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "createdAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the record was created",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the record was last updated",
+            "format" : "date-time"
+          },
+          "appliedAt" : {
+            "type" : "string",
+            "description" : "Timestamp when the application was submitted (null if not yet applied)",
+            "format" : "date-time"
+          },
+          "version" : {
+            "type" : "integer",
+            "description" : "Monotonic record version for optimistic concurrency",
+            "format" : "int64",
+            "example" : 3
+          }
+        },
+        "description" : "Response containing application record details"
+      },
+      "ApplicationVersionConflictResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "currentApplication" : {
+            "$ref" : "#/components/schemas/ApplicationRecordResponse"
+          }
+        },
+        "description" : "Stale application command response with the authoritative current record"
+      },
+      "DocumentEvidenceProvenance" : {
+        "type" : "object",
+        "properties" : {
+          "profileRevisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "profileContentDigest" : {
+            "type" : "string"
+          },
+          "evidenceSnapshotId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "evidenceSnapshotDigest" : {
+            "type" : "string"
+          },
+          "evidenceRevisions" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/EvidenceRevisionReference"
+            }
+          },
+          "sectionOrder" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string",
+              "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
+            }
+          },
+          "claimLedger" : {
+            "$ref" : "#/components/schemas/ValidatedClaimLedger"
+          },
+          "generatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "description" : "Immutable profile, evidence-snapshot and claim provenance\nretained with an exact document version.\n"
+      },
+      "DocumentVersionReference" : {
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "documentFamilyId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "jobId" : {
+            "type" : "string"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "version" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "contentSha256" : {
+            "type" : "string"
+          },
+          "evidenceProvenance" : {
+            "$ref" : "#/components/schemas/DocumentEvidenceProvenance"
+          },
+          "groundingState" : {
+            "type" : "string",
+            "enum" : [ "AI_GENERATED_EVIDENCE_VALIDATED", "USER_EDITED_REVIEW_REQUIRED", "USER_EDITED_REVALIDATED", "LEGACY_UNSPECIFIED" ]
+          },
+          "availability" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
+          },
+          "unavailableReason" : {
+            "type" : "string"
+          },
+          "unavailableAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "parentDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "parentDocumentVersion" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        },
+        "description" : "Canonical immutable Document Store version descriptor"
+      },
+      "EvidenceRevisionReference" : {
+        "type" : "object",
+        "properties" : {
+          "entryId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "revisionNumber" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "category" : {
+            "type" : "string",
+            "enum" : [ "EMPLOYMENT", "EDUCATION", "QUALIFICATION_TRAINING", "PROJECT", "VOLUNTEERING", "FREELANCE", "ACHIEVEMENT", "CAREER_BREAK", "OTHER" ]
+          },
+          "contentDigest" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Exact immutable evidence revision selected for a document"
+      },
+      "ValidatedClaimLedger" : {
+        "type" : "object",
+        "properties" : {
+          "ledgerId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "ledgerSha256" : {
+            "type" : "string"
+          },
+          "policyVersion" : {
+            "type" : "string"
+          },
+          "parserVersion" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Non-sensitive identity and digest of the exact claim ledger\naccepted by generation validation.\n"
+      },
+      "UpdateDocumentAvailabilityRequest" : {
+        "required" : [ "availability", "occurredAt" ],
+        "type" : "object",
+        "properties" : {
+          "availability" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
+          },
+          "unavailableReason" : {
+            "type" : "string"
+          },
+          "occurredAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "DocumentAvailabilityResponse" : {
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "availability" : {
+            "type" : "string",
+            "enum" : [ "AVAILABLE", "ARCHIVED", "DELETED", "PURGED" ]
+          },
+          "unavailableReason" : {
+            "type" : "string"
+          },
+          "unavailableAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "SystemDataApplicationSeedRecord" : {
+        "required" : [ "companyName", "coverLetterDocumentContentSha256", "coverLetterDocumentFamilyId", "coverLetterDocumentId", "coverLetterDocumentVersion", "createdAt", "cvDocumentContentSha256", "cvDocumentFamilyId", "cvDocumentId", "cvDocumentVersion", "id", "jobId", "jobTitle", "status", "updatedAt" ],
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "jobId" : {
+            "maxLength" : 200,
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "canonicalJobId" : {
+            "maxLength" : 200,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "provider" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "externalJobId" : {
+            "maxLength" : 200,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "jobTitle" : {
+            "maxLength" : 300,
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "companyName" : {
+            "maxLength" : 300,
+            "minLength" : 1,
+            "type" : "string"
+          },
+          "location" : {
+            "maxLength" : 300,
+            "minLength" : 0,
+            "type" : "string"
+          },
+          "cvDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "cvDocumentFamilyId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "cvDocumentVersion" : {
+            "minimum" : 1,
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "cvDocumentContentSha256" : {
+            "pattern" : "[a-f0-9]{64}",
+            "type" : "string"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "coverLetterDocumentFamilyId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "coverLetterDocumentVersion" : {
+            "minimum" : 1,
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "coverLetterDocumentContentSha256" : {
+            "pattern" : "[a-f0-9]{64}",
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "appliedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        },
+        "additionalProperties" : false,
+        "description" : "Constrained application fixture record; ownership and scenario come from the request envelope"
+      },
+      "SystemDataApplicationSeedRequest" : {
+        "required" : [ "applications", "scenarioId", "schemaVersion", "userId" ],
+        "type" : "object",
+        "properties" : {
+          "schemaVersion" : {
+            "pattern" : "2\\.0\\.0",
+            "type" : "string",
+            "example" : "2.0.0"
+          },
+          "scenarioId" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "pattern" : "[a-z0-9][a-z0-9-]{1,54}-v[1-9][0-9]{0,6}",
+            "type" : "string",
+            "example" : "demo-ready-v1"
+          },
+          "userId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "applications" : {
+            "maxItems" : 100,
+            "minItems" : 0,
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/SystemDataApplicationSeedRecord"
+            }
+          }
+        },
+        "additionalProperties" : false,
+        "description" : "Versioned, owner- and scenario-scoped Application Tracker fixture request"
+      },
+      "SystemDataResult" : {
+        "type" : "object",
+        "properties" : {
+          "service" : {
+            "type" : "string"
+          },
+          "operation" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "recordsAffected" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "activeEnvironment" : {
+            "type" : "string"
+          },
+          "details" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : "object"
+            }
+          },
+          "warnings" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
+      "CreateApplicationRequest" : {
+        "required" : [ "companyName", "jobId", "jobTitle", "userId" ],
+        "type" : "object",
+        "properties" : {
+          "userId" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "ID of the user creating the application",
+            "example" : "user-123"
+          },
+          "jobId" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "ID of the job being applied to",
+            "example" : "job-456"
+          },
+          "canonicalJobId" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "Stable cross-provider canonical job identifier",
+            "example" : "job_abc123"
+          },
+          "provider" : {
+            "maxLength" : 64,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "Job provider name",
+            "example" : "REED"
+          },
+          "externalJobId" : {
+            "maxLength" : 255,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "Provider-specific job identifier",
+            "example" : "123456"
+          },
+          "jobTitle" : {
+            "maxLength" : 300,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "Title of the job",
+            "example" : "Java Developer"
+          },
+          "companyName" : {
+            "maxLength" : 300,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "Name of the company offering the job",
+            "example" : "Example Ltd"
+          },
+          "location" : {
+            "maxLength" : 300,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "Job location",
+            "example" : "Dorking"
+          },
+          "cvDocumentId" : {
+            "type" : "string",
+            "description" : "Approved CV version ID in Document Store; optional for manual/external applications",
+            "format" : "uuid"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string",
+            "description" : "Approved cover-letter version ID in Document Store; optional for manual/external applications",
+            "format" : "uuid"
+          },
+          "provenance" : {
+            "type" : "string",
+            "description" : "How the application entered the tracker. Defaults to GENERATED for backwards-compatible producers.",
+            "example" : "MANUAL",
+            "enum" : [ "GENERATED", "MANUAL", "EXTERNAL" ]
+          },
+          "initialStatus" : {
+            "type" : "string",
+            "description" : "Initial lifecycle state. GENERATED may start as DOCUMENTS_GENERATED or APPLIED; MANUAL and EXTERNAL default to APPLIED and may explicitly start as SAVED.",
+            "example" : "SAVED",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          }
+        },
+        "description" : "Request to create a new application record"
+      },
+      "WithdrawGeneratedApplicationResponse" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "description" : "Application record ID that was withdrawn",
+            "format" : "uuid"
+          },
+          "status" : {
+            "type" : "string",
+            "description" : "Status the job should show after withdrawal",
+            "example" : "NEW"
+          },
+          "withdrawn" : {
+            "type" : "boolean",
+            "description" : "Whether the generated application was withdrawn",
+            "example" : true
+          },
+          "operationId" : {
+            "type" : "string",
+            "description" : "Durable workflow operation ID",
+            "format" : "uuid"
+          },
+          "operationStatus" : {
+            "type" : "string",
+            "description" : "Durable workflow state",
+            "enum" : [ "PENDING", "RUNNING", "RECOVERY_REQUIRED", "COMPLETED" ]
+          },
+          "retryable" : {
+            "type" : "boolean",
+            "description" : "Whether the incomplete workflow can be retried automatically"
+          },
+          "recoveryCode" : {
+            "type" : "string",
+            "description" : "Stable non-sensitive recovery reason when work is incomplete"
+          },
+          "completedAt" : {
+            "type" : "string",
+            "description" : "UTC completion time when document cleanup and withdrawal committed",
+            "format" : "date-time"
+          },
+          "message" : {
+            "type" : "string",
+            "description" : "Human-readable withdrawal result"
+          }
+        },
+        "description" : "Response returned when generated documents are withdrawn before applying"
+      },
+      "BeginDocumentReplacementRequest" : {
+        "required" : [ "documentType", "requestSha256" ],
+        "type" : "object",
+        "properties" : {
+          "documentType" : {
+            "pattern" : "CV|COVER_LETTER",
+            "type" : "string"
+          },
+          "requestSha256" : {
+            "pattern" : "^[0-9a-f]{64}$",
+            "type" : "string"
+          }
+        },
+        "description" : "Starts or resumes a durable application document replacement"
+      },
+      "DocumentReplacementWorkflowResponse" : {
+        "type" : "object",
+        "properties" : {
+          "operationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "documentType" : {
+            "type" : "string"
+          },
+          "sourceDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "replacementDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "operationStatus" : {
+            "type" : "string"
+          },
+          "retryable" : {
+            "type" : "boolean"
+          },
+          "recoveryCode" : {
+            "type" : "string"
+          },
+          "completedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "cvDocumentId" : {
+            "type" : "string"
+          },
+          "coverLetterDocumentId" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Durable application document-replacement state"
+      },
+      "UpdateStatusRequest" : {
+        "required" : [ "status" ],
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string",
+            "description" : "New status value",
+            "example" : "APPLIED",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "expectedVersion" : {
+            "minimum" : 0,
+            "type" : "integer",
+            "description" : "Optional record version last observed by the caller; stale values return HTTP 409",
+            "format" : "int64",
+            "example" : 3
+          },
+          "occurredAt" : {
+            "type" : "string",
+            "description" : "UTC time when the lifecycle milestone actually occurred; defaults to receipt time",
+            "format" : "date-time",
+            "example" : "2026-07-26T10:15:30Z"
+          },
+          "reason" : {
+            "maxLength" : 500,
+            "minLength" : 0,
+            "type" : "string",
+            "description" : "Optional concise reason or outcome evidence for the transition",
+            "example" : "First-stage interview confirmed"
+          }
+        },
+        "description" : "Request to update the status of an application"
+      },
+      "SecurityErrorResponse" : {
+        "required" : [ "code", "message" ],
+        "type" : "object",
+        "properties" : {
+          "code" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        },
+        "description" : "Stable redacted authentication or authorization error"
+      },
+      "RegisterReplacementDocumentRequest" : {
+        "required" : [ "replacementDocumentId" ],
+        "type" : "object",
+        "properties" : {
+          "replacementDocumentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        },
+        "description" : "Registers the exact Store document created for a durable replacement"
+      },
+      "UpdateDocumentReferenceRequest" : {
+        "required" : [ "documentId", "documentType" ],
+        "type" : "object",
+        "properties" : {
+          "documentType" : {
+            "type" : "string"
+          },
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        }
+      },
+      "ApplicationEventResponse" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "eventType" : {
+            "type" : "string",
+            "enum" : [ "LEGACY_SNAPSHOT", "APPLICATION_CREATED", "APPLICATION_SAVED", "STATUS_CHANGED", "DOCUMENT_REFERENCE_CHANGED", "DOCUMENT_REFERENCES_RECONCILED", "APPLICATION_DOCUMENT_SELECTED", "APPLICATION_DOCUMENT_SELECTION_CHANGED", "APPLICATION_DOCUMENTS_FROZEN", "GENERATED_APPLICATION_WITHDRAWN", "APPLICATION_DELETED" ]
+          },
+          "fromStatus" : {
+            "type" : "string",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "toStatus" : {
+            "type" : "string",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "actorType" : {
+            "type" : "string",
+            "enum" : [ "USER", "SERVICE", "SYSTEM" ]
+          },
+          "actorId" : {
+            "type" : "string"
+          },
+          "source" : {
+            "type" : "string",
+            "enum" : [ "USER", "SERVICE", "SYSTEM", "SYSTEM_DATA", "MIGRATION" ]
+          },
+          "occurredAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "recordedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "reason" : {
+            "type" : "string"
+          },
+          "recordVersion" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        },
+        "description" : "Immutable application activity event"
+      },
+      "ApplicationHistoryResponse" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "currentStatus" : {
+            "type" : "string",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "currentVersion" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "reconciled" : {
+            "type" : "boolean"
+          },
+          "events" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ApplicationEventResponse"
+            }
+          },
+          "page" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "size" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "totalElements" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "totalPages" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        },
+        "description" : "Owner-scoped ordered page of immutable application events"
+      },
+      "DocumentReferenceReconciliationResponse" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "PENDING", "HEALTHY", "REPAIRED", "INVALID", "UNAVAILABLE" ]
+          },
+          "issueCodes" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "checkedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastHealthyAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "lastRepairedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "attemptCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "repairCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "applicationRecordVersion" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        },
+        "description" : "Durable application/document-reference reconciliation state"
+      },
+      "DocumentApplicationAssociation" : {
+        "type" : "object",
+        "properties" : {
+          "applicationId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "documentType" : {
+            "type" : "string",
+            "enum" : [ "CV", "COVER_LETTER" ]
+          },
+          "associationState" : {
+            "type" : "string",
+            "enum" : [ "DRAFT_SELECTED", "FROZEN_USED" ]
+          },
+          "applicationStatus" : {
+            "type" : "string",
+            "enum" : [ "SAVED", "DOCUMENTS_GENERATED", "APPLIED", "INTERVIEW", "UNSUCCESSFUL", "OFFER", "ACCEPTED", "REJECTED_BY_USER", "WITHDRAWN" ]
+          },
+          "frozenAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "DocumentApplicationAssociationsResponse" : {
+        "type" : "object",
+        "properties" : {
+          "documentId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "associationCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "associations" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/DocumentApplicationAssociation"
+            }
+          }
+        },
+        "description" : "Content-free authoritative application associations for one exact document version"
+      },
+      "ApplicationPersonalDataExport" : {
+        "type" : "object",
+        "properties" : {
+          "schemaVersion" : {
+            "type" : "string"
+          },
+          "generatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "applications" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ApplicationRecordResponse"
+            }
+          },
+          "events" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ApplicationEventResponse"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes" : {
+      "bearerAuth" : {
+        "type" : "http",
+        "scheme" : "bearer",
+        "bearerFormat" : "JWT"
+      },
+      "serviceToken" : {
+        "type" : "apiKey",
+        "name" : "X-Service-Token",
+        "in" : "header"
+      },
+      "environmentDataToken" : {
+        "type" : "apiKey",
+        "name" : "X-Environment-Data-Token",
+        "in" : "header"
+      }
+    }
+  }
+}

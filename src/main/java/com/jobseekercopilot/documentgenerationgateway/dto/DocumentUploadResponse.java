@@ -15,5 +15,9 @@ public record DocumentUploadResponse(
         DownloadFileResponse uploadedFile,
         List<DownloadFileResponse> regeneratedFiles,
         DocumentDownloadsResponse latestFiles,
+        UUID operationId,
+        String operationStatus,
+        boolean retryable,
+        String recoveryCode,
         String message) {
 }

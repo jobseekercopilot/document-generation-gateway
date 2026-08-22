@@ -1,0 +1,46 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:document_generation;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+document-generation:
+  security:
+    jwk-set-uri: http://127.0.0.1:65535/.well-known/jwks.json
+    issuer: job-seeker-copilot-authentication
+    audience: job-seeker-copilot-services
+    authentication-service-token: test-only-authentication-service-token-32-bytes
+    application-tracker-producer-token: test-only-application-producer-token-32-bytes
+    cv-cover-letter-service-token: test-only-cv-cover-letter-service-token-32-bytes
+    document-export-service-token: test-only-document-export-service-token-32-bytes
+    document-store-producer-token: test-only-document-store-producer-token-32-bytes
+    document-store-reader-token: test-only-document-store-reader-token-32-bytes
+    payment-service-token: test-only-payment-service-token-0000000000001
+  operation:
+    deadline: PT10M
+    lease: PT30S
+  downstream:
+    connect-timeout: PT1S
+    read-timeout: PT1S
+
+services:
+  user-profile-service:
+    base-url: http://user-profile
+  authentication-service:
+    base-url: http://authentication
+  job-service:
+    base-url: http://job
+  cv-cover-letter-service:
+    base-url: http://cv-cover-letter
+  document-export-service:
+    base-url: http://document-export
+  document-store-service:
+    base-url: http://document-store
+  application-tracker-service:
+    base-url: http://application-tracker
+  payment-service:
+    base-url: http://payment

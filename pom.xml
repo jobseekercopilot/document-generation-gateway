@@ -17,9 +17,12 @@
 
     <properties>
         <java.version>17</java.version>
-        <jjwt.version>0.12.3</jjwt.version>
         <springdoc.version>2.3.0</springdoc.version>
         <apache.poi.version>5.2.5</apache.poi.version>
+        <user-profile-client.version>2.3.0-rev.a880add6e5c7</user-profile-client.version>
+        <cv-cover-letter-client.version>4.2.0-rev.3129864cca5c</cv-cover-letter-client.version>
+        <document-export-client.version>3.1.0-rev.cda9a2af811b</document-export-client.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
     </properties>
 
     <dependencies>
@@ -37,7 +40,24 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springdoc</groupId>
@@ -45,58 +65,24 @@
             <version>${springdoc.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>user-profile-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/user-profile-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>job-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/job-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>cv-cover-letter-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/cv-cover-letter-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>document-export-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/document-export-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>document-store-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/document-store-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>authentication-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/authentication-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jobseekercopilot.generated</groupId>
-            <artifactId>application-tracker-service-client</artifactId>
-            <version>1.0.0</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/libs/application-tracker-service-client-1.0.0.jar</systemPath>
-        </dependency>
-        <dependency>
             <groupId>org.openapitools</groupId>
             <artifactId>jackson-databind-nullable</artifactId>
             <version>0.2.10</version>
+        </dependency>
+        <dependency>
+            <groupId>com.jobseekercopilot.clients</groupId>
+            <artifactId>user-profile-service-client</artifactId>
+            <version>${user-profile-client.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.jobseekercopilot.clients</groupId>
+            <artifactId>cv-cover-letter-service-client</artifactId>
+            <version>${cv-cover-letter-client.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.jobseekercopilot.clients</groupId>
+            <artifactId>document-export-service-client</artifactId>
+            <version>${document-export-client.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.poi</groupId>
@@ -108,30 +94,28 @@
             <artifactId>httpclient5</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-api</artifactId>
-            <version>${jjwt.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-impl</artifactId>
-            <version>${jjwt.version}</version>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-jackson</artifactId>
-            <version>${jjwt.version}</version>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -141,8 +125,25 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration><includeSystemScope>true</includeSystemScope></configuration>
             </plugin>
         </plugins>
     </build>
+
+    <repositories>
+        <repository>
+            <id>github-user-profile</id>
+            <name>Job Seeker Copilot User Profile packages</name>
+            <url>https://maven.pkg.github.com/jobseekercopilot/user-profile-service</url>
+        </repository>
+        <repository>
+            <id>github-cv-cover-letter</id>
+            <name>Job Seeker Copilot CV and Cover Letter packages</name>
+            <url>https://maven.pkg.github.com/jobseekercopilot/cv-cover-letter-service</url>
+        </repository>
+        <repository>
+            <id>github-document-export</id>
+            <name>Job Seeker Copilot Document Export packages</name>
+            <url>https://maven.pkg.github.com/jobseekercopilot/document-export-service</url>
+        </repository>
+    </repositories>
 </project>

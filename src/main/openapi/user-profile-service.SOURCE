@@ -1,0 +1,4 @@
+repository=jobseekercopilot/user-profile-service
+revision=a880add6e5c7106a2f3abec08a147823f88edf20
+path=api/openapi.json
+sha256=3326ffc4c3f78fbd97325fe071d3848fdb3319ea997571f98cd792619905fc04
