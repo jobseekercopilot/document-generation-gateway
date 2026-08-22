@@ -61,6 +61,9 @@ exact clean, approved, available immutable version. Stable operation-derived
 keys make Store and Tracker retries convergent while preserving the unaffected
 sibling selection. The path does not call Payment, CV/Cover Letter, Document
 Export or an LLM.
+
+Internal outcome, retry, model, usage and provider-cost reporting is documented
+in [`docs/DOCUMENT_GENERATION_ACCOUNTING.md`](docs/DOCUMENT_GENERATION_ACCOUNTING.md).
 Version `2.4.0` exposes owner-scoped per-version archive, restore and
 recoverable-delete orchestration plus content-free draft/frozen application
 associations. Family history carries `PURGED` tombstones, stable unavailable
