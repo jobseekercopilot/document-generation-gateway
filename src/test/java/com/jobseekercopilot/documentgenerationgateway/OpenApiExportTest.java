@@ -197,6 +197,13 @@ class OpenApiExportTest {
         assertFalse(outputResult.path("properties").has("estimatedTokens"));
         assertFalse(outputResult.path("properties").has("actualTokens"));
         assertFalse(outputResult.path("properties").has("providerTokens"));
+        assertEquals(
+                "[\"READY\",\"ESTIMATED\",\"ALLOWANCE_RESERVED\","
+                        + "\"OUTCOME_UNKNOWN\",\"DRAFT_GENERATED\","
+                        + "\"STORED_PENDING_ALLOWANCE\",\"ALLOWANCE_COMMITTED\","
+                        + "\"STORED\",\"FAILED\"]",
+                outputResult.path("properties").path("status")
+                        .path("enum").toString());
         assertFalse(spec.contains("estimatedTokens"));
         assertFalse(spec.contains("actualTokens"));
         assertFalse(spec.contains("providerTokens"));

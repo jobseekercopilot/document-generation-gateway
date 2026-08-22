@@ -10,6 +10,12 @@ import java.util.UUID;
         description = "Content-free public state for one explicitly requested output.",
         additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
 public record GenerationOutputResultResponse(
+        @Schema(allowableValues = {
+                "READY", "ESTIMATED", "ALLOWANCE_RESERVED",
+                "OUTCOME_UNKNOWN", "DRAFT_GENERATED",
+                "STORED_PENDING_ALLOWANCE", "ALLOWANCE_COMMITTED",
+                "STORED", "FAILED"
+        })
         String status,
         Boolean regeneration,
         UUID documentId,

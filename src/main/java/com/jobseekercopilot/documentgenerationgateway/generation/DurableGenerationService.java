@@ -4025,7 +4025,7 @@ public class DurableGenerationService {
         outputResults(data).forEach((output, rawResult) -> {
             Map<String, Object> result = optionalMap(rawResult);
             publicResults.put(output, new GenerationOutputResultResponse(
-                    text(result.get("status")),
+                    publicOutputStatus(result.get("status")),
                     result.containsKey("regeneration")
                             ? booleanValue(result.get("regeneration"))
                             : null,
@@ -4039,6 +4039,17 @@ public class DurableGenerationService {
                     recoverySummary(result)));
         });
         return Map.copyOf(publicResults);
+    }
+
+    private String publicOutputStatus(Object rawStatus) {
+        String status = text(rawStatus);
+        if (status == null) return null;
+        return switch (status) {
+            case "CREDIT_RESERVED" -> "ALLOWANCE_RESERVED";
+            case "STORED_PENDING_CREDIT" -> "STORED_PENDING_ALLOWANCE";
+            case "CREDIT_COMMITTED" -> "ALLOWANCE_COMMITTED";
+            default -> status;
+        };
     }
 
     private GenerationRecoverySummaryResponse recoverySummary(

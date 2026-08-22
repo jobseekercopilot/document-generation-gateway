@@ -554,6 +554,9 @@ class DurableGenerationServiceTest {
         assertEquals(
                 GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
                 interrupted.state());
+        assertEquals(
+                "STORED_PENDING_ALLOWANCE",
+                interrupted.outputResults().get("CV").status());
         assertEquals("DOWNSTREAM_RETRYABLE", interrupted.failureCode());
 
         var resumed = startAndAwait(
