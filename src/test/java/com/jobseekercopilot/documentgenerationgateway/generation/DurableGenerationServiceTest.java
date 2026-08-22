@@ -757,7 +757,6 @@ class DurableGenerationServiceTest {
                 recovered.state());
         GenerationOutputResultResponse cv = recovered
                 .outputResults().get("CV");
-        assertEquals(0L, cv.actualTokens());
         assertEquals("COMMITTED", cv.billingOutcome());
         GenerationRecoverySummaryResponse summary = cv.recoverySummary();
         assertEquals("DETERMINISTIC_FALLBACK",

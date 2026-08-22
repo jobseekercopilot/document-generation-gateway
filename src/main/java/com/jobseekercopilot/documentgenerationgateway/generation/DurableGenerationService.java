@@ -3885,7 +3885,7 @@ public class DurableGenerationService {
                     GenerationOperationState.RECOVERY_REQUIRED,
                     operation.data(),
                     "CREDIT_RESERVATION_RECOVERY_REQUIRED",
-                    "The deadline expired while reserving AI Credit; recover the stable operation reservation before continuing.");
+                    "The deadline expired while reserving document-generation allowance; recover the stable operation reservation before continuing.");
         }
         if (beforeGeneration(operation.state())) {
             return releaseAndFail(
@@ -4030,9 +4030,6 @@ public class DurableGenerationService {
                             ? booleanValue(result.get("regeneration"))
                             : null,
                     uuid(result, "documentId"),
-                    optionalLong(result.get("estimatedTokens")),
-                    optionalLong(result.get("actualTokens")),
-                    optionalLong(result.get("providerTokens")),
                     text(result.get("billingOutcome")),
                     result.containsKey("outcomeReconciliation")
                             ? optionalMap(result.get("outcomeReconciliation"))
