@@ -40,11 +40,15 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-Version `2.8.1` makes cancellation conflict after provider invocation or
+Version `2.9.0` binds every committed generation to the exact delivered CV or
+cover-letter document ID. Consumption is one generation per durable delivery,
+including deterministic fallback output; failure before delivery consumes
+nothing, and replay cannot double-consume or swap document evidence. Version
+`2.8.1` makes cancellation conflict after provider invocation or
 durable delivery and bounds stored-output reservation replacement to one
 stable, idempotent recovery before retaining the output without charge for
 manual resolution. Version `2.8.0` added the server-derived `regeneration`
-disclosure and exact one-document-credit settlement after durable delivery.
+disclosure and exact one-generation settlement after durable delivery.
 Version `2.7.0` added the closed, typed, content-free per-output recovery
 contract described below without changing the operation or wallet lifecycle.
 Version `2.6.0` adds a durable owner/job/application/type-scoped free upload

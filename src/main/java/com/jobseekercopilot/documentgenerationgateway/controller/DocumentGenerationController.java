@@ -63,8 +63,10 @@ public class DocumentGenerationController {
                     + "requested CV or cover-letter output, creates or resolves the saved "
                     + "application before paid work, "
                     + "applies one deadline across downstream calls, "
-                    + "reserves one document credit per selected output, performs at most one automatic "
-                    + "model invocation per output and stores independently usable DRAFT documents. "
+                    + "reserves one document generation per selected output, performs at most one automatic "
+                    + "model invocation per output and stores independently usable DRAFT documents. Each "
+                    + "durably delivered document then consumes exactly one generation, including a "
+                    + "deterministic fallback; failure before delivery consumes none. "
                     + "Legacy requests without outputs retain the paired workflow during migration.")
     @ApiResponses({
             @ApiResponse(responseCode = "202", description = "Operation accepted or replayed"),

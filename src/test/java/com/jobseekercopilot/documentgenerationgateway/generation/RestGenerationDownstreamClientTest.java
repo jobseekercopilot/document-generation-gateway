@@ -341,13 +341,22 @@ class RestGenerationDownstreamClientTest {
                 eq(Map.class)))
                 .thenReturn(ResponseEntity.ok(Map.of("status", "RELEASED")));
 
-        client.commit(OWNER, reservationId, 99_999L);
+        UUID documentId = UUID.randomUUID();
+        client.commit(
+                OWNER,
+                reservationId,
+                99_999L,
+                List.of(new DeliveredDocumentEvidence(documentId, DocumentPurpose.CV)));
         client.release(OWNER, reservationId, "DELIVERY_FAILED");
 
         HttpEntity<?> commit = capturedPost(commitUrl);
         assertSingleHeader(commit, "X-Service-Token", PAYMENT_TOKEN);
         assertSingleHeader(commit, "X-Payment-Owner", OWNER);
-        assertEquals(Map.of(), commit.getBody());
+        assertEquals(
+                Map.of("deliveries", List.of(Map.of(
+                        "documentId", documentId.toString(),
+                        "documentType", "CV"))),
+                commit.getBody());
         HttpEntity<?> release = capturedPost(releaseUrl);
         assertEquals(
                 Map.of("reason", "DELIVERY_FAILED"),
