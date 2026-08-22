@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
@@ -189,8 +190,7 @@ class DurableGenerationServiceTest {
         assertEquals(
                 "DOCUMENTS_GENERATED",
                 application.getValue().get("initialStatus"));
-        verify(downstream).commit(
-                OWNER, RESERVATION_ID, 600);
+        verify(downstream).commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
         verify(downstream, never()).release(
                 anyString(), any(), anyString());
 
@@ -291,8 +291,7 @@ class DurableGenerationServiceTest {
                 ArgumentCaptor.forClass(Map.class);
         order.verify(downstream).createDocument(
                 eq(OWNER), anyString(), storedDocument.capture());
-        order.verify(downstream).commit(
-                eq(OWNER), eq(RESERVATION_ID), eq(300L));
+        order.verify(downstream).commit(eq(OWNER), eq(RESERVATION_ID), eq(300L), anyList());
         assertEquals(
                 APPLICATION_ID,
                 storedDocument.getValue().get("applicationId"));
@@ -344,8 +343,7 @@ class DurableGenerationServiceTest {
                 request);
         verify(downstream, times(1)).generateSelected(
                 eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
-        verify(downstream, times(1)).commit(
-                eq(OWNER), any(), eq(300L));
+        verify(downstream, times(1)).commit(eq(OWNER), any(), eq(300L), anyList());
     }
 
     @Test
@@ -383,8 +381,7 @@ class DurableGenerationServiceTest {
                 eq(DocumentPurpose.CV),
                 eq(300L),
                 eq(true));
-        verify(downstream, times(2)).commit(
-                OWNER, RESERVATION_ID, 300L);
+        verify(downstream, times(2)).commit(eq(OWNER), eq(RESERVATION_ID), eq(300L), anyList());
     }
 
     @Test
@@ -513,8 +510,7 @@ class DurableGenerationServiceTest {
                 .outputResults().get("CV").recoverySummary();
         assertNull(summary.retryReason());
         assertNull(summary.fallbackReason());
-        verify(downstream, times(1)).commit(
-                OWNER, RESERVATION_ID, 300L);
+        verify(downstream, times(1)).commit(eq(OWNER), eq(RESERVATION_ID), eq(300L), anyList());
     }
 
     @Test
@@ -547,7 +543,7 @@ class DurableGenerationServiceTest {
                     return null;
                 })
                 .when(downstream)
-                .commit(eq(OWNER), any(), eq(300L));
+                .commit(eq(OWNER), any(), eq(300L), anyList());
 
         var interrupted = startAndAwait(
                 OWNER,
@@ -558,6 +554,9 @@ class DurableGenerationServiceTest {
         assertEquals(
                 GenerationOperationState.DRAFTS_STORED_PENDING_CREDIT,
                 interrupted.state());
+        assertEquals(
+                "STORED_PENDING_ALLOWANCE",
+                interrupted.outputResults().get("CV").status());
         assertEquals("DOWNSTREAM_RETRYABLE", interrupted.failureCode());
 
         var resumed = startAndAwait(
@@ -574,7 +573,7 @@ class DurableGenerationServiceTest {
                 resumed.outputResults().get("CV").billingOutcome());
         verify(downstream, times(1)).generateSelected(
                 eq(OWNER), any(), eq(DocumentPurpose.CV), anyMap());
-        verify(downstream, times(1)).commit(OWNER, RESERVATION_ID, 300L);
+        verify(downstream, times(1)).commit(eq(OWNER), eq(RESERVATION_ID), eq(300L), anyList());
         verify(downstream, times(1)).release(
                 OWNER,
                 RESERVATION_ID,
@@ -584,8 +583,7 @@ class DurableGenerationServiceTest {
                 resumed.operationId(),
                 DocumentPurpose.CV,
                 false);
-        verify(downstream, times(2)).commit(
-                OWNER, replacementReservation, 300L);
+        verify(downstream, times(2)).commit(eq(OWNER), eq(replacementReservation), eq(300L), anyList());
     }
 
     @Test
@@ -608,7 +606,7 @@ class DurableGenerationServiceTest {
                             java.nio.charset.StandardCharsets.UTF_8);
                 })
                 .when(downstream)
-                .commit(eq(OWNER), any(), eq(300L));
+                .commit(eq(OWNER), any(), eq(300L), anyList());
 
         var result = startAndAwait(
                 OWNER,
@@ -639,8 +637,7 @@ class DurableGenerationServiceTest {
                 OWNER,
                 replacementReservation,
                 "STORED_OUTPUT_RESERVATION_RECOVERY_EXHAUSTED");
-        verify(downstream, times(2)).commit(
-                eq(OWNER), any(), eq(300L));
+        verify(downstream, times(2)).commit(eq(OWNER), any(), eq(300L), anyList());
     }
 
     @Test
@@ -694,7 +691,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .replayRejectedSelectedGeneration(
                         anyString(), any(), eq(DocumentPurpose.CV), anyMap());
-        verify(downstream).commit(OWNER, RESERVATION_ID, 300L);
+        verify(downstream).commit(eq(OWNER), eq(RESERVATION_ID), eq(300L), anyList());
         GenerationRecoverySummaryResponse summary = recovered
                 .outputResults().get("CV").recoverySummary();
         assertEquals("RECOVERED", summary.reconciliationStatus());
@@ -707,7 +704,7 @@ class DurableGenerationServiceTest {
     }
 
     @Test
-    void releasesWalletReservationWhenReconciliationUsesFreeDeterministicCvFallback() {
+    void chargesOneGenerationWhenDeterministicFallbackDeliversACv() {
         stubSavedApplicationForSelectiveApproval();
         AtomicReference<Runnable> reconciliation = new AtomicReference<>();
         when(workScheduler.submitAfter(
@@ -763,8 +760,7 @@ class DurableGenerationServiceTest {
                 recovered.state());
         GenerationOutputResultResponse cv = recovered
                 .outputResults().get("CV");
-        assertEquals(0L, cv.actualTokens());
-        assertEquals("RELEASED_NO_CHARGE", cv.billingOutcome());
+        assertEquals("COMMITTED", cv.billingOutcome());
         GenerationRecoverySummaryResponse summary = cv.recoverySummary();
         assertEquals("DETERMINISTIC_FALLBACK",
                 summary.generationSource());
@@ -774,15 +770,20 @@ class DurableGenerationServiceTest {
                 summary.reconciliationSource());
         assertEquals("RECONCILIATION_EXHAUSTED",
                 summary.fallbackReason());
-        assertEquals("RELEASED_NO_CHARGE",
+        assertEquals("COMMITTED",
                 summary.billingStatus());
-        assertFalse(summary.charged());
-        assertTrue(summary.released());
-        verify(downstream, never()).commit(anyString(), any(), anyLong());
-        verify(downstream).release(
-                OWNER,
-                RESERVATION_ID,
-                "DETERMINISTIC_FALLBACK_NO_CHARGE");
+        assertTrue(summary.charged());
+        assertFalse(summary.released());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<DeliveredDocumentEvidence>> delivered =
+                ArgumentCaptor.forClass(List.class);
+        verify(downstream).commit(
+                eq(OWNER), eq(RESERVATION_ID), eq(0L), delivered.capture());
+        assertEquals(
+                List.of(new DeliveredDocumentEvidence(CV_DOCUMENT_ID, DocumentPurpose.CV)),
+                delivered.getValue());
+        verify(downstream, never()).release(
+                anyString(), any(), anyString());
         verify(downstream, times(1)).generateSelected(
                 anyString(), any(), eq(DocumentPurpose.CV), anyMap());
     }
@@ -863,7 +864,7 @@ class DurableGenerationServiceTest {
                 failedRecovery.billingStatus());
         assertFalse(failedRecovery.charged());
         assertTrue(failedRecovery.released());
-        verify(downstream).commit(OWNER, RESERVATION_ID, 300L);
+        verify(downstream).commit(eq(OWNER), eq(RESERVATION_ID), eq(300L), anyList());
         verify(downstream).release(
                 eq(OWNER), any(), eq("GENERATION_REJECTED"));
         verify(downstream, times(2)).generateSelected(
@@ -1043,7 +1044,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
-                .commit(OWNER, RESERVATION_ID, 600);
+                .commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
         verify(downstream).updateApplicationDocumentSelections(
                 OWNER,
                 APPLICATION_ID,
@@ -2036,8 +2037,7 @@ class DurableGenerationServiceTest {
         assertEquals(unknown.operationId(), replay.operationId());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
-        verify(downstream, never()).commit(
-                anyString(), any(), anyLong());
+        verify(downstream, never()).commit(anyString(), any(), anyLong(), anyList());
         verify(downstream, never()).release(
                 anyString(), any(), anyString());
     }
@@ -2113,7 +2113,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, never())
-                .commit(OWNER, RESERVATION_ID, 600);
+                .commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
 
         resumedWork.get().run();
         var resumed = service.get(OWNER, prepared.operationId());
@@ -2134,7 +2134,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
-                .commit(OWNER, RESERVATION_ID, 600);
+                .commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
     }
 
     @Test
@@ -2224,7 +2224,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
-                .commit(OWNER, RESERVATION_ID, 600);
+                .commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
     }
 
     @Test
@@ -2238,7 +2238,7 @@ class DurableGenerationServiceTest {
                     return null;
                 })
                 .when(downstream)
-                .commit(OWNER, RESERVATION_ID, 600);
+                .commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
 
         var interrupted = startAndAwait(
                 OWNER,
@@ -2278,7 +2278,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1)).reserve(
                 OWNER, resumed.operationId(), 1000, false);
         verify(downstream, times(2))
-                .commit(OWNER, RESERVATION_ID, 600);
+                .commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
     }
 
     @Test
@@ -2300,7 +2300,7 @@ class DurableGenerationServiceTest {
                             java.nio.charset.StandardCharsets.UTF_8);
                 })
                 .when(downstream)
-                .commit(eq(OWNER), any(), eq(600L));
+                .commit(eq(OWNER), any(), eq(600L), anyList());
 
         var result = startAndAwait(
                 OWNER,
@@ -2326,8 +2326,7 @@ class DurableGenerationServiceTest {
                 OWNER,
                 replacementReservation,
                 "STORED_OUTPUT_RESERVATION_RECOVERY_EXHAUSTED");
-        verify(downstream, times(2)).commit(
-                eq(OWNER), any(), eq(600L));
+        verify(downstream, times(2)).commit(eq(OWNER), any(), eq(600L), anyList());
     }
 
     @Test
@@ -2371,7 +2370,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
         verify(downstream, times(1))
-                .commit(OWNER, RESERVATION_ID, 600);
+                .commit(eq(OWNER), eq(RESERVATION_ID), eq(600L), anyList());
         verify(downstream, times(2)).createDocument(
                 anyString(), anyString(), anyMap());
     }
@@ -2472,8 +2471,7 @@ class DurableGenerationServiceTest {
                 OWNER,
                 RESERVATION_ID,
                 "GENERATION_REJECTED");
-        verify(downstream, never()).commit(
-                anyString(), any(), anyLong());
+        verify(downstream, never()).commit(anyString(), any(), anyLong(), anyList());
     }
 
     @Test
@@ -2536,8 +2534,7 @@ class DurableGenerationServiceTest {
                 anyString(), any(), anyMap());
         verify(downstream, times(1)).replayRejectedGeneration(
                 eq(OWNER), eq(rejected.operationId()), anyMap());
-        verify(downstream).commit(
-                OWNER, recoveryReservation, 37_798);
+        verify(downstream).commit(eq(OWNER), eq(recoveryReservation), eq(37_798L), anyList());
         verify(downstream).approveDocument(
                 OWNER, CV_DOCUMENT_ID);
         verify(downstream).approveDocument(
@@ -2605,7 +2602,7 @@ class DurableGenerationServiceTest {
                     return null;
                 })
                 .when(downstream)
-                .commit(OWNER, recoveryReservation, 37_798);
+                .commit(eq(OWNER), eq(recoveryReservation), eq(37_798L), anyList());
 
         AtomicReference<Runnable> initialWork = new AtomicReference<>();
         reset(workScheduler);
@@ -2662,8 +2659,7 @@ class DurableGenerationServiceTest {
         verify(downstream, times(1))
                 .reserveRetainedResponseRecovery(
                         OWNER, rejected.operationId(), 37_798);
-        verify(downstream, times(1)).commit(
-                OWNER, recoveryReservation, 37_798);
+        verify(downstream, times(1)).commit(eq(OWNER), eq(recoveryReservation), eq(37_798L), anyList());
     }
 
     @Test
@@ -2773,8 +2769,7 @@ class DurableGenerationServiceTest {
         verify(downstream, never())
                 .reserveRetainedResponseRecovery(
                         anyString(), any(), anyLong());
-        verify(downstream, never()).commit(
-                anyString(), any(), anyLong());
+        verify(downstream, never()).commit(anyString(), any(), anyLong(), anyList());
         verify(downstream).updateApplicationDocumentSelections(
                 OWNER,
                 APPLICATION_ID,
@@ -2808,8 +2803,7 @@ class DurableGenerationServiceTest {
                 OWNER,
                 RESERVATION_ID,
                 "INVALID_GENERATION_RESPONSE");
-        verify(downstream, never()).commit(
-                anyString(), any(), anyLong());
+        verify(downstream, never()).commit(anyString(), any(), anyLong(), anyList());
     }
 
     @Test
@@ -3099,8 +3093,7 @@ class DurableGenerationServiceTest {
                 selectionRequest());
         verify(downstream, times(1))
                 .generate(anyString(), any(), anyMap());
-        verify(downstream, never()).commit(
-                anyString(), any(), anyLong());
+        verify(downstream, never()).commit(anyString(), any(), anyLong(), anyList());
     }
 
     @Test
@@ -3139,8 +3132,7 @@ class DurableGenerationServiceTest {
         assertTrue(recovery.manualActionRequired());
         verify(downstream, never()).generate(
                 anyString(), any(), anyMap());
-        verify(downstream, never()).commit(
-                anyString(), any(), anyLong());
+        verify(downstream, never()).commit(anyString(), any(), anyLong(), anyList());
     }
 
     @Test

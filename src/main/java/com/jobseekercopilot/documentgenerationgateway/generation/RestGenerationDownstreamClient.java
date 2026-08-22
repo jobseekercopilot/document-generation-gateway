@@ -388,7 +388,8 @@ public class RestGenerationDownstreamClient
     public void commit(
             String ownerId,
             UUID reservationId,
-            long actualTokens) {
+            long actualTokens,
+            List<DeliveredDocumentEvidence> deliveries) {
         post(
                 paymentBaseUrl
                         + "/api/v2/payments/document-credit-reservations/"
@@ -398,7 +399,13 @@ public class RestGenerationDownstreamClient
                         credentials.paymentServiceToken(),
                         PAYMENT_OWNER,
                         ownerId),
-                Map.of());
+                Map.of("deliveries", deliveries.stream()
+                        .map(delivery -> Map.of(
+                                "documentId",
+                                delivery.documentId().toString(),
+                                "documentType",
+                                delivery.documentType().name()))
+                        .toList()));
     }
 
     @Override

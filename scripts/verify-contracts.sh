@@ -97,9 +97,9 @@ verify_source \
 verify_source \
     payment-service \
     jobseekercopilot/payment-service \
-    ec6691d7c069118829243d901e42b2d52eb32c88 \
+    628837f6007960ae02e7593a42320cff58d70b73 \
     contracts/openapi.json \
-    acf21be9eff02aced215fdfce68d7577dfc79695877d4ee0dfc188fcaa1a779a
+    77186ce39bd32be4d8aed80b496df5873cf9e16c9ea911d7bc9b364d8a7b46e3
 verify_source \
     user-profile-service \
     jobseekercopilot/user-profile-service \
@@ -215,7 +215,7 @@ jq -e '
 
 jq -e '
     (.openapi | type == "string" and startswith("3.")) and
-    (.info.version == "3.2.1") and
+    (.info.version == "3.4.0") and
     (.paths["/api/v1/payments/reservations"].post.parameters
         | any(.name == "X-Payment-Owner" and .required == true)) and
     (.paths["/api/v1/payments/reservations/{reservationId}"].get != null) and
@@ -224,7 +224,18 @@ jq -e '
     (.components.schemas.CreateReservationRequest.required
         | index("feature") != null and index("operationKey") != null) and
     (.components.schemas.CreateReservationRequest.properties.operationKey.pattern
-        == "[A-Za-z0-9][A-Za-z0-9._:-]{0,199}")
+        == "[A-Za-z0-9][A-Za-z0-9._:-]{0,199}") and
+    (.paths["/api/v2/payments/document-credit-reservations/{reservationId}/commit"]
+        .post.requestBody.required == true) and
+    (.paths["/api/v2/payments/document-credit-reservations/{reservationId}/commit"]
+        .post.requestBody.content["application/json"].schema["$ref"]
+        == "#/components/schemas/CommitDocumentGenerationRequest") and
+    (.components.schemas.CommitDocumentGenerationRequest.required
+        | index("deliveries") != null) and
+    (.components.schemas.CommitDocumentGenerationRequest.properties.deliveries
+        | .minItems == 1 and .maxItems == 2) and
+    (.components.schemas.DeliveredDocument.required
+        | index("documentId") != null and index("documentType") != null)
 ' "$contract_dir/payment-service.json" >/dev/null
 
 grep -F "  /api/jobs/saved/{savedJobId}:" \

@@ -12,8 +12,8 @@ Browser-facing orchestration gateway for generating, exporting, downloading,
 and replacing CV and cover-letter documents.
 
 The durable saved-job operation API is implemented, composed with PostgreSQL,
-and exercised in controlled private-beta/manual journeys. It resolves canonical
-snapshots, coordinates AI Credit, stores drafts and waits for exact-version
+and exercised in controlled public-beta/manual journeys. It resolves canonical
+snapshots, coordinates document-generation allowance, stores drafts and waits for exact-version
 approval before export and Tracker creation. Version 2.0
 removes the unsafe browser-supplied Job route: all new generation now requires
 a saved canonical job and explicit CV and cover-letter evidence selections.
@@ -40,11 +40,17 @@ This is an implementation boundary, not a beta-readiness claim.
 OpenAPI snapshot. Publishing a producer-owned contract and proving downstream
 compatibility remain tracked beta-readiness work.
 
-Version `2.8.1` makes cancellation conflict after provider invocation or
+Version `3.0.0` binds every committed generation to the exact delivered CV or
+cover-letter document ID. Consumption is one generation per durable delivery,
+including deterministic fallback output; failure before delivery consumes
+nothing, and replay cannot double-consume or swap document evidence. Provider
+token usage remains in the durable internal audit data but is deliberately
+absent from the browser response and public contract. Version
+`2.8.1` makes cancellation conflict after provider invocation or
 durable delivery and bounds stored-output reservation replacement to one
 stable, idempotent recovery before retaining the output without charge for
 manual resolution. Version `2.8.0` added the server-derived `regeneration`
-disclosure and exact one-document-credit settlement after durable delivery.
+disclosure and exact one-generation settlement after durable delivery.
 Version `2.7.0` added the closed, typed, content-free per-output recovery
 contract described below without changing the operation or wallet lifecycle.
 Version `2.6.0` adds a durable owner/job/application/type-scoped free upload
@@ -55,6 +61,9 @@ exact clean, approved, available immutable version. Stable operation-derived
 keys make Store and Tracker retries convergent while preserving the unaffected
 sibling selection. The path does not call Payment, CV/Cover Letter, Document
 Export or an LLM.
+
+Internal outcome, retry, model, usage and provider-cost reporting is documented
+in [`docs/DOCUMENT_GENERATION_ACCOUNTING.md`](docs/DOCUMENT_GENERATION_ACCOUNTING.md).
 Version `2.4.0` exposes owner-scoped per-version archive, restore and
 recoverable-delete orchestration plus content-free draft/frozen application
 associations. Family history carries `PURGED` tombstones, stable unavailable

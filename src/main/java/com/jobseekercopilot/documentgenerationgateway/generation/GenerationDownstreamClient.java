@@ -79,7 +79,11 @@ public interface GenerationDownstreamClient {
             DocumentPurpose output,
             Map<String, Object> request);
 
-    void commit(String ownerId, UUID reservationId, long actualTokens);
+    void commit(
+            String ownerId,
+            UUID reservationId,
+            long actualTokens,
+            List<DeliveredDocumentEvidence> deliveries);
 
     void release(String ownerId, UUID reservationId, String reason);
 

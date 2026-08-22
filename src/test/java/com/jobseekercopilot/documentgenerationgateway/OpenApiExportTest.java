@@ -43,7 +43,7 @@ class OpenApiExportTest {
         String spec = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         JsonNode contract = objectMapper.readTree(spec);
-        assertEquals("2.8.1", contract.path("info").path("version").asText());
+        assertEquals("3.0.0", contract.path("info").path("version").asText());
         assertEquals(
                 "bearer",
                 contract.path("components")
@@ -194,6 +194,21 @@ class OpenApiExportTest {
         JsonNode outputResult = schemas.path(
                 "GenerationOutputResultResponse");
         assertTrue(outputResult.path("properties").has("regeneration"));
+        assertFalse(outputResult.path("properties").has("estimatedTokens"));
+        assertFalse(outputResult.path("properties").has("actualTokens"));
+        assertFalse(outputResult.path("properties").has("providerTokens"));
+        assertEquals(
+                "[\"READY\",\"ESTIMATED\",\"ALLOWANCE_RESERVED\","
+                        + "\"OUTCOME_UNKNOWN\",\"DRAFT_GENERATED\","
+                        + "\"STORED_PENDING_ALLOWANCE\",\"ALLOWANCE_COMMITTED\","
+                        + "\"STORED\",\"FAILED\"]",
+                outputResult.path("properties").path("status")
+                        .path("enum").toString());
+        assertFalse(spec.contains("estimatedTokens"));
+        assertFalse(spec.contains("actualTokens"));
+        assertFalse(spec.contains("providerTokens"));
+        assertFalse(spec.toLowerCase(java.util.Locale.ROOT).contains("credit"));
+        assertFalse(spec.toLowerCase(java.util.Locale.ROOT).contains("token"));
         JsonNode recovery = schemas.path(
                 "GenerationRecoverySummaryResponse");
         assertFalse(outputResult.path("additionalProperties")
