@@ -25,7 +25,6 @@ jobs:
           private-key: ${{ secrets.RELEASE_READER_APP_PRIVATE_KEY }}
           owner: jobseekercopilot
           permission-contents: read
-          permission-packages: read
           repositories: |
             user-profile-service
             cv-cover-letter-service
