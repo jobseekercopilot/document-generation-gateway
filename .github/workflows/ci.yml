@@ -8,13 +8,14 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      JSC_PACKAGE_READ_TOKEN: ${{ secrets.JSC_PACKAGE_READ_TOKEN }}
+      JSC_PACKAGE_READ_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:

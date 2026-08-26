@@ -135,8 +135,12 @@ def verify(root: Path, check_git: bool = True) -> None:
         raise ValueError("container helper must use an ephemeral BuildKit secret")
 
     workflow = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    if "secrets.JSC_PACKAGE_READ_TOKEN" not in workflow:
-        raise ValueError("CI does not receive the dedicated package-read secret")
+    if "JSC_PACKAGE_READ_TOKEN: ${{ github.token }}" not in workflow:
+        raise ValueError("CI does not use its short-lived repository token")
+    if "packages: read" not in workflow:
+        raise ValueError("CI repository token does not have read-only package access")
+    if "secrets.JSC_PACKAGE_READ_TOKEN" in workflow:
+        raise ValueError("CI must not use the legacy static package-read token")
     if ".mvn/github-packages-settings.xml" not in workflow:
         raise ValueError("CI Maven build does not use the reviewed settings template")
 
