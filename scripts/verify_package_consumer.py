@@ -135,22 +135,8 @@ def verify(root: Path, check_git: bool = True) -> None:
         raise ValueError("container helper must use an ephemeral BuildKit secret")
 
     workflow = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    required_workflow_fragments = (
-        "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
-        "vars.RELEASE_READER_APP_ID",
-        "secrets.RELEASE_READER_APP_PRIVATE_KEY",
-        "steps.package-token.outputs.token",
-        "user-profile-service",
-        "cv-cover-letter-service",
-        "document-export-service",
-    )
-    for fragment in required_workflow_fragments:
-        if fragment not in workflow:
-            raise ValueError(
-                f"CI is missing read-only GitHub App package access: {fragment}"
-            )
-    if "secrets.JSC_PACKAGE_READ_TOKEN" in workflow:
-        raise ValueError("CI must not use the legacy static package-read token")
+    if "secrets.JSC_PACKAGE_READ_TOKEN" not in workflow:
+        raise ValueError("CI does not receive the dedicated package-read secret")
     if ".mvn/github-packages-settings.xml" not in workflow:
         raise ValueError("CI Maven build does not use the reviewed settings template")
 

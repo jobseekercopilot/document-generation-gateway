@@ -58,20 +58,6 @@ class PackageConsumerPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not persist"):
             verify(root, check_git=False)
 
-    def test_legacy_static_ci_package_token_is_rejected(self) -> None:
-        temporary, root = self.fixture()
-        self.addCleanup(temporary.cleanup)
-        workflow = root / ".github" / "workflows" / "ci.yml"
-        workflow.write_text(
-            workflow.read_text().replace(
-                "steps.package-token.outputs.token",
-                "secrets.JSC_PACKAGE_READ_TOKEN",
-            ),
-            encoding="utf-8",
-        )
-        with self.assertRaisesRegex(ValueError, "GitHub App package access"):
-            verify(root, check_git=False)
-
     def inject_generator(self, root: Path, generator_id: str) -> None:
         pom = root / "pom.xml"
         pom.write_text(

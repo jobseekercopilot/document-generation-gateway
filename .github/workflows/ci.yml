@@ -13,22 +13,12 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      JSC_PACKAGE_READ_TOKEN: ${{ secrets.JSC_PACKAGE_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Create read-only package token
-        id: package-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ vars.RELEASE_READER_APP_ID }}
-          private-key: ${{ secrets.RELEASE_READER_APP_PRIVATE_KEY }}
-          owner: jobseekercopilot
-          permission-contents: read
-          repositories: |
-            user-profile-service
-            cv-cover-letter-service
-            document-export-service
       - name: Test fail-closed history scanning
         run: ./scripts/test-secret-history.sh
       - name: Scan complete Git history
@@ -54,13 +44,9 @@ jobs:
         run: |
           test -z "$(find . -path './.git' -prune -o \( -name target -o -name libs -o -name '*.jar' -o -name '*.class' \) -print)"
       - name: Build and test
-        env:
-          JSC_PACKAGE_READ_TOKEN: ${{ steps.package-token.outputs.token }}
         run: |
           test -n "$JSC_PACKAGE_READ_TOKEN"
           mvn -B --no-transfer-progress \
             -s .mvn/github-packages-settings.xml clean verify
       - name: Build source-only container
-        env:
-          JSC_PACKAGE_READ_TOKEN: ${{ steps.package-token.outputs.token }}
         run: ./scripts/build-container.sh local/document-generation-gateway:ci
