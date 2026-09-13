@@ -2423,6 +2423,77 @@ class DurableGenerationServiceTest {
     }
 
     @Test
+    void reportsAnExhaustedDocumentAllowanceAsItsOwnFailureCode() {
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.PAYMENT_REQUIRED,
+                "Payment Required",
+                org.springframework.http.HttpHeaders.EMPTY,
+                ("{\"status\":402,"
+                        + "\"error\":\"INSUFFICIENT_DOCUMENT_CREDITS\","
+                        + "\"message\":\"There are not enough document "
+                        + "generations remaining.\"}")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .reserveSelected(
+                        anyString(), any(), any(DocumentPurpose.class),
+                        anyLong(), anyBoolean());
+
+        GenerationOperationResponse exhausted = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "exhausted-allowance-1",
+                bothOutputsRequest());
+
+        assertEquals(
+                GenerationOperationState.FAILED,
+                exhausted.state());
+        // The browser picks its owner-facing message by matching CREDIT in the
+        // failure code, so an exhausted allowance must not be reported as a
+        // generic downstream rejection or a generic selected-output failure.
+        assertEquals(
+                "INSUFFICIENT_DOCUMENT_CREDITS",
+                exhausted.failureCode());
+        assertTrue(exhausted.failureCode().contains("CREDIT"));
+        // A refused reservation must never reach the model or spend an
+        // allowance, and nothing was held so nothing needs releasing.
+        verify(downstream, never()).generateSelected(
+                anyString(), any(), any(DocumentPurpose.class), anyMap());
+        verify(downstream, never()).commit(
+                anyString(), any(), anyLong(), anyList());
+        verify(downstream, never()).release(
+                anyString(), any(), anyString());
+    }
+
+    @Test
+    void reportsAnExhaustedDocumentAllowanceOnTheLegacyPairedWorkflow() {
+        doThrow(HttpClientErrorException.create(
+                HttpStatus.PAYMENT_REQUIRED,
+                "Payment Required",
+                org.springframework.http.HttpHeaders.EMPTY,
+                ("{\"status\":402,"
+                        + "\"error\":\"INSUFFICIENT_DOCUMENT_CREDITS\"}")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.UTF_8))
+                .when(downstream)
+                .reserve(anyString(), any(), anyLong(), anyBoolean());
+
+        GenerationOperationResponse exhausted = startAndAwait(
+                OWNER,
+                AUTHORIZATION,
+                SAVED_JOB_ID,
+                "exhausted-allowance-legacy-1",
+                selectionRequest());
+
+        assertEquals(
+                "INSUFFICIENT_DOCUMENT_CREDITS",
+                exhausted.failureCode());
+        verify(downstream, never()).generate(
+                anyString(), any(), anyMap());
+    }
+
+    @Test
     void releasesCreditWhenTheModelOutputCannotBeGrounded() {
         doThrow(HttpClientErrorException.create(
                 HttpStatus.UNPROCESSABLE_ENTITY,
@@ -3556,6 +3627,22 @@ class DurableGenerationServiceTest {
                         DocumentPurpose.CV,
                         List.of(CV_EVIDENCE_ID),
                         List.of(EvidenceSection.PROJECT))));
+    }
+
+    // The browser always names its outputs, so this is the shape the live
+    // "Generate CV & Cover Letter" action sends.
+    private StartGenerationRequest bothOutputsRequest() {
+        return new StartGenerationRequest(
+                Set.of(DocumentPurpose.CV, DocumentPurpose.COVER_LETTER),
+                List.of(
+                        new DocumentEvidenceSelection(
+                                DocumentPurpose.CV,
+                                List.of(CV_EVIDENCE_ID),
+                                List.of(EvidenceSection.PROJECT)),
+                        new DocumentEvidenceSelection(
+                                DocumentPurpose.COVER_LETTER,
+                                List.of(COVER_LETTER_EVIDENCE_ID),
+                                List.of(EvidenceSection.VOLUNTEERING))));
     }
 
     private DurableGenerationService recoveryEnabledService(
