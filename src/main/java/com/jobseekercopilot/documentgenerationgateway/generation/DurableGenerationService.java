@@ -829,8 +829,10 @@ public class DurableGenerationService {
                 GenerationOperation failed = failCurrentOutputBeforeProvider(
                         operation,
                         leaseToken,
-                        "DOWNSTREAM_REQUEST_REJECTED",
-                        "A required service rejected this selected output before provider invocation.");
+                        downstreamRejectionCode(exception),
+                        downstreamRejectionMessage(
+                                exception,
+                                "A required service rejected this selected output before provider invocation."));
                 return failed.state() == GenerationOperationState.APPLICATION_SAVED
                         ? advanceSelectiveToApproval(
                                 failed, leaseToken, authorization)
@@ -1518,6 +1520,34 @@ public class DurableGenerationService {
                 null);
     }
 
+    // A downstream 402 is Payment Service reporting that this owner has no
+    // remaining document generations. That is an expected, actionable outcome
+    // rather than a service defect, so it must keep its own failure code:
+    // flattening it into DOWNSTREAM_REQUEST_REJECTED loses the only signal the
+    // browser has to tell the owner to top up, leaving them with an
+    // unexplained generation failure while their credit balance sits at zero.
+    private static boolean insufficientDocumentCredits(
+            HttpStatusCodeException exception) {
+        return exception.getStatusCode() == HttpStatus.PAYMENT_REQUIRED;
+    }
+
+    private static String downstreamRejectionCode(
+            HttpStatusCodeException exception) {
+        return insufficientDocumentCredits(exception)
+                ? "INSUFFICIENT_DOCUMENT_CREDITS"
+                : "DOWNSTREAM_REQUEST_REJECTED";
+    }
+
+    private static String downstreamRejectionMessage(
+            HttpStatusCodeException exception,
+            String rejectionMessage) {
+        return insufficientDocumentCredits(exception)
+                ? "There are not enough document generations remaining; "
+                        + "add a generation pack before retrying. "
+                        + "No document generation was used."
+                : rejectionMessage;
+    }
+
     private GenerationOperation failCurrentOutputBeforeProvider(
             GenerationOperation operation,
             UUID leaseToken,
@@ -1858,6 +1888,8 @@ public class DurableGenerationService {
                 || uuid(operation.data(), "coverLetterDocumentId") != null;
         boolean unknown = hasOutputStatus(operation, "OUTCOME_UNKNOWN");
         if (!hasDraft) {
+            boolean exhausted = allOutputsFailedWith(
+                    operation, "INSUFFICIENT_DOCUMENT_CREDITS");
             return checkpoint(
                     operation,
                     leaseToken,
@@ -1867,10 +1899,16 @@ public class DurableGenerationService {
                     operation.data(),
                     unknown
                             ? "GENERATION_OUTCOME_UNKNOWN"
-                            : "SELECTED_OUTPUTS_FAILED",
+                            : exhausted
+                                    ? "INSUFFICIENT_DOCUMENT_CREDITS"
+                                    : "SELECTED_OUTPUTS_FAILED",
                     unknown
                             ? "At least one selected provider outcome is ambiguous; automatic retry is disabled."
-                            : "No selected document could be generated.");
+                            : exhausted
+                                    ? "There are not enough document generations remaining; "
+                                            + "add a generation pack before retrying. "
+                                            + "No document generation was used."
+                                    : "No selected document could be generated.");
         }
         return checkpoint(
                 operation,
@@ -2017,8 +2055,10 @@ public class DurableGenerationService {
                 return releaseAndFail(
                         operation,
                         leaseToken,
-                        "DOWNSTREAM_REQUEST_REJECTED",
-                        "A required service rejected the generation request.");
+                        downstreamRejectionCode(exception),
+                        downstreamRejectionMessage(
+                                exception,
+                                "A required service rejected the generation request."));
             }
             return retryableFailure(
                     operation, leaseToken, exception);
@@ -3439,6 +3479,25 @@ public class DurableGenerationService {
                         operation.data(), output))
                 .map(result -> text(result.get("status")))
                 .anyMatch(status -> !"STORED".equals(status));
+    }
+
+    // No selected output produced a draft. When every one of them failed for
+    // the same owner-actionable reason, that reason is the operation outcome:
+    // reporting only SELECTED_OUTPUTS_FAILED tells the owner that generation
+    // failed without saying that their allowance is spent, which reads as a
+    // service defect rather than a prompt to add a generation pack.
+    private boolean allOutputsFailedWith(
+            GenerationOperation operation,
+            String failureCode) {
+        List<Map<String, Object>> results = requestedOutputs(operation)
+                .stream()
+                .map(output -> outputResult(operation.data(), output))
+                .toList();
+        return !results.isEmpty()
+                && results.stream().allMatch(result ->
+                        "FAILED".equals(text(result.get("status")))
+                                && failureCode.equals(
+                                        text(result.get("failureCode"))));
     }
 
     private UUID providerOperationId(
